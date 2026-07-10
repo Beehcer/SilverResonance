@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>首次配置 · 白银三频共振面板</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#c9d1d9; --dim:#8b949e; --blue:#1f6feb; --amber:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text);
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .card { width:440px; max-width:94vw; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:24px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--dim); font-size:12px; margin-bottom:18px; line-height:1.6; }
+  label { display:block; font-size:13px; margin:14px 0 6px; }
+  label .hint { color:var(--dim); font-size:11px; font-weight:400; }
+  input[type=text], input[type=password] {
+    width:100%; padding:10px 12px; background:var(--bg); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; font-size:14px;
+  }
+  input:focus { outline:none; border-color:var(--blue); }
+  .row-check { display:flex; align-items:center; gap:8px; margin-top:16px; font-size:13px; color:var(--dim); }
+  .btn { width:100%; margin-top:20px; padding:13px; background:var(--blue); color:#fff; border:none;
+    border-radius:8px; font-size:15px; font-weight:700; cursor:pointer; }
+  .btn:hover { background:#388bfd; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .msg { margin-top:12px; font-size:12px; min-height:16px; }
+  .msg.err { color:#da3633; }
+  .msg.ok { color:#2ea043; }
+  .tip { margin-top:16px; font-size:11px; color:#d8b978; line-height:1.6;
+    background:#1c1408; border:1px solid #3a2c0a; border-radius:8px; padding:10px 12px; }
+  .tip a { color:var(--amber); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>首次配置</h1>
+    <div class="sub">本机需要一个<b>天勤量化</b>免费账号来获取白银实时行情。填一次即可，保存在本机。</div>
+
+    <label>天勤账号（手机号）</label>
+    <input type="text" id="tq_user" value="{{ tq_user }}" placeholder="快期/天勤账号" autocomplete="off">
+
+    <label>天勤密码</label>
+    <input type="password" id="tq_password" placeholder="仅保存在本机 user_config.json" autocomplete="off">
+
+    <label>合约代码 <span class="hint">换月时改这里，如 SHFE.ag2609</span></label>
+    <input type="text" id="symbol" value="{{ symbol }}" placeholder="SHFE.ag2608">
+
+    <div class="row-check">
+      <input type="checkbox" id="mock_mode">
+      <label for="mock_mode" style="margin:0;">仅预览界面（模拟数据，不连行情，不用账号）</label>
+    </div>
+
+    <button class="btn" id="save">保存并启动</button>
+    <div class="msg" id="msg"></div>
+
+    <div class="tip">
+      没有天勤账号？到 <a href="https://www.shinnytech.com/tqsdk/" target="_blank">shinnytech.com/tqsdk</a> 免费注册（快期账号）。
+      同一账号不能多台电脑同时登录，请每台机器用各自账号。
+    </div>
+  </div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const msg = $('msg');
+
+  // 勾选模拟模式时禁用账号输入
+  $('mock_mode').onchange = e => {
+    const m = e.target.checked;
+    $('tq_user').disabled = m; $('tq_password').disabled = m;
+  };
+
+  $('save').onclick = async () => {
+    const mock = $('mock_mode').checked;
+    const body = {
+      tq_user: $('tq_user').value.trim(),
+      tq_password: $('tq_password').value.trim(),
+      symbol: $('symbol').value.trim() || 'SHFE.ag2608',
+      mock_mode: mock,
+    };
+    if (!mock && (!body.tq_user || !body.tq_password)) {
+      msg.className = 'msg err'; msg.textContent = '请填写天勤账号和密码（或勾选仅预览）';
+      return;
+    }
+    $('save').disabled = true;
+    msg.className = 'msg'; msg.textContent = '保存中…';
+    try {
+      const r = await fetch('/api/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        msg.className = 'msg ok'; msg.textContent = '已保存，正在进入面板…';
+        setTimeout(() => location.href = '/', 800);
+      } else {
+        throw new Error('保存失败');
+      }
+    } catch (e) {
+      $('save').disabled = false;
+      msg.className = 'msg err'; msg.textContent = '保存失败，请重试。';
+    }
+  };
+</script>
+</body>
+</html>
