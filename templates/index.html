@@ -74,6 +74,23 @@
   .sr-res { color: var(--red); }
   .sr-sup { color: var(--green); }
 
+  /* 动能/背离信号面板 */
+  .sig-panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 10px;
+  }
+  .sig-panel.alert { border-color: var(--amber); box-shadow: 0 0 12px rgba(210,153,34,.35); }
+  .sig-panel .t { color: var(--dim); font-size: 11px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .sig-help { cursor: pointer; color: var(--blue); font-size: 13px; }
+  .sig-summary { font-size: 12px; line-height: 1.5; color: var(--text); margin-bottom: 8px; }
+  .sig-summary.alert { color: var(--amber); font-weight: 600; }
+  .sig-summary.warn { color: #d8b978; }
+  .sig-lights { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .sig-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+  .sig-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); flex-shrink: 0; transition: all .3s; }
+  .sig-item.on .sig-dot { background: var(--amber); box-shadow: 0 0 7px rgba(210,153,34,.7); }
+  .sig-item.on .sig-lbl { color: var(--amber); }
+
   .warn {
     font-size: 11px; line-height: 1.6;
     background: #1c1408; border: 1px solid #3a2c0a; color: #d8b978;
@@ -133,6 +150,8 @@
     background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
   }
   .modal .disclaimer { font-size: 11px; color: #d8b978; margin-top: 10px; line-height: 1.5; }
+  .help-block { font-size: 12.5px; line-height: 1.6; padding: 8px 0; border-top: 1px solid var(--line); color: var(--text); }
+  .hl-amber { color: var(--amber); }
 
   /* 启动进度遮罩 */
   .boot-mask {
@@ -232,6 +251,19 @@
         <div id="sr-list"><div class="sr-row"><span class="lbl">计算中…</span></div></div>
       </div>
 
+      <div class="sig-panel" id="sig-panel">
+        <div class="t">动能 / 背离信号（当前周期 · 领先于均线）
+          <span class="sig-help" id="sig-help" title="点击看指标说明">❔</span>
+        </div>
+        <div class="sig-summary" id="sig-summary">计算中…</div>
+        <div class="sig-lights">
+          <div class="sig-item" id="sig-fade"><span class="sig-dot"></span><span class="sig-lbl">高点递减</span></div>
+          <div class="sig-item" id="sig-vol"><span class="sig-dot"></span><span class="sig-lbl">量价背离</span></div>
+          <div class="sig-item" id="sig-oi"><span class="sig-dot"></span><span class="sig-lbl">持仓背离</span></div>
+          <div class="sig-item" id="sig-rsi"><span class="sig-dot"></span><span class="sig-lbl">RSI背离</span></div>
+        </div>
+      </div>
+
       <div class="warn">
         <b>⚠️ 亮灯 ≠ 可进场。</b>只判断三频方向是否对齐。盈亏比、结构止损位仍须你确认。
         支撑压力为算法辅助，非精确挂单价。风险自负。
@@ -252,14 +284,17 @@
         <div class="sub-tabs">
           <div class="sub-tab active" data-sub="oi">CCL 持仓量</div>
           <div class="sub-tab" data-sub="vol">CJL 成交量</div>
+          <div class="sub-tab" data-sub="rsi">RSI(14)</div>
         </div>
         <canvas id="subchart"></canvas>
         <div class="legend">
           <span class="ma5">— MA5</span> &nbsp;
           <span class="ma20">— MA20</span> &nbsp;
           <span class="ma60">— MA60</span> &nbsp;
+          <span style="color:#20c9c9">— VWAP</span> &nbsp;
           <span style="color:#e8b923">┈ 现价</span> &nbsp;
-          <span class="sr-res">┈ 压力</span> <span class="sr-sup">┈ 支撑</span> &nbsp; 涨红跌绿
+          <span class="sr-res">┈ 压力</span> <span class="sr-sup">┈ 支撑</span> &nbsp;
+          <span style="color:#8b949e">▽△ 高低点</span> &nbsp; 涨红跌绿
         </div>
       </div>
     </div>
@@ -273,6 +308,29 @@
       <div id="modal-checks"></div>
       <div class="disclaimer">仅为技术条件核对，不构成投资建议。盈亏比按默认止损跳数估算，实际以你的结构止损为准。是否交易由你决定。</div>
       <button class="close-btn" id="modal-close">关闭</button>
+    </div>
+  </div>
+
+  <!-- 指标说明弹窗 -->
+  <div class="modal-mask" id="help-mask">
+    <div class="modal">
+      <div class="verdict" style="color:var(--blue)">指标说明 · 为什么它们比均线快</div>
+      <div class="summ">
+        MA 均线是"历史价格的平均"，价格先动、均线才慢慢跟，天生滞后。<br>
+        下面这些看的是"推动价格的力量"，力量先弱、价格才转向，所以能走在均线之前。
+      </div>
+      <div class="help-block"><b style="color:#20c9c9">VWAP 成交量加权均价</b><br>
+        日内资金的真实平均成本线，比 MA 更贴合多空分界。价格在 VWAP 上=日内多方占优；离得太远=过度延伸，追单盈亏比差。</div>
+      <div class="help-block"><b style="color:#8b949e">▽△ 高低点结构</b> / <b class="hl-amber">高点递减</b><br>
+        自动标出摆动高点▽、低点△。当高点一个比一个低（如 95→90→85），琥珀色▽示警——这叫"高点递减"，说明上涨力量一波波变弱，是趋势熄火最早的信号。别再等它回本。</div>
+      <div class="help-block"><b class="hl-amber">量价背离</b><br>
+        价格创新高，但成交量没跟上（越冲越没量）→ 上涨没人接力，虚涨。</div>
+      <div class="help-block"><b class="hl-amber">持仓背离 (CCL)</b><br>
+        价格涨，但持仓量没增甚至减少 → 是空头平仓（认输回补）推的假涨，不是新多进场。空头平完，买盘就断。期货独有的透视镜。</div>
+      <div class="help-block"><b class="hl-amber">RSI 背离</b><br>
+        价格创新高，但 RSI 没创新高 → 顶背离。超短线噪音大，当"提醒"用，别单独当扳机。</div>
+      <div class="disclaimer">以上为技术指标原理说明，不构成投资建议。信号是过滤器不是下单指令，是否交易由你决定，风险自负。</div>
+      <button class="close-btn" id="help-close">关闭</button>
     </div>
   </div>
 
@@ -329,13 +387,14 @@
   let latestKlines = null;
   let latestSr = null;
   let latestPrice = null;
+  let latestSignals = null;
 
   document.querySelectorAll('.tab').forEach(t => {
     t.onclick = () => {
       document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
       t.classList.add('active');
       currentTf = t.dataset.tf;
-      drawChart(); renderSrList();
+      drawChart(); renderSrList(); renderSignals();
     };
   });
   document.querySelectorAll('.sub-tab').forEach(t => {
@@ -363,6 +422,23 @@
       html += `<div class="sr-row"><span class="lbl">支撑</span><span class="sr-sup">${s.price} (×${s.touches})</span></div>`;
     });
     srListEl.innerHTML = html || '<div class="sr-row"><span class="lbl">暂无明显支撑压力</span></div>';
+  }
+
+  // 动能/背离信号灯
+  const sigPanel = document.getElementById('sig-panel');
+  const sigSummary = document.getElementById('sig-summary');
+  function renderSignals() {
+    if (!latestSignals) return;
+    const s = latestSignals[currentTf];
+    if (!s) return;
+    const map = { 'sig-fade': 'momentum_fade', 'sig-vol': 'vol_diverge',
+                  'sig-oi': 'oi_diverge', 'sig-rsi': 'rsi_diverge' };
+    Object.keys(map).forEach(id => {
+      document.getElementById(id).classList.toggle('on', !!s[map[id]]);
+    });
+    sigSummary.textContent = s.text || '';
+    sigSummary.className = 'sig-summary ' + (s.level === 'alert' ? 'alert' : (s.level === 'warn' ? 'warn' : ''));
+    sigPanel.classList.toggle('alert', s.level === 'alert');
   }
 
   function drawChart() {
@@ -394,6 +470,7 @@
       ['ma5', 'ma20', 'ma60'].forEach(k => {
         if (b[k] != null) { hi = Math.max(hi, b[k]); lo = Math.min(lo, b[k]); }
       });
+      if (b.vwap != null) { hi = Math.max(hi, b.vwap); lo = Math.min(lo, b.vwap); }
     });
     // 现价 + 支撑压力也纳入范围，保证都可见
     if (latestPrice != null) { hi = Math.max(hi, latestPrice); lo = Math.min(lo, latestPrice); }
@@ -458,6 +535,39 @@
     drawMa('ma20', '#58a6ff');
     drawMa('ma60', '#bc8cff');
 
+    // VWAP（成交量加权均价，日内资金成本线）— 青色实线
+    (function drawVwap() {
+      ctx.strokeStyle = '#20c9c9'; ctx.lineWidth = 1.6; ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < n; i++) {
+        const v = bars[i].vwap;
+        if (v == null) continue;
+        const cx = padL + slot * i + slot / 2;
+        if (!started) { ctx.moveTo(cx, y(v)); started = true; }
+        else ctx.lineTo(cx, y(v));
+      }
+      ctx.stroke(); ctx.lineWidth = 1;
+    })();
+
+    // 摆动高低点结构标记：高点▽(压力) / 低点△(支撑)，递减高点用于识别动能衰竭
+    let lastSwingHigh = null;
+    bars.forEach((b, i) => {
+      if (!b.swing) return;
+      const cx = padL + slot * i + slot / 2;
+      ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+      if (b.swing === 'H') {
+        // 高点递减(比上一个摆动高点低)→ 用琥珀色示警，否则灰色
+        const fade = (lastSwingHigh != null && b.high < lastSwingHigh);
+        ctx.fillStyle = fade ? '#d29922' : '#8b949e';
+        ctx.fillText('▽', cx, y(b.high) - 4);
+        lastSwingHigh = b.high;
+      } else if (b.swing === 'L') {
+        ctx.fillStyle = '#8b949e';
+        ctx.fillText('△', cx, y(b.low) + 12);
+      }
+    });
+    ctx.textAlign = 'left';
+
     // 现价线 + 高亮价签（实时）
     const px = (latestPrice != null) ? latestPrice : bars[n - 1].close;
     const pyy = y(px);
@@ -501,6 +611,28 @@
         ctx.fillStyle = up ? '#da3633' : '#2ea043';
         ctx.fillRect(cx - Math.max(1.5, slot * 0.3), padT + 12 + (h - 12 - bh), Math.max(3, slot * 0.6), bh);
       });
+    } else if (currentSub === 'rsi') {
+      // RSI(14)：0-100，画 30/50/70 参考线，超买70/超卖30
+      const rsiTop = padT + 10, rsiBot = cssH - padB, rsiH = rsiBot - rsiTop;
+      const ry = v => rsiTop + (100 - v) / 100 * rsiH;
+      ctx.fillText('RSI(14)  >70超买  <30超卖', padL, padT + 9);
+      [30, 50, 70].forEach(lv => {
+        const yy = ry(lv);
+        ctx.strokeStyle = lv === 50 ? '#30363d' : '#3a2c0a';
+        ctx.setLineDash(lv === 50 ? [] : [3, 3]); ctx.beginPath();
+        ctx.moveTo(padL, yy); ctx.lineTo(cssW - padR, yy); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#6e7681'; ctx.fillText(String(lv), cssW - padR + 2, yy + 3);
+      });
+      ctx.strokeStyle = '#e8b923'; ctx.lineWidth = 1.4; ctx.beginPath();
+      let started = false;
+      bars.forEach((b, i) => {
+        if (b.rsi == null) return;
+        const cx = padL + slot * i + slot / 2;
+        if (!started) { ctx.moveTo(cx, ry(b.rsi)); started = true; }
+        else ctx.lineTo(cx, ry(b.rsi));
+      });
+      ctx.stroke(); ctx.lineWidth = 1;
     } else {
       const ois = bars.map(b => b.oi || 0);
       const maxAbs = Math.max(1, ...ois.map(Math.abs));
@@ -556,6 +688,7 @@
       if (res.sr) latestSr = res.sr;
       if (res.klines) { latestKlines = res.klines; drawChart(); }
       renderSrList();
+      if (res.signals) { latestSignals = res.signals; renderSignals(); }
 
       // 压力/支撑贴近警告
       if (res.proximity && res.proximity.text) {
@@ -601,6 +734,12 @@
   };
   modalClose.onclick = () => modalMask.classList.remove('show');
   modalMask.onclick = (e) => { if (e.target === modalMask) modalMask.classList.remove('show'); };
+
+  // ===== 指标说明弹窗 =====
+  const helpMask = document.getElementById('help-mask');
+  document.getElementById('sig-help').onclick = () => helpMask.classList.add('show');
+  document.getElementById('help-close').onclick = () => helpMask.classList.remove('show');
+  helpMask.onclick = (e) => { if (e.target === helpMask) helpMask.classList.remove('show'); };
 
   // ===== 启动进度遮罩 =====
   const bootMask = document.getElementById('boot-mask');

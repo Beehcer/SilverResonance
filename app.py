@@ -37,18 +37,177 @@ CHART_MAS = (5, 20, 60)
 
 def _attach_mas(full_bars):
     """
-    用完整序列(full_bars)算 MA5/20/60，把均线值附到每根K线上，
-    再返回最后 CHART_BARS 根。这样可见区间内三条均线都是完整的，
-    不会因为切片后数据不足导致 MA60 画不出、MA20 从中间才开始。
+    用完整序列(full_bars)算 MA5/20/60 + VWAP + RSI + 摆动高低点结构，
+    把这些值附到每根K线上，再返回最后 CHART_BARS 根。这样可见区间内
+    三条均线/VWAP 都是完整的，不会因为切片后数据不足导致画不出。
+
+    附加的领先型指标（走在 MA 之前）：
+    - vwap : 成交量加权均价，日内资金真实成本线，比 MA 更贴合多空分界。
+    - rsi  : 14周期相对强弱，用于背离预警（价格新高但 RSI 未新高＝顶背离）。
+    - swing: "H"=摆动高点 / "L"=摆动低点，用于画高低点结构、识别递减高点。
     """
     closes = [b["close"] for b in full_bars]
+    highs = [b["high"] for b in full_bars]
+    lows = [b["low"] for b in full_bars]
+    vols = [b.get("volume", 0) or 0 for b in full_bars]
+
+    # ---- MA ----
     for i, b in enumerate(full_bars):
         for p in CHART_MAS:
             if i + 1 >= p:
                 b[f"ma{p}"] = round(sum(closes[i - p + 1:i + 1]) / p, 1)
             else:
                 b[f"ma{p}"] = None
+
+    # ---- VWAP（滚动累计：sum(典型价×量)/sum(量)）----
+    cum_pv = 0.0
+    cum_v = 0.0
+    for i, b in enumerate(full_bars):
+        typical = (highs[i] + lows[i] + closes[i]) / 3.0
+        v = vols[i] if vols[i] > 0 else 1  # 量为0时给微量，避免 VWAP 断裂
+        cum_pv += typical * v
+        cum_v += v
+        b["vwap"] = round(cum_pv / cum_v, 1) if cum_v else None
+
+    # ---- RSI(14)：Wilder 平滑 ----
+    period = 14
+    if len(closes) > period:
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            ch = closes[i] - closes[i - 1]
+            gains.append(max(ch, 0.0))
+            losses.append(max(-ch, 0.0))
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        rsis = [None] * (period + 1)  # 前 period+1 根无值（含第0根）
+        for i in range(period, len(gains)):
+            if i > period:
+                avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+                avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+            if avg_loss == 0:
+                rsi = 100.0
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100.0 - 100.0 / (1.0 + rs)
+            rsis.append(round(rsi, 1))
+        # 对齐长度到 bars
+        while len(rsis) < len(full_bars):
+            rsis.append(None)
+        for i, b in enumerate(full_bars):
+            b["rsi"] = rsis[i] if i < len(rsis) else None
+    else:
+        for b in full_bars:
+            b["rsi"] = None
+
+    # ---- 摆动高低点（左右各 win 根做分形）----
+    win = 2
+    for b in full_bars:
+        b["swing"] = None
+    n = len(full_bars)
+    for i in range(win, n - win):
+        seg_h = highs[i - win:i + win + 1]
+        seg_l = lows[i - win:i + win + 1]
+        if highs[i] == max(seg_h):
+            full_bars[i]["swing"] = "H"
+        elif lows[i] == min(seg_l):
+            full_bars[i]["swing"] = "L"
+
     return full_bars[-CHART_BARS:]
+
+
+def _detect_signals(full_bars):
+    """
+    动能/背离信号（领先于 MA 的预警）。基于完整序列判断，返回：
+    {
+      momentum_fade: bool,   # 递减高点（lower highs）→ 上涨动能衰竭
+      momentum_rise: bool,   # 抬高低点（higher lows）→ 下跌动能衰竭（可能转多）
+      vol_diverge:   bool,   # 价创新高但量能不配合 → 量价背离
+      oi_diverge:    bool,   # 价涨但持仓不增/减 → 空头回补假涨（无新多进场）
+      rsi_diverge:   bool,   # 价创新高但 RSI 未新高 → 顶背离
+      text:          str,    # 汇总人话说明
+      level:         "none"/"warn"/"alert"
+    }
+    只做客观信号提示，不替用户决策。
+    """
+    out = {"momentum_fade": False, "momentum_rise": False,
+           "vol_diverge": False, "oi_diverge": False, "rsi_diverge": False,
+           "text": "", "level": "none"}
+    if not full_bars or len(full_bars) < 6:
+        out["text"] = "数据不足，暂不评估动能。"
+        return out
+
+    closes = [b["close"] for b in full_bars]
+    highs = [b["high"] for b in full_bars]
+    lows = [b["low"] for b in full_bars]
+    vols = [b.get("volume", 0) or 0 for b in full_bars]
+    ois = [b.get("oi", 0) or 0 for b in full_bars]
+
+    # 最近的两个摆动高点 / 低点
+    sw_highs = [(i, highs[i]) for i, b in enumerate(full_bars) if b.get("swing") == "H"]
+    sw_lows = [(i, lows[i]) for i, b in enumerate(full_bars) if b.get("swing") == "L"]
+
+    # 递减高点：最近两个摆动高点后一个更低
+    if len(sw_highs) >= 2:
+        (_, h_prev), (_, h_last) = sw_highs[-2], sw_highs[-1]
+        if h_last < h_prev:
+            out["momentum_fade"] = True
+    # 抬高低点
+    if len(sw_lows) >= 2:
+        (_, l_prev), (_, l_last) = sw_lows[-2], sw_lows[-1]
+        if l_last > l_prev:
+            out["momentum_rise"] = True
+
+    # 量价背离：近段收盘创新高，但成交量未同步创新高
+    look = min(20, len(full_bars))
+    seg_close = closes[-look:]
+    seg_vol = vols[-look:]
+    if len(seg_close) >= 5:
+        price_new_high = seg_close[-1] >= max(seg_close)
+        # 近3根均量 vs 之前均量
+        recent_v = sum(seg_vol[-3:]) / 3.0
+        earlier_v = (sum(seg_vol[:-3]) / max(1, len(seg_vol) - 3))
+        if price_new_high and recent_v < earlier_v:
+            out["vol_diverge"] = True
+
+    # 持仓背离：近3根价格上涨但持仓变化(oi)之和 ≤ 0（无新多进场）
+    if len(closes) >= 4:
+        price_up = closes[-1] > closes[-4]
+        oi_sum = sum(ois[-3:])
+        if price_up and oi_sum <= 0:
+            out["oi_diverge"] = True
+
+    # RSI 顶背离：价格新高但 RSI 未创新高
+    rsis = [b.get("rsi") for b in full_bars if b.get("rsi") is not None]
+    if len(rsis) >= 5 and len(seg_close) >= 5:
+        if seg_close[-1] >= max(seg_close) and rsis[-1] < max(rsis[-look:] if len(rsis) >= look else rsis):
+            out["rsi_diverge"] = True
+
+    # 汇总
+    msgs = []
+    if out["momentum_fade"]:
+        msgs.append("📉 高点递减（涨势力量变弱）")
+    if out["vol_diverge"]:
+        msgs.append("量价背离（价新高但量不跟）")
+    if out["oi_diverge"]:
+        msgs.append("持仓背离（价涨但没新多进场，疑空头回补假涨）")
+    if out["rsi_diverge"]:
+        msgs.append("RSI顶背离")
+    if out["momentum_rise"] and not msgs:
+        msgs.append("📈 低点抬高（跌势力量变弱）")
+
+    hit = sum([out["momentum_fade"], out["vol_diverge"], out["oi_diverge"], out["rsi_diverge"]])
+    if hit >= 2:
+        out["level"] = "alert"
+        out["text"] = "⚠️ 动能衰竭：" + "、".join(msgs) + "。持仓者检查是否离场，别等回本。"
+    elif hit == 1:
+        out["level"] = "warn"
+        out["text"] = "留意：" + "、".join(msgs) + "。单一信号，结合结构再判断。"
+    elif out["momentum_rise"]:
+        out["level"] = "warn"
+        out["text"] = "、".join(msgs) + "。空头动能减弱，观察是否止跌。"
+    else:
+        out["text"] = "动能正常，无明显衰竭/背离信号。"
+    return out
 
 
 def _find_sr(full_bars, direction=None):
@@ -281,6 +440,12 @@ def _mock_loop():
             "filter": _attach_mas(kl_filter),
             "trigger": _attach_mas(kl_trigger),
         }
+        # 领先型动能/背离信号（各周期，供面板信号灯用）
+        result["signals"] = {
+            "trend": _detect_signals(kl_trend),
+            "filter": _detect_signals(kl_filter),
+            "trigger": _detect_signals(kl_trigger),
+        }
         # 支撑/压力：用当前显示周期算(默认15分)，跟随各周期
         result["sr"] = {
             "trend": _find_sr(kl_trend),
@@ -400,6 +565,12 @@ def _tqsdk_loop():
                 "trend": _attach_mas(kt_list),
                 "filter": _attach_mas(kf_list),
                 "trigger": _attach_mas(kg_list),
+            }
+            # 领先型动能/背离信号（须在 _attach_mas 之后，依赖其附加的 swing/rsi 字段）
+            result["signals"] = {
+                "trend": _detect_signals(kt_list),
+                "filter": _detect_signals(kf_list),
+                "trigger": _detect_signals(kg_list),
             }
             _set_state(result=result)
             if first:
