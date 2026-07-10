@@ -369,7 +369,13 @@ def _tqsdk_loop():
         first = True
         wait_start = time.time()
         while True:
-            api.wait_update()
+            # 关键：必须带 deadline，否则非交易时段/无推送时 wait_update() 会永久阻塞，
+            # 下面的 30 秒看门狗永远执行不到，界面就会一直卡在"正在拉取三周期K线…"。
+            # deadline 到点 tqsdk 会抛 TimeoutError，这里吞掉，让流程走到看门狗判断。
+            try:
+                api.wait_update(deadline=time.time() + 5)
+            except TimeoutError:
+                pass
             kt_list, kf_list, kg_list = to_list(kt), to_list(kf), to_list(kg)
             # 首次要等三周期都有足够数据
             if first and (len(kt_list) < config.MA_SLOW or len(kg_list) < config.MA_FAST):

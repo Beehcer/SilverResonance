@@ -1,30 +1,49 @@
 @echo off
-REM 一键打包白银三频共振面板为单个 exe
-REM 双击运行本文件即可。首次会自动安装 pyinstaller。
+REM Build SilverResonance panel into a single exe.
+REM Just double-click this file. Dependencies install automatically on first run.
 
 cd /d "%~dp0"
 echo ============================================
-echo   白银三频共振面板 - 打包工具
+echo   SilverResonance - Build Tool
 echo ============================================
 
-echo [1/3] 检查 PyInstaller...
-python -m pip show pyinstaller >nul 2>&1
-if errorlevel 1 (
-  echo   未安装，正在安装 pyinstaller...
-  python -m pip install pyinstaller
+REM ---- Auto-locate Python (works even if not on PATH) ----
+set "PY="
+py -3 --version >nul 2>&1 && set "PY=py -3"
+if not defined PY (
+  python --version >nul 2>&1 && set "PY=python"
 )
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not defined PY (
+  for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python3*") do if exist "%%D\python.exe" set "PY=%%D\python.exe"
+)
+if not defined PY (
+  echo [ERROR] Python not found. Install Python 3 or add it to PATH, then retry.
+  echo.
+  pause
+  exit /b 1
+)
+echo Using Python: %PY%
 
-echo [2/3] 开始打包（首次较慢，请耐心等待）...
-python -m PyInstaller build.spec --noconfirm --clean
+echo [1/3] Checking dependencies: PyInstaller + tqsdk/flask/pandas ...
+%PY% -m pip show pyinstaller >nul 2>&1
+if errorlevel 1 (
+  echo   Installing pyinstaller...
+  %PY% -m pip install pyinstaller
+)
+%PY% -m pip install -r requirements.txt
 
-echo [3/3] 完成！
+echo [2/3] Building (first run is slow, please wait) ...
+%PY% -m PyInstaller build.spec --noconfirm --clean
+
+echo [3/3] Done
 echo.
 
-REM 清理 dist 里的账号配置，避免把你的账号打包分发出去（导致同账号多设备冲突→卡在"拉取K线"）
+REM Remove account config from dist so your account is not shipped to others.
 if exist "dist\user_config.json" del /q "dist\user_config.json"
 
-echo exe 位置： %~dp0dist\SilverResonance.exe
-echo 分发时【只拷这一个 exe】，不要带 user_config.json。
-echo 对方首次运行会填自己的天勤账号（同一账号不能多台电脑同时登录）。
+echo exe location: %~dp0dist\SilverResonance.exe
+echo When sharing, copy ONLY this exe, do NOT include user_config.json
+echo The recipient fills in their own TQ account on first run (same account cannot log in on multiple PCs at once)
 echo.
 pause
