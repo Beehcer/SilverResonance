@@ -144,16 +144,22 @@
     padding: 18px 20px;
   }
   .modal .verdict { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
-  .modal .verdict.go { color: var(--green); }
-  .modal .verdict.stop { color: var(--amber); }
-  .modal .verdict.wait { color: var(--red); }
+  .modal .verdict.go-strong { color: var(--green); }
+  .modal .verdict.go-weak { color: #d2c022; }
+  .modal .verdict.wait { color: #e08a2e; }
+  .modal .verdict.stop { color: var(--red); }
+  .modal .mode-tag { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
   .modal .summ { font-size: 13px; color: var(--dim); line-height: 1.6; margin-bottom: 12px; }
   .modal .chk { display: flex; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .modal .chk.ref { opacity: .62; }
   .modal .chk .mk { flex-shrink: 0; }
   .modal .chk .ok { color: var(--green); }
   .modal .chk .no { color: var(--red); }
+  .modal .chk .na { color: var(--dim); }
   .modal .chk .nm { font-weight: 600; }
   .modal .chk .dt { color: var(--dim); font-size: 12px; }
+  .ref-tag { font-size: 10px; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 3px; padding: 0 4px; margin-left: 4px; }
   .modal .close-btn {
     width: 100%; margin-top: 14px; padding: 10px; cursor: pointer;
     background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
@@ -437,6 +443,7 @@
   <div class="modal-mask" id="modal-mask">
     <div class="modal">
       <div class="verdict" id="modal-verdict">检查中…</div>
+      <div class="mode-tag" id="modal-mode"></div>
       <div class="summ" id="modal-summ"></div>
       <div id="modal-checks"></div>
       <div class="disclaimer">仅为技术条件核对，不构成投资建议。盈亏比按默认止损跳数估算，实际以你的结构止损为准。是否交易由你决定。</div>
@@ -1167,10 +1174,12 @@
     }
   }
 
-  // ===== 我要开仓：开仓前自检 =====
+  // ===== 我要开仓：开仓前自检（超短/波段双模式漏斗，四档结论） =====
+  const modalMode = document.getElementById('modal-mode');
   entryBtn.onclick = async () => {
     modalVerdict.textContent = '检查中…';
     modalVerdict.className = 'verdict';
+    modalMode.textContent = '';
     modalSumm.textContent = '';
     modalChecks.innerHTML = '';
     modalMask.classList.add('show');
@@ -1179,14 +1188,16 @@
       const d = await r.json();
       modalVerdict.textContent = d.title || '检查完成';
       modalVerdict.className = 'verdict ' + (d.verdict || '');
+      modalMode.textContent = d.mode_label ? '判定口径：' + d.mode_label : '';
       modalSumm.textContent = d.summary || '';
+      // 每层一行；参考层（轨道B/超短共振提示）视觉弱化
       modalChecks.innerHTML = (d.checks || []).map(c => `
-        <div class="chk">
-          <span class="mk ${c.ok ? 'ok' : 'no'}">${c.ok ? '✓' : '✗'}</span>
-          <span><span class="nm">${c.name}</span><br><span class="dt">${c.detail}</span></span>
+        <div class="chk ${c.layer === 'ref' ? 'ref' : ''}">
+          <span class="mk ${c.ok === null ? 'na' : c.ok ? 'ok' : 'no'}">${c.ok === null ? '·' : c.ok ? '✓' : '✗'}</span>
+          <span><span class="nm">${c.name}</span>${c.layer === 'ref' ? '<span class="ref-tag">参考</span>' : ''}<br><span class="dt">${c.detail}</span></span>
         </div>`).join('');
-      // go=高音, 其它=低音提示
-      beep(d.verdict === 'go' ? 'long' : 'short');
+      // 两档绿灯=高音，其它=低音提示
+      beep(d.verdict && d.verdict.startsWith('go') ? 'long' : 'short');
     } catch (e) {
       modalVerdict.textContent = '检查失败';
       modalVerdict.className = 'verdict wait';
