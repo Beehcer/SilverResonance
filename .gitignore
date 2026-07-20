@@ -1,5 +1,4 @@
 __pycache__/
 *.pyc
-user_config.json
 dist/
 build/build/
