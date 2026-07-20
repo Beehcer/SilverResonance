@@ -17,6 +17,8 @@ from flask import Flask, jsonify, render_template, request, redirect, url_for
 
 import config
 import resonance
+import symbols
+import double_bottom
 import user_settings
 
 
@@ -372,6 +374,7 @@ _state = {
     "connected": False,
     "mock": config.MOCK_MODE,
     "symbol": config.SYMBOL,
+    "combo": config.DEFAULT_COMBO,  # 当前共振周期组合 key
     "result": None,       # resonance.evaluate 的输出
     "updated": 0,         # 最后更新时间戳
     "error": None,
@@ -397,6 +400,43 @@ def get_state():
         return dict(_state)
 
 
+# ---------------- 周期组合（面板直接切换，无需重启） ----------------
+_combo_lock = threading.Lock()
+_combo_key = config.DEFAULT_COMBO   # 当前生效的组合 key
+_combo_request = None               # 前端请求切换的目标 key（由数据线程消费）
+
+
+def _current_combo():
+    with _combo_lock:
+        return config.get_combo(_combo_key)
+
+
+def _combo_labels(combo):
+    """组合 → resonance.evaluate 的三腿文案。"""
+    return {"trend": combo["trend_label"], "filter": combo["filter_label"],
+            "trigger": combo["trigger_label"]}
+
+
+def _consume_combo_request():
+    """数据线程每轮调用：有切换请求则应用并返回新组合，否则返回 None。"""
+    global _combo_key, _combo_request
+    with _combo_lock:
+        if _combo_request and _combo_request != _combo_key:
+            _combo_key = _combo_request
+            combo = config.get_combo(_combo_key)
+            _combo_request = None
+            _set_state(combo=combo["key"])
+            return combo
+        _combo_request = None
+        return None
+
+
+# ---------------- 多周期K线（按需懒加载，避免免费账号订阅数打满） ----------------
+_extra_lock = threading.Lock()
+_extra_requests = set()   # 前端查看过的周期(秒)
+_extra_data = {}          # 周期(秒) -> {"bars": [...], "updated": 时间戳}
+
+
 # ---------------- MOCK 数据 ----------------
 def _mock_series(base, n, drift, vol):
     """生成一段随机游走 OHLC 序列（含成交量/持仓量变化）。"""
@@ -420,6 +460,48 @@ def _mock_series(base, n, drift, vol):
     return out
 
 
+def _mock_pattern_series(n, base=7200):
+    """
+    生成一段带双底形态的模拟K线（MOCK 下演示轨道B评分用）：
+    阴跌出左底 → 反弹出颈位 → 回落出右底(带锤子线) → 放量突破 → 回踩不破 → 再上行。
+    持仓量(oi) 在后半程随价格上涨而增加，凑出"价升量增仓增"的健康象限。
+    """
+    l1, neck, l2 = base * 0.94, base * 1.00, base * 0.945
+    # (占比, 目标价, 量倍数, oi倾向)。形态压缩在后半段，保证落在评分引擎回溯窗口内
+    segs = [
+        (0.42, base * 1.02, 1.0, 0),    # 前段缓跌铺垫
+        (0.16, l1,          1.0, -1),   # 下跌出左底
+        (0.12, neck,        1.1, 0),    # 反弹出颈位
+        (0.12, l2,          0.9, -1),   # 回落出右底
+        (0.08, base * 1.03, 2.2, 1),    # 放量突破颈位
+        (0.04, base * 1.005, 1.0, 0),   # 回踩颈位上方(不破)
+        (0.06, base * 1.06, 1.4, 1),    # 再次上行
+    ]
+    out, price, oi = [], base * 1.10, 200000
+    for si, (frac, target, vm, oi_dir) in enumerate(segs):
+        cnt = max(2, int(n * frac))
+        step = (target - price) / cnt
+        for j in range(cnt):
+            o = price
+            price += step + random.uniform(-base * 0.0008, base * 0.0008)
+            c = price
+            h = max(o, c) + random.uniform(0, base * 0.0008)
+            low = min(o, c) - random.uniform(0, base * 0.0008)
+            # 右底位置造一根锤子线（小实体+长下影，确定性满足反转K线判定）
+            if si == 3 and j == cnt - 1:
+                c = o + base * 0.0002
+                price = c
+                h = max(o, c) + base * 0.0003
+                low = min(o, c) - base * 0.004
+            volume = int(random.uniform(500, 1000) * vm)
+            oi_delta = int(random.uniform(50, 400)) * oi_dir
+            oi += oi_delta
+            out.append({"open": round(o, 1), "high": round(h, 1),
+                        "low": round(low, 1), "close": round(c, 1),
+                        "volume": volume, "oi": oi_delta})
+    return out[:n]
+
+
 def _mock_loop():
     """随机模拟三个周期，方向会缓慢漂移，用来观察面板各种状态。"""
     _set_boot("loading", 60, "生成模拟数据…")
@@ -431,10 +513,19 @@ def _mock_loop():
         phase += 0.15
         drift = math.sin(phase) * 0.6
         base = 7200
+        combo = _consume_combo_request() or _current_combo()
         kl_trend = _mock_series(base, config.KLINE_LENGTH, drift * 0.4, 3)
         kl_filter = _mock_series(kl_trend[-1]["close"], config.KLINE_LENGTH, drift * 0.5, 2)
         kl_trigger = _mock_series(kl_filter[-1]["close"], config.KLINE_LENGTH, drift * 0.6, 1)
-        result = resonance.evaluate(kl_trend, kl_filter, kl_trigger)
+        result = resonance.evaluate(kl_trend, kl_filter, kl_trigger, _combo_labels(combo))
+        # 多周期K线：前端查看过的周期才生成（注入双底形态，便于演示轨道B评分）
+        with _extra_lock:
+            extra_ps = list(_extra_requests)
+        for p in extra_ps:
+            full = _mock_pattern_series(config.KLINE_LENGTH, base)
+            with _extra_lock:
+                _extra_data[p] = {"bars": _attach_mas(full), "full": full,
+                                  "updated": time.time()}
         result["klines"] = {
             "trend": _attach_mas(kl_trend),
             "filter": _attach_mas(kl_filter),
@@ -504,10 +595,19 @@ def _tqsdk_loop():
             )
 
         _set_boot("loading", 60, "正在拉取三周期K线…")
-        kt = api.get_kline_serial(config.SYMBOL, config.PERIOD_TREND, config.KLINE_LENGTH)
-        kf = api.get_kline_serial(config.SYMBOL, config.PERIOD_FILTER, config.KLINE_LENGTH)
-        kg = api.get_kline_serial(config.SYMBOL, config.PERIOD_TRIGGER, config.KLINE_LENGTH)
-        _set_state(connected=True, error=None)
+        # K线订阅缓存：周期(秒)->serial。切换组合/查看多周期时复用，避免重复订阅
+        _serials = {}
+
+        def serial(period):
+            if period not in _serials:
+                _serials[period] = api.get_kline_serial(config.SYMBOL, period, config.KLINE_LENGTH)
+            return _serials[period]
+
+        combo = _current_combo()
+        kt = serial(combo["trend"])
+        kf = serial(combo["filter"])
+        kg = serial(combo["trigger"])
+        _set_state(connected=True, error=None, combo=combo["key"])
 
         def to_list(df):
             # 过滤未生成的NaN行，返回 OHLC + 成交量 + 持仓量变化(CCL)
@@ -534,6 +634,15 @@ def _tqsdk_loop():
         first = True
         wait_start = time.time()
         while True:
+            # 周期组合切换：换成新订阅，重置首次加载与看门狗计时
+            new_combo = _consume_combo_request()
+            if new_combo is not None:
+                combo = new_combo
+                kt = serial(combo["trend"])
+                kf = serial(combo["filter"])
+                kg = serial(combo["trigger"])
+                first = True
+                wait_start = time.time()
             # 关键：必须带 deadline，否则非交易时段/无推送时 wait_update() 会永久阻塞，
             # 下面的 30 秒看门狗永远执行不到，界面就会一直卡在"正在拉取三周期K线…"。
             # deadline 到点 tqsdk 会抛 TimeoutError，这里吞掉，让流程走到看门狗判断。
@@ -547,14 +656,14 @@ def _tqsdk_loop():
                 # 看门狗：30秒还填不满K线 → 报错，避免永久卡在"拉取三周期K线"
                 if time.time() - wait_start > 30:
                     raise TimeoutError(
-                        f"30秒内未取到足够K线（15分{len(kt_list)}根/30秒{len(kg_list)}根）。"
+                        f"30秒内未取到足够K线（{combo['trend_label']}{len(kt_list)}根/{combo['trigger_label']}{len(kg_list)}根）。"
                         f"可能原因：①合约 {config.SYMBOL} 非当前主力/已换月 "
                         f"②同一天勤账号在别处登录（同账号不能多设备同时在线）"
                         f"③当前非交易时段且无历史缓存。"
                         f"请在配置页核对合约、确认账号未在别处使用后重试。"
                     )
                 continue
-            result = resonance.evaluate(kt_list, kf_list, kg_list)
+            result = resonance.evaluate(kt_list, kf_list, kg_list, _combo_labels(combo))
             result["sr"] = {
                 "trend": _find_sr(kt_list),
                 "filter": _find_sr(kf_list),
@@ -573,6 +682,18 @@ def _tqsdk_loop():
                 "trigger": _detect_signals(kg_list),
             }
             _set_state(result=result)
+            # 多周期K线（懒加载）：只订阅/刷新前端查看过的周期
+            with _extra_lock:
+                extra_ps = list(_extra_requests)
+            for p in extra_ps:
+                try:
+                    bars = to_list(serial(p))
+                    if bars:
+                        with _extra_lock:
+                            _extra_data[p] = {"bars": _attach_mas(bars), "full": bars,
+                                              "updated": time.time()}
+                except Exception:  # noqa: BLE001 单个周期失败不影响主流程
+                    pass
             if first:
                 _set_boot("ready", 100, "就绪")
                 first = False
@@ -599,7 +720,10 @@ def apply_user_settings():
         config.TQ_PASSWORD = s["tq_password"]
     if s.get("symbol"):
         config.SYMBOL = s["symbol"]
+    # 按合约从预设表解析 tick 参数（查不到保留 config.py 默认值）
+    symbols.apply_symbol_params(config)
     config.MOCK_MODE = bool(s.get("mock_mode", False))
+    _set_state(symbol=config.SYMBOL, mock=config.MOCK_MODE)
 
 
 def start_data_thread():
@@ -621,6 +745,7 @@ def index():
         return redirect(url_for("setup"))
     return render_template("index.html",
                            symbol=config.SYMBOL,
+                           symbol_name=symbols.name_of(config.SYMBOL) or "",
                            poll_ms=config.POLL_INTERVAL_MS)
 
 
@@ -629,7 +754,8 @@ def setup():
     s = user_settings.load_settings()
     return render_template("setup.html",
                            tq_user=s.get("tq_user", ""),
-                           symbol=s.get("symbol", config.SYMBOL))
+                           symbol=s.get("symbol", config.SYMBOL),
+                           presets=symbols.PRESETS)
 
 
 @app.route("/api/config", methods=["GET", "POST"])
@@ -655,6 +781,69 @@ def api_config():
 @app.route("/api/state")
 def api_state():
     return jsonify(get_state())
+
+
+@app.route("/api/periods")
+def api_periods():
+    """周期组合清单 + 当前生效项（前端渲染切换器用）。"""
+    combos = [{k: c[k] for k in ("key", "name", "trend_label", "filter_label", "trigger_label")}
+              for c in config.PERIOD_COMBOS]
+    return jsonify({"combos": combos, "current": _current_combo()["key"]})
+
+
+@app.route("/api/period", methods=["POST"])
+def api_period():
+    """切换共振周期组合：只登记请求，由行情线程换订阅并重算，无需重启。"""
+    global _combo_request
+    data = request.get_json(force=True, silent=True) or {}
+    key = (data.get("key") or "").strip()
+    combo = config.get_combo(key)
+    if combo["key"] != key:
+        return jsonify({"ok": False, "error": "未知周期组合"}), 400
+    with _combo_lock:
+        _combo_request = key
+    return jsonify({"ok": True, "current": key})
+
+
+@app.route("/api/kline")
+def api_kline():
+    """多周期K线（懒加载）：前端切到某周期才来登记；数据未就绪返回 loading。"""
+    try:
+        period = int(request.args.get("period", "0"))
+    except ValueError:
+        period = 0
+    if period not in config.EXTRA_KLINE_SECONDS:
+        return jsonify({"status": "error", "error": "不支持的周期"}), 400
+    with _extra_lock:
+        _extra_requests.add(period)
+        data = _extra_data.get(period)
+    if data:
+        return jsonify({"status": "ok", "period": period,
+                        "bars": data["bars"], "updated": data["updated"]})
+    return jsonify({"status": "loading"})
+
+
+@app.route("/api/double_bottom")
+def api_double_bottom():
+    """轨道B 双底评分：对指定周期K线跑评分（复用多周期懒加载订阅缓存）。"""
+    try:
+        period = int(request.args.get("period", "0"))
+    except ValueError:
+        period = 0
+    if period not in config.EXTRA_KLINE_SECONDS:
+        return jsonify({"status": "error", "error": "不支持的周期"}), 400
+    with _extra_lock:
+        _extra_requests.add(period)   # 顺便登记懒加载，数据线程会开始订阅该周期
+        data = _extra_data.get(period)
+    if not data:
+        return jsonify({"status": "loading"})
+    bars = data.get("full") or data["bars"]
+    if len(bars) < 40:
+        return jsonify({"status": "insufficient",
+                        "message": f"K线不足（当前{len(bars)}根，需≥40根），稍候再试"})
+    result = double_bottom.evaluate(bars)
+    return jsonify({"status": "ok", "period": period,
+                    "updated": data["updated"], "result": result})
 
 
 @app.route("/api/entry_check")

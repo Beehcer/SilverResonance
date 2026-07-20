@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>白银三频共振面板 · {{ symbol }}</title>
+<title>{{ symbol_name or "三频共振" }}面板 · {{ symbol }}</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --line: #30363d;
@@ -24,6 +24,15 @@
   .topbar .sym { color: var(--dim); font-size: 12px; }
   .topbar .price { margin-left: auto; font-size: 13px; color: var(--dim); }
   .topbar .price b { color: var(--text); font-size: 22px; }
+  /* 共振周期组合切换器 */
+  .combo-switch { display: flex; gap: 4px; }
+  .combo-btn {
+    background: var(--panel); color: var(--dim);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 10px; cursor: pointer; font-size: 12px;
+  }
+  .combo-btn.active { color: var(--text); border-color: var(--blue); background: #10233d; }
+  .combo-btn:hover { color: var(--text); }
   .status { font-size: 12px; color: var(--dim); }
   .status .conn { color: var(--green); }
   .status .disc { color: var(--red); }
@@ -182,18 +191,55 @@
     border-radius: 10px; padding: 10px;
   }
   #chart { width: 100%; height: 420px; display: block; }
-  #subchart { width: 100%; height: 100px; display: block; margin-top: 4px; }
   .legend { font-size: 11px; color: var(--dim); margin-top: 4px; text-align: right; }
   .legend .ma5 { color: #d29922; }
   .legend .ma20 { color: var(--blue); }
   .legend .ma60 { color: #bc8cff; }
-  .sub-tabs { display: flex; gap: 8px; margin: 8px 0 4px; }
-  .sub-tab {
+
+  /* 底部指标区：三格并列（CCL / CJL / RSI 同时可见） */
+  .sub-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .sub-cell canvas { width: 100%; height: 100px; display: block; }
+
+  /* 多周期K线查看区 */
+  .multi-wrap {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px; margin-top: 12px;
+  }
+  .multi-tabs { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .multi-tab {
     background: var(--bg); color: var(--dim);
-    border: 1px solid var(--line); border-radius: 5px; padding: 4px 12px;
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 12px;
     cursor: pointer; font-size: 12px;
   }
-  .sub-tab.active { color: var(--text); border-color: var(--blue); }
+  .multi-tab.active { color: var(--text); border-color: var(--blue); background: #10233d; }
+  #multichart { width: 100%; height: 320px; display: block; }
+  .multi-hint { font-size: 12px; color: var(--dim); padding: 20px 0; text-align: center; }
+
+  /* 轨道B 双底评分信号卡（可折叠） */
+  .db-card { margin-top: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .db-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; user-select: none; }
+  .db-title { font-size: 13px; font-weight: 700; }
+  .db-verdict { font-size: 12px; color: var(--dim); }
+  .db-toggle { margin-left: auto; font-size: 11px; color: var(--dim); }
+  .db-body { padding: 0 12px 10px; }
+  .db-body.hide { display: none; }
+  .db-score-row { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .db-score { font-size: 34px; font-weight: 800; }
+  .db-meta { font-size: 12px; color: var(--dim); line-height: 1.5; }
+  .db-sec { border-top: 1px solid var(--line); padding: 6px 0; font-size: 12px; }
+  .db-sec .t { color: var(--dim); font-size: 11px; margin-bottom: 4px; }
+  .db-lv { display: flex; justify-content: space-between; padding: 1px 0; }
+  .db-chip { display: inline-block; background: #10233d; border: 1px solid var(--blue); color: var(--blue);
+    border-radius: 4px; padding: 1px 6px; font-size: 11px; margin: 2px 4px 2px 0; }
+  .db-lights { display: flex; gap: 14px; }
+  .db-light { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
+  .db-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); }
+  .db-light.on { color: var(--amber); }
+  .db-light.on .db-dot { background: var(--amber); box-shadow: 0 0 6px rgba(210,153,34,.7); }
+  .db-reasons { font-size: 11px; color: var(--dim); line-height: 1.7; }
+  @media (max-width: 900px) {
+    .sub-grid { grid-template-columns: 1fr; }
+  }
 
   @media (max-width: 900px) {
     .layout { flex-direction: column; }
@@ -216,7 +262,8 @@
 
   <div class="topbar">
     <h1>白银三频共振面板</h1>
-    <span class="sym">{{ symbol }} · 15分定方向 / 3分过滤 / 30秒触发</span>
+    <span class="sym">{% if symbol_name %}<b style="color:var(--text)">{{ symbol_name }}</b> · {% endif %}{{ symbol }} · <span id="combo-desc">15分定方向 / 3分过滤 / 30秒触发</span></span>
+    <span class="combo-switch" id="combo-switch" title="切换共振周期组合，无需重启"></span>
     <span class="price">现价 <b id="price">--</b></span>
     <span class="status" id="status">连接中…</span>
   </div>
@@ -234,15 +281,15 @@
       <div class="legs">
         <div class="leg" id="leg-trend">
           <div class="dot"></div>
-          <div class="info"><div class="p">15分<span>定方向</span></div><div class="d">--</div></div>
+          <div class="info"><div class="p"><span class="per">15分</span><span>定方向</span></div><div class="d">--</div></div>
         </div>
         <div class="leg" id="leg-filter">
           <div class="dot"></div>
-          <div class="info"><div class="p">3分<span>过滤位置</span></div><div class="d">--</div></div>
+          <div class="info"><div class="p"><span class="per">3分</span><span>过滤位置</span></div><div class="d">--</div></div>
         </div>
         <div class="leg" id="leg-trigger">
           <div class="dot"></div>
-          <div class="info"><div class="p">30秒<span>触发入场</span></div><div class="d">--</div></div>
+          <div class="info"><div class="p"><span class="per">30秒</span><span>触发入场</span></div><div class="d">--</div></div>
         </div>
       </div>
 
@@ -275,18 +322,18 @@
     <!-- 右：图表 -->
     <div class="col-right">
       <div class="tabs">
-        <div class="tab active" data-tf="trend">15分</div>
-        <div class="tab" data-tf="filter">3分</div>
-        <div class="tab" data-tf="trigger">30秒</div>
+        <div class="tab active" data-tf="trend" id="tab-trend">15分</div>
+        <div class="tab" data-tf="filter" id="tab-filter">3分</div>
+        <div class="tab" data-tf="trigger" id="tab-trigger">30秒</div>
       </div>
       <div class="chart-wrap">
         <canvas id="chart"></canvas>
-        <div class="sub-tabs">
-          <div class="sub-tab active" data-sub="oi">CCL 持仓量</div>
-          <div class="sub-tab" data-sub="vol">CJL 成交量</div>
-          <div class="sub-tab" data-sub="rsi">RSI(14)</div>
+        <!-- 底部指标区：CCL / CJL / RSI 三格并列，同时可见 -->
+        <div class="sub-grid">
+          <div class="sub-cell"><canvas id="sub-oi"></canvas></div>
+          <div class="sub-cell"><canvas id="sub-vol"></canvas></div>
+          <div class="sub-cell"><canvas id="sub-rsi"></canvas></div>
         </div>
-        <canvas id="subchart"></canvas>
         <div class="legend">
           <span class="ma5">— MA5</span> &nbsp;
           <span class="ma20">— MA20</span> &nbsp;
@@ -295,6 +342,41 @@
           <span style="color:#e8b923">┈ 现价</span> &nbsp;
           <span class="sr-res">┈ 压力</span> <span class="sr-sup">┈ 支撑</span> &nbsp;
           <span style="color:#8b949e">▽△ 高低点</span> &nbsp; 涨红跌绿
+        </div>
+      </div>
+
+      <!-- 多周期K线查看：按需懒加载，切到哪个周期才拉哪个 -->
+      <div class="multi-wrap">
+        <div class="multi-tabs" id="multi-tabs">
+          <div class="multi-tab" data-period="86400">日线</div>
+          <div class="multi-tab" data-period="3600">1小时</div>
+          <div class="multi-tab" data-period="1800">30分</div>
+          <div class="multi-tab" data-period="900">15分</div>
+          <div class="multi-tab" data-period="300">5分</div>
+          <div class="multi-tab" data-period="180">3分</div>
+          <div class="multi-tab" data-period="60">1分</div>
+        </div>
+        <canvas id="multichart" style="display:none;"></canvas>
+        <div class="multi-hint" id="multi-hint">点击上方周期查看K线（按需加载）</div>
+
+        <!-- 轨道B 双底评分信号卡（查看 日线/1小时 时显示，可折叠） -->
+        <div class="db-card" id="db-card" style="display:none;">
+          <div class="db-head" id="db-head">
+            <span class="db-title">轨道B · 双底评分</span>
+            <span class="db-verdict" id="db-verdict">--</span>
+            <span class="db-toggle" id="db-toggle">收起 ▾</span>
+          </div>
+          <div class="db-body" id="db-body">
+            <div class="db-score-row">
+              <div class="db-score" id="db-score">--</div>
+              <div class="db-meta" id="db-meta"></div>
+            </div>
+            <div class="db-sec" id="db-pattern"></div>
+            <div class="db-sec" id="db-levels"></div>
+            <div class="db-sec" id="db-momentum"></div>
+            <div class="db-sec" id="db-plan"></div>
+            <div class="db-sec db-reasons" id="db-reasons"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -378,12 +460,12 @@
   function updateLeg(id, leg) {
     const el = document.getElementById(id);
     el.classList.toggle('ok', !!leg.ok);
+    el.querySelector('.per').textContent = leg.period;  // 周期文案跟随组合
     el.querySelector('.d').textContent = leg.detail;
   }
 
   // ===== 状态 =====
   let currentTf = 'trend';
-  let currentSub = 'oi';
   let latestKlines = null;
   let latestSr = null;
   let latestPrice = null;
@@ -395,14 +477,6 @@
       t.classList.add('active');
       currentTf = t.dataset.tf;
       drawChart(); renderSrList(); renderSignals();
-    };
-  });
-  document.querySelectorAll('.sub-tab').forEach(t => {
-    t.onclick = () => {
-      document.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      currentSub = t.dataset.sub;
-      drawChart();
     };
   });
 
@@ -583,11 +657,244 @@
     ctx.fillText(label, padL + w + 6, pyy + 3);
     ctx.font = '10px sans-serif';
 
-    drawSubChart(bars, padL, padR, slot);
+    drawSubCharts(bars);
   }
 
-  function drawSubChart(bars, padL, padR, slot) {
-    const canvas = document.getElementById('subchart');
+  function _subCtx(id) {
+    const canvas = document.getElementById(id);
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    return [ctx, cssW, cssH];
+  }
+
+  // 底部三格并列指标：CCL 持仓 / CJL 成交量 / RSI，同时可见
+  function drawSubCharts(bars) {
+    const n = bars.length;
+
+    // --- CCL 持仓量变化 ---
+    {
+      const [ctx, cssW, cssH] = _subCtx('sub-oi');
+      const slot = (cssW - 8) / n;
+      const ois = bars.map(b => b.oi || 0);
+      const maxAbs = Math.max(1, ...ois.map(Math.abs));
+      const zeroY = 16 + (cssH - 22) / 2;
+      ctx.strokeStyle = '#30363d'; ctx.beginPath();
+      ctx.moveTo(4, zeroY); ctx.lineTo(cssW - 4, zeroY); ctx.stroke();
+      ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('CCL 持仓量变化 (红=增仓 绿=减仓)', 4, 13);
+      bars.forEach((b, i) => {
+        const cx = 4 + slot * i + slot / 2;
+        const val = b.oi || 0;
+        const bh = Math.abs(val) / maxAbs * ((cssH - 22) / 2 - 4);
+        ctx.fillStyle = val >= 0 ? '#da3633' : '#2ea043';
+        if (val >= 0) ctx.fillRect(cx - Math.max(1.5, slot * 0.3), zeroY - bh, Math.max(3, slot * 0.6), bh);
+        else ctx.fillRect(cx - Math.max(1.5, slot * 0.3), zeroY, Math.max(3, slot * 0.6), bh);
+      });
+    }
+
+    // --- CJL 成交量 ---
+    {
+      const [ctx, cssW, cssH] = _subCtx('sub-vol');
+      const slot = (cssW - 8) / n;
+      const maxV = Math.max(1, ...bars.map(b => b.volume || 0));
+      ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('CJL 成交量  峰值 ' + maxV, 4, 13);
+      bars.forEach((b, i) => {
+        const cx = 4 + slot * i + slot / 2;
+        const bh = (b.volume || 0) / maxV * (cssH - 26);
+        ctx.fillStyle = b.close >= b.open ? '#da3633' : '#2ea043';
+        ctx.fillRect(cx - Math.max(1.5, slot * 0.3), 16 + (cssH - 26 - bh), Math.max(3, slot * 0.6), bh);
+      });
+    }
+
+    // --- RSI(14) ---
+    {
+      const [ctx, cssW, cssH] = _subCtx('sub-rsi');
+      const slot = (cssW - 8) / n;
+      const top = 16, bot = cssH - 6, hh = bot - top;
+      const ry = v => top + (100 - v) / 100 * hh;
+      ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('RSI(14)  >70超买  <30超卖', 4, 13);
+      [30, 50, 70].forEach(lv => {
+        const yy = ry(lv);
+        ctx.strokeStyle = lv === 50 ? '#30363d' : '#3a2c0a';
+        ctx.setLineDash(lv === 50 ? [] : [3, 3]); ctx.beginPath();
+        ctx.moveTo(4, yy); ctx.lineTo(cssW - 4, yy); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#6e7681'; ctx.fillText(String(lv), cssW - 20, yy + 3);
+      });
+      ctx.strokeStyle = '#e8b923'; ctx.lineWidth = 1.4; ctx.beginPath();
+      let started = false;
+      bars.forEach((b, i) => {
+        if (b.rsi == null) return;
+        const cx = 4 + slot * i + slot / 2;
+        if (!started) { ctx.moveTo(cx, ry(b.rsi)); started = true; }
+        else ctx.lineTo(cx, ry(b.rsi));
+      });
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
+  }
+
+  window.addEventListener('resize', () => { drawChart(); drawMultiResize(); });
+
+  // ===== 共振周期组合切换（后端换订阅重算，无需重启） =====
+  const comboSwitch = document.getElementById('combo-switch');
+  const comboDesc = document.getElementById('combo-desc');
+  let comboCurrent = null;
+  function markComboActive() {
+    comboSwitch.querySelectorAll('.combo-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.key === comboCurrent));
+  }
+  async function loadCombos() {
+    try {
+      const d = await (await fetch('/api/periods')).json();
+      comboCurrent = d.current;
+      comboSwitch.innerHTML = '';
+      d.combos.forEach(c => {
+        const b = document.createElement('button');
+        b.className = 'combo-btn';
+        b.dataset.key = c.key;
+        b.textContent = c.name;
+        b.title = `${c.trend_label}定方向 / ${c.filter_label}过滤 / ${c.trigger_label}触发`;
+        b.onclick = () => switchCombo(c.key);
+        comboSwitch.appendChild(b);
+      });
+      markComboActive();
+    } catch (e) { /* 后端未就绪时忽略，由 poll 同步 */ }
+  }
+  async function switchCombo(key) {
+    if (key === comboCurrent) return;
+    try {
+      const r = await fetch('/api/period', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        comboCurrent = key;
+        markComboActive();
+        statusEl.innerHTML = '<span class="mock">● 正在切换周期组合…</span>';
+      }
+    } catch (e) { /* 忽略，下次再点 */ }
+  }
+
+  // ===== 多周期K线查看（按需懒加载：切到哪个周期才拉哪个） =====
+  const multiHint = document.getElementById('multi-hint');
+  const multiCanvas = document.getElementById('multichart');
+  let multiPeriod = null;
+  let multiTimer = null;
+  document.querySelectorAll('.multi-tab').forEach(t => {
+    t.onclick = () => {
+      document.querySelectorAll('.multi-tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      multiPeriod = parseInt(t.dataset.period, 10);
+      loadMulti();
+    };
+  });
+  async function loadMulti() {
+    if (!multiPeriod) return;
+    multiCanvas.style.display = 'none';
+    multiHint.style.display = 'block';
+    multiHint.textContent = '加载中…（首次拉取该周期需几秒）';
+    if (multiTimer) { clearInterval(multiTimer); multiTimer = null; }
+    const fetchOnce = async () => {
+      try {
+        const d = await (await fetch('/api/kline?period=' + multiPeriod)).json();
+        if (d.status === 'ok' && d.bars && d.bars.length) {
+          multiHint.style.display = 'none';
+          multiCanvas.style.display = 'block';
+          drawMultiChart(d.bars);
+        }
+      } catch (e) { /* 保持加载提示 */ }
+      // 轨道B 信号卡只在日线/1小时下显示
+      if (multiPeriod === 86400 || multiPeriod === 3600) {
+        loadDb();
+      } else {
+        document.getElementById('db-card').style.display = 'none';
+      }
+    };
+    await fetchOnce();
+    multiTimer = setInterval(fetchOnce, 3000);  // 每3秒跟随刷新
+  }
+  let multiBarsCache = null;
+  function drawMultiResize() { if (multiBarsCache) drawMultiChart(multiBarsCache); }
+
+  // ===== 轨道B 双底评分信号卡 =====
+  const dbCard = document.getElementById('db-card');
+  document.getElementById('db-head').onclick = () => {
+    const body = document.getElementById('db-body');
+    body.classList.toggle('hide');
+    document.getElementById('db-toggle').textContent = body.classList.contains('hide') ? '展开 ▸' : '收起 ▾';
+  };
+  async function loadDb() {
+    dbCard.style.display = 'block';
+    try {
+      const d = await (await fetch('/api/double_bottom?period=' + multiPeriod)).json();
+      if (d.status === 'ok') renderDb(d.result);
+      else document.getElementById('db-verdict').textContent =
+        d.status === 'loading' ? 'K线加载中…' : (d.message || '数据不足');
+    } catch (e) { /* 保持现状，下轮刷新再试 */ }
+  }
+  function renderDb(r) {
+    const scoreEl = document.getElementById('db-score');
+    scoreEl.textContent = r.score;
+    // ≥75 红/绿按方向，55-74 黄，<55 灰
+    let color = '#484f58', verdict = '不做';
+    if (r.score >= 75 && r.direction !== 'wait') {
+      color = r.direction === 'long' ? '#da3633' : '#2ea043';
+      verdict = r.direction === 'long' ? '可做多' : '可做空';
+    } else if (r.score >= 55) { color = '#d29922'; verdict = '观望'; }
+    scoreEl.style.color = color;
+    const p = r.pattern || {};
+    document.getElementById('db-verdict').textContent = verdict + ' · ' +
+      (p.type === 'double_bottom' ? '双底' : p.type === 'double_top' ? '双顶' : '无结构');
+    const dirTxt = { long: '做多', short: '做空', wait: '观望' }[r.direction] || '观望';
+    document.getElementById('db-meta').innerHTML = `方向判定：<b style="color:${color}">${dirTxt}</b>`;
+
+    // 结构三价位 + 确认信号
+    document.getElementById('db-pattern').innerHTML = p.found
+      ? `<div class="t">结构（${p.type === 'double_bottom' ? '双底' : '双顶'}）</div>` +
+        `L1 <b>${p.L1.price}</b> · L2 <b>${p.L2.price}</b> · 颈位 <b>${p.neck}</b><br>` +
+        (p.confirmations || []).map(c => `<span class="db-chip">${c}</span>`).join('')
+      : '<div class="t">结构</div>未识别到有效双底/双顶（结构缺失或确认信号不足）';
+
+    // 支撑压力位（带强度分数）
+    const lv = r.levels || {};
+    const lvRow = (x, cls, name) =>
+      `<div class="db-lv"><span>${name} ${x.price}</span><span class="${cls}">强度 ${x.score}（${x.label}位）</span></div>`;
+    document.getElementById('db-levels').innerHTML = '<div class="t">关键位有效性</div>' +
+      ((lv.resistance || []).map(x => lvRow(x, 'sr-res', '压力')).join('') +
+       (lv.support || []).map(x => lvRow(x, 'sr-sup', '支撑')).join('') ||
+       '<span style="color:var(--dim)">暂无明显关键位</span>');
+
+    // 动能三灯 + 仓量四象限
+    const m = r.momentum || {};
+    const light = (on, name) =>
+      `<span class="db-light ${on ? 'on' : ''}"><span class="db-dot"></span>${name}</span>`;
+    document.getElementById('db-momentum').innerHTML =
+      `<div class="t">动能共振 ${m.resonance_count || 0}/3 · 仓量象限：${(r.volume_oi || {}).quadrant || '--'}</div>` +
+      `<div class="db-lights">${light(m.macd, 'MACD')}${light(m.rsi, 'RSI')}${light(m.ma_slope, 'MA斜率')}</div>`;
+
+    // 交易计划
+    const pl = r.plan;
+    document.getElementById('db-plan').innerHTML = pl
+      ? `<div class="t">交易计划（技术参考，非投资建议）</div>` +
+        `入场 ${pl.entry} · 止损 <b style="color:#da3633">${pl.stop}</b> · ` +
+        `目标1 <b style="color:#2ea043">${pl.target1}</b>` +
+        (pl.target2 ? ` · 目标2 <b style="color:#2ea043">${pl.target2}</b>` : '')
+      : '<div class="t">交易计划</div>评分未达标，暂无计划';
+
+    document.getElementById('db-reasons').innerHTML = (r.reasons || []).map(x => '· ' + x).join('<br>');
+  }
+
+  // 轻量蜡烛图：蜡烛 + MA5/20/60 + 底部成交量柱（纯 canvas，exe 离线可用）
+  function drawMultiChart(bars) {
+    multiBarsCache = bars;
+    const canvas = multiCanvas;
     const dpr = window.devicePixelRatio || 1;
     const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
     canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -595,63 +902,75 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    const padT = 6, padB = 12;
-    const h = cssH - padT - padB;
+    const padL = 8, padR = 50, padT = 8, padB = 14;
+    const volH = 50;                        // 底部成交量区高度
+    const w = cssW - padL - padR;
+    const h = cssH - padT - padB - volH;    // 主图高度
+
+    let hi = -Infinity, lo = Infinity, maxV = 1;
+    bars.forEach(b => {
+      hi = Math.max(hi, b.high); lo = Math.min(lo, b.low);
+      ['ma5', 'ma20', 'ma60'].forEach(k => {
+        if (b[k] != null) { hi = Math.max(hi, b[k]); lo = Math.min(lo, b[k]); }
+      });
+      maxV = Math.max(maxV, b.volume || 0);
+    });
+    const range = (hi - lo) || 1;
+    const pad = range * 0.06; hi += pad; lo -= pad;
+    const y = v => padT + (hi - v) / (hi - lo) * h;
+
     const n = bars.length;
-    ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    const slot = w / n;
+    const bw = Math.max(1.5, slot * 0.6);
 
-    if (currentSub === 'vol') {
-      const vols = bars.map(b => b.volume || 0);
-      const maxV = Math.max(1, ...vols);
-      ctx.fillText('CJL 成交量  峰值 ' + maxV, padL, padT + 9);
-      bars.forEach((b, i) => {
-        const cx = padL + slot * i + slot / 2;
-        const bh = (b.volume || 0) / maxV * (h - 12);
-        const up = b.close >= b.open;
-        ctx.fillStyle = up ? '#da3633' : '#2ea043';
-        ctx.fillRect(cx - Math.max(1.5, slot * 0.3), padT + 12 + (h - 12 - bh), Math.max(3, slot * 0.6), bh);
-      });
-    } else if (currentSub === 'rsi') {
-      // RSI(14)：0-100，画 30/50/70 参考线，超买70/超卖30
-      const rsiTop = padT + 10, rsiBot = cssH - padB, rsiH = rsiBot - rsiTop;
-      const ry = v => rsiTop + (100 - v) / 100 * rsiH;
-      ctx.fillText('RSI(14)  >70超买  <30超卖', padL, padT + 9);
-      [30, 50, 70].forEach(lv => {
-        const yy = ry(lv);
-        ctx.strokeStyle = lv === 50 ? '#30363d' : '#3a2c0a';
-        ctx.setLineDash(lv === 50 ? [] : [3, 3]); ctx.beginPath();
-        ctx.moveTo(padL, yy); ctx.lineTo(cssW - padR, yy); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#6e7681'; ctx.fillText(String(lv), cssW - padR + 2, yy + 3);
-      });
-      ctx.strokeStyle = '#e8b923'; ctx.lineWidth = 1.4; ctx.beginPath();
-      let started = false;
-      bars.forEach((b, i) => {
-        if (b.rsi == null) return;
-        const cx = padL + slot * i + slot / 2;
-        if (!started) { ctx.moveTo(cx, ry(b.rsi)); started = true; }
-        else ctx.lineTo(cx, ry(b.rsi));
-      });
-      ctx.stroke(); ctx.lineWidth = 1;
-    } else {
-      const ois = bars.map(b => b.oi || 0);
-      const maxAbs = Math.max(1, ...ois.map(Math.abs));
-      const zeroY = padT + h / 2;
-      ctx.strokeStyle = '#30363d'; ctx.beginPath();
-      ctx.moveTo(padL, zeroY); ctx.lineTo(cssW - padR, zeroY); ctx.stroke();
-      ctx.fillText('CCL 持仓量变化  (红=增仓 绿=减仓)', padL, padT + 9);
-      bars.forEach((b, i) => {
-        const cx = padL + slot * i + slot / 2;
-        const val = b.oi || 0;
-        const bh = Math.abs(val) / maxAbs * (h / 2 - 6);
-        ctx.fillStyle = val >= 0 ? '#da3633' : '#2ea043';
-        if (val >= 0) ctx.fillRect(cx - Math.max(1.5, slot * 0.3), zeroY - bh, Math.max(3, slot * 0.6), bh);
-        else ctx.fillRect(cx - Math.max(1.5, slot * 0.3), zeroY, Math.max(3, slot * 0.6), bh);
-      });
+    // 网格 + 价格刻度
+    ctx.strokeStyle = '#21262d'; ctx.fillStyle = '#6e7681';
+    ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    for (let i = 0; i <= 3; i++) {
+      const yy = padT + h * i / 3;
+      ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(padL + w, yy); ctx.stroke();
+      ctx.fillText((hi - (hi - lo) * i / 3).toFixed(1), padL + 2, yy - 2);
     }
-  }
 
-  window.addEventListener('resize', () => { drawChart(); });
+    // 蜡烛（涨红跌绿）
+    bars.forEach((b, i) => {
+      const cx = padL + slot * i + slot / 2;
+      const up = b.close >= b.open;
+      ctx.strokeStyle = up ? '#da3633' : '#2ea043';
+      ctx.fillStyle = up ? '#da3633' : '#2ea043';
+      ctx.beginPath(); ctx.moveTo(cx, y(b.high)); ctx.lineTo(cx, y(b.low)); ctx.stroke();
+      const yO = y(b.open), yC = y(b.close);
+      ctx.fillRect(cx - bw / 2, Math.min(yO, yC), bw, Math.max(1, Math.abs(yC - yO)));
+    });
+
+    // 均线（后端预计算）
+    function drawMa(key, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < n; i++) {
+        const v = bars[i][key];
+        if (v == null) continue;
+        const cx = padL + slot * i + slot / 2;
+        if (!started) { ctx.moveTo(cx, y(v)); started = true; }
+        else ctx.lineTo(cx, y(v));
+      }
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
+    drawMa('ma5', '#d29922');
+    drawMa('ma20', '#58a6ff');
+    drawMa('ma60', '#bc8cff');
+
+    // 底部成交量柱
+    const volTop = padT + h + 4;
+    ctx.fillStyle = '#8b949e';
+    ctx.fillText('VOL', padL + 2, volTop + 10);
+    bars.forEach((b, i) => {
+      const cx = padL + slot * i + slot / 2;
+      const bh = (b.volume || 0) / maxV * (volH - 12);
+      ctx.fillStyle = b.close >= b.open ? '#da3633' : '#2ea043';
+      ctx.fillRect(cx - Math.max(1.5, slot * 0.3), volTop + (volH - 12 - bh), Math.max(3, slot * 0.6), bh);
+    });
+  }
 
   async function poll() {
     try {
@@ -665,6 +984,8 @@
       } else {
         statusEl.innerHTML = '<span class="disc">● 未连接</span> ' + (s.error ? '· ' + s.error : '');
       }
+      // 组合在别处被切换过时，同步高亮
+      if (s.combo && s.combo !== comboCurrent) { comboCurrent = s.combo; markComboActive(); }
 
       const res = s.result;
       if (!res) { return; }
@@ -674,6 +995,11 @@
       updateLeg('leg-trend', res.legs.trend);
       updateLeg('leg-filter', res.legs.filter);
       updateLeg('leg-trigger', res.legs.trigger);
+      // 周期文案跟随组合（图表 tab + 顶栏说明）
+      document.getElementById('tab-trend').textContent = res.legs.trend.period;
+      document.getElementById('tab-filter').textContent = res.legs.filter.period;
+      document.getElementById('tab-trigger').textContent = res.legs.trigger.period;
+      comboDesc.textContent = `${res.legs.trend.period}定方向 / ${res.legs.filter.period}过滤 / ${res.legs.trigger.period}触发`;
 
       beacon.className = 'beacon ' + (res.resonance ? res.direction : 'none');
       if (res.resonance) {
@@ -781,5 +1107,6 @@
   poll();
   setInterval(poll, POLL_MS);
   pollBoot();
+  loadCombos();
 </script></body>
 </html>

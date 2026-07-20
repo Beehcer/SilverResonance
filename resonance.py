@@ -129,10 +129,14 @@ def trigger_ok(klines: List[Dict], direction: str) -> bool:
     return False
 
 
-def evaluate(kl_trend: List[Dict], kl_filter: List[Dict], kl_trigger: List[Dict]) -> Dict:
+def evaluate(kl_trend: List[Dict], kl_filter: List[Dict], kl_trigger: List[Dict],
+             labels: Optional[Dict] = None) -> Dict:
     """
     综合判定，返回面板需要的完整状态字典。
+    labels：三个周期的显示文案，如 {"trend": "1小时", "filter": "15分", "trigger": "3分"}；
+            不传则用默认 15分/3分/30秒（判定逻辑与周期文案无关）。
     """
+    labels = labels or {"trend": "15分", "filter": "3分", "trigger": "30秒"}
     direction = trend_direction(kl_trend)
     f_ok = filter_ok(kl_filter, direction) if direction != "none" else False
     t_ok = trigger_ok(kl_trigger, direction) if direction != "none" else False
@@ -146,20 +150,20 @@ def evaluate(kl_trend: List[Dict], kl_filter: List[Dict], kl_trigger: List[Dict]
         "direction": direction,              # long / short / none
         "resonance": resonance,              # 三频是否共振
         "legs": {
-            "trend": {                       # 15分
-                "period": "15分",
+            "trend": {                       # 主战场
+                "period": labels["trend"],
                 "role": "定方向",
                 "ok": direction != "none",
                 "detail": {"long": "多头排列↑", "short": "空头排列↓", "none": "方向不明"}[direction],
             },
-            "filter": {                      # 3分
-                "period": "3分",
+            "filter": {                      # 中周期
+                "period": labels["filter"],
                 "role": "过滤位置",
                 "ok": f_ok,
                 "detail": "同向且未过度延伸" if f_ok else ("方向不符/已过度延伸" if direction != "none" else "等待方向"),
             },
-            "trigger": {                     # 30秒
-                "period": "30秒",
+            "trigger": {                     # 小周期
+                "period": labels["trigger"],
                 "role": "触发入场",
                 "ok": t_ok,
                 "detail": (f"连续{config.TRIGGER_CONFIRM_BARS}根收盘站稳" if t_ok
