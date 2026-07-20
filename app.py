@@ -12,6 +12,7 @@ import random
 import math
 import os
 import sys
+import json
 import webbrowser
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 
@@ -434,7 +435,142 @@ def _consume_combo_request():
 # ---------------- 多周期K线（按需懒加载，避免免费账号订阅数打满） ----------------
 _extra_lock = threading.Lock()
 _extra_requests = set()   # 前端查看过的周期(秒)
-_extra_data = {}          # 周期(秒) -> {"bars": [...], "updated": 时间戳}
+_extra_data = {}          # 周期(秒) -> {"bars": [...], "full": [...], "updated": 时间戳}
+
+
+# ---------------- 聚焦品种热切换（无需重启） ----------------
+_symbol_lock = threading.Lock()
+_symbol_request = None    # 前端请求切换的品种代码（由数据线程消费）
+
+
+def _consume_symbol_request():
+    """数据线程每轮调用：有切换请求则应用并返回新品种代码，否则 None。"""
+    global _symbol_request
+    with _symbol_lock:
+        req = _symbol_request
+        _symbol_request = None
+    if not req or req == config.SYMBOL:
+        return None
+    config.SYMBOL = req
+    symbols.apply_symbol_params(config)   # 新品种 tick 参数（预设查不到保留默认）
+    _set_state(symbol=req)
+    with _extra_lock:
+        _extra_data.clear()               # 多周期缓存属于旧品种，清掉等前端重拉
+    return req
+
+
+# ---------------- 全局监控层（全品种快照 + openclaw 落盘契约） ----------------
+_overview_lock = threading.Lock()
+_overview = {}   # 品种代码 -> 快照条目（结构即 signals_state.json 的每品种条目）
+_tb_throttle = {}  # 品种 -> {"n": 已跑轮数, "summary": 轨道B摘要缓存}（节流用）
+
+
+def _lamp_of(track_a):
+    """轨道A灯色：共振多=红 / 共振空=绿 / 其它=灰（涨红跌绿）。"""
+    if track_a.get("resonance") and track_a.get("direction") == "long":
+        return "red"
+    if track_a.get("resonance") and track_a.get("direction") == "short":
+        return "green"
+    return "gray"
+
+
+def _track_b_summary(tb):
+    """double_bottom.evaluate 完整输出 → 落盘/卡片用摘要（plan 拆成 entry/stop/target1）。"""
+    p = tb["pattern"]
+    plan = tb["plan"] or {}
+    return {
+        "score": tb["score"], "direction": tb["direction"],
+        "pattern": {"found": p["found"], "type": p["type"],
+                    "L1": p["L1"]["price"] if p["L1"] else None,
+                    "L2": p["L2"]["price"] if p["L2"] else None,
+                    "neck": p["neck"]},
+        "support": [{"price": l["price"], "score": l["score"]} for l in tb["levels"]["support"]],
+        "resistance": [{"price": l["price"], "score": l["score"]} for l in tb["levels"]["resistance"]],
+        "volume_oi": tb["volume_oi"],
+        "entry": plan.get("entry"), "stop": plan.get("stop"), "target1": plan.get("target1"),
+        "reasons": tb["reasons"],
+    }
+
+
+def _track_b_for(sym, kb):
+    """轨道B摘要（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时评分不变）。"""
+    ent = _tb_throttle.get(sym) or {"n": 0, "summary": None}
+    ent["n"] += 1
+    if ent["summary"] is None or ent["n"] % max(1, config.GLOBAL_TRACKB_EVERY) == 0:
+        ent["summary"] = _track_b_summary(double_bottom.evaluate(kb))
+    _tb_throttle[sym] = ent
+    return ent["summary"]
+
+
+def _collecting_entry(name):
+    """数据不足时的占位条目（总览页降级显示"数据收集中"）。"""
+    return {
+        "name": name, "price": None,
+        "track_a": {"direction": "none", "resonance": False},
+        "track_b": {"score": None, "direction": "wait",
+                    "pattern": {"found": False, "type": None, "L1": None, "L2": None, "neck": None},
+                    "support": [], "resistance": [],
+                    "volume_oi": {"quadrant": "数据不足", "healthy": False}},
+        "lamp": "gray", "entry": None, "stop": None, "target1": None,
+        "reasons": ["数据收集中…"],
+    }
+
+
+def _set_overview(sym, entry):
+    with _overview_lock:
+        _overview[sym] = entry
+
+
+def _global_pass(bar_getter, focus_track_a=None):
+    """
+    全局监控层：对全部预设品种跑 轨道A两腿雷达 + 轨道B评分，写入 _overview。
+    bar_getter(sym, period) -> K线列表（可能为 []）。
+    focus_track_a：聚焦品种的完整三腿结果 (direction, resonance)，有则覆盖两腿雷达（更准）。
+    """
+    for p in symbols.PRESETS:
+        sym, name = p["symbol"], p["name"]
+        try:
+            kt = bar_getter(sym, config.GLOBAL_TREND_PERIOD)
+            kf = bar_getter(sym, config.GLOBAL_FILTER_PERIOD)
+            kb = bar_getter(sym, config.GLOBAL_TRACKB_PERIOD)
+        except Exception:  # noqa: BLE001 单品种失败跳过，不拖垮全局
+            continue
+        if len(kt) < config.MA_SLOW + config.TREND_SLOPE_LOOKBACK or len(kb) < 40:
+            _set_overview(sym, _collecting_entry(name))
+            continue
+        # 轨道A两腿雷达（全局层没有30秒触发腿，聚焦品种由主流程覆盖为三腿结果）
+        direction = resonance.trend_direction(kt)
+        f_ok = resonance.filter_ok(kf, direction) if direction != "none" else False
+        track_a = {"direction": direction, "resonance": direction != "none" and f_ok}
+        if focus_track_a and sym == config.SYMBOL:
+            track_a = dict(focus_track_a)
+        tb = _track_b_for(sym, kb)
+        price = round(kf[-1]["close"] if kf else kt[-1]["close"], 2)
+        _set_overview(sym, {
+            "name": name, "price": price,
+            "track_a": track_a,
+            "track_b": {k: tb[k] for k in
+                        ("score", "direction", "pattern", "support", "resistance", "volume_oi")},
+            "lamp": _lamp_of(track_a),
+            "entry": tb["entry"], "stop": tb["stop"], "target1": tb["target1"],
+            "reasons": tb["reasons"],
+        })
+
+
+def _dump_signals_state():
+    """全部品种快照落盘 state/signals_state.json（openclaw 契约）。原子写防半包。"""
+    with _overview_lock:
+        snap = {"updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "symbols": dict(_overview)}
+    try:
+        d = os.path.join(user_settings.app_dir(), "state")
+        os.makedirs(d, exist_ok=True)
+        tmp = os.path.join(d, "signals_state.json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, os.path.join(d, "signals_state.json"))
+    except Exception:  # noqa: BLE001 落盘失败不影响行情主流程
+        pass
 
 
 # ---------------- MOCK 数据 ----------------
@@ -502,8 +638,22 @@ def _mock_pattern_series(n, base=7200):
     return out[:n]
 
 
+def _invert_bars(bars):
+    """K线序列按均价镜像翻转（mock 双顶形态用：双底倒过来就是双顶）。"""
+    if not bars:
+        return bars
+    mid = sum(b["close"] for b in bars) / len(bars) * 2
+    return [{**b, "open": round(mid - b["open"], 1), "close": round(mid - b["close"], 1),
+             "high": round(mid - b["low"], 1), "low": round(mid - b["high"], 1),
+             "oi": -(b.get("oi") or 0)} for b in bars]
+
+
+# MOCK 下注入轨道B形态的品种（方向各异，方便总览页演示不同灯色/评分）
+_MOCK_PATTERN = {"SHFE.ag2608": "bottom", "SHFE.rb2610": "top", "DCE.jm2609": "bottom"}
+
+
 def _mock_loop():
-    """随机模拟三个周期，方向会缓慢漂移，用来观察面板各种状态。"""
+    """模拟全部预设品种：聚焦品种走完整面板管线，全部品种出全局快照。"""
     _set_boot("loading", 60, "生成模拟数据…")
     _set_state(connected=True, error=None)
     phase = 0.0
@@ -513,7 +663,9 @@ def _mock_loop():
         phase += 0.15
         drift = math.sin(phase) * 0.6
         base = 7200
+        _consume_symbol_request()
         combo = _consume_combo_request() or _current_combo()
+        # ---- 聚焦品种：完整三腿 + 面板数据 ----
         kl_trend = _mock_series(base, config.KLINE_LENGTH, drift * 0.4, 3)
         kl_filter = _mock_series(kl_trend[-1]["close"], config.KLINE_LENGTH, drift * 0.5, 2)
         kl_trigger = _mock_series(kl_filter[-1]["close"], config.KLINE_LENGTH, drift * 0.6, 1)
@@ -546,6 +698,23 @@ def _mock_loop():
         # 压力/支撑贴近警告（用最短周期30秒的S/R + 现价）
         result["proximity"] = _proximity_warning(result.get("price"), result["sr"]["trigger"])
         _set_state(result=result)
+        # ---- 全局层：全部预设品种快照（每品种相位错开，灯色各异）----
+        idx_of = {p["symbol"]: i for i, p in enumerate(symbols.PRESETS)}
+
+        def bar_getter(sym, period):
+            i = idx_of.get(sym, 0)
+            b = 2500 + i * 900
+            kind = _MOCK_PATTERN.get(sym)
+            if period == config.GLOBAL_TRACKB_PERIOD and kind:
+                s = _mock_pattern_series(config.KLINE_LENGTH, b)
+                return _invert_bars(s) if kind == "top" else s
+            d = math.sin(phase + i * 1.3) * 0.6
+            return _mock_series(b, config.KLINE_LENGTH, d * 0.5, max(1, b * 0.0004))
+
+        _global_pass(bar_getter,
+                     focus_track_a={"direction": result["direction"],
+                                    "resonance": result["resonance"]})
+        _dump_signals_state()
         if first:
             _set_boot("ready", 100, "就绪")
             first = False
@@ -594,19 +763,23 @@ def _tqsdk_loop():
                 f"请在配置页改成当前主力合约（如 SHFE.ag2510），或核对代码格式。原始信息：{e}"
             )
 
-        _set_boot("loading", 60, "正在拉取三周期K线…")
-        # K线订阅缓存：周期(秒)->serial。切换组合/查看多周期时复用，避免重复订阅
+        _set_boot("loading", 60, "正在拉取K线…")
+        # K线订阅缓存：(品种,周期)->serial。切换组合/品种/查看多周期时复用，避免重复订阅。
+        # 订阅数估算：全局层 11品种×3周期=33 条（聚焦品种的与全局复用同key），
+        # 聚焦品种额外只有 30秒触发腿 + 前端查看过的多周期（≤7条）。
         _serials = {}
 
-        def serial(period):
-            if period not in _serials:
-                _serials[period] = api.get_kline_serial(config.SYMBOL, period, config.KLINE_LENGTH)
-            return _serials[period]
+        def serial(sym, period):
+            key = (sym, period)
+            if key not in _serials:
+                _serials[key] = api.get_kline_serial(sym, period, config.KLINE_LENGTH)
+            return _serials[key]
 
         combo = _current_combo()
-        kt = serial(combo["trend"])
-        kf = serial(combo["filter"])
-        kg = serial(combo["trigger"])
+        focus = config.SYMBOL
+        kt = serial(focus, combo["trend"])
+        kf = serial(focus, combo["filter"])
+        kg = serial(focus, combo["trigger"])
         _set_state(connected=True, error=None, combo=combo["key"])
 
         def to_list(df):
@@ -634,13 +807,22 @@ def _tqsdk_loop():
         first = True
         wait_start = time.time()
         while True:
+            # 聚焦品种切换：换订阅、重置首次加载与看门狗计时（旧订阅留在缓存，切回时秒用）
+            new_sym = _consume_symbol_request()
+            if new_sym is not None:
+                focus = new_sym
+                kt = serial(focus, combo["trend"])
+                kf = serial(focus, combo["filter"])
+                kg = serial(focus, combo["trigger"])
+                first = True
+                wait_start = time.time()
             # 周期组合切换：换成新订阅，重置首次加载与看门狗计时
             new_combo = _consume_combo_request()
             if new_combo is not None:
                 combo = new_combo
-                kt = serial(combo["trend"])
-                kf = serial(combo["filter"])
-                kg = serial(combo["trigger"])
+                kt = serial(focus, combo["trend"])
+                kf = serial(focus, combo["filter"])
+                kg = serial(focus, combo["trigger"])
                 first = True
                 wait_start = time.time()
             # 关键：必须带 deadline，否则非交易时段/无推送时 wait_update() 会永久阻塞，
@@ -682,18 +864,23 @@ def _tqsdk_loop():
                 "trigger": _detect_signals(kg_list),
             }
             _set_state(result=result)
-            # 多周期K线（懒加载）：只订阅/刷新前端查看过的周期
+            # 多周期K线（懒加载）：只订阅/刷新前端查看过的周期（聚焦品种）
             with _extra_lock:
                 extra_ps = list(_extra_requests)
             for p in extra_ps:
                 try:
-                    bars = to_list(serial(p))
+                    bars = to_list(serial(focus, p))
                     if bars:
                         with _extra_lock:
                             _extra_data[p] = {"bars": _attach_mas(bars), "full": bars,
                                               "updated": time.time()}
                 except Exception:  # noqa: BLE001 单个周期失败不影响主流程
                     pass
+            # 全局层：全部预设品种快照 + 落盘（聚焦品种用三腿结果覆盖）
+            _global_pass(lambda s, p: to_list(serial(s, p)),
+                         focus_track_a={"direction": result["direction"],
+                                        "resonance": result["resonance"]})
+            _dump_signals_state()
             if first:
                 _set_boot("ready", 100, "就绪")
                 first = False
@@ -746,6 +933,7 @@ def index():
     return render_template("index.html",
                            symbol=config.SYMBOL,
                            symbol_name=symbols.name_of(config.SYMBOL) or "",
+                           presets=symbols.PRESETS,
                            poll_ms=config.POLL_INTERVAL_MS)
 
 
@@ -781,6 +969,42 @@ def api_config():
 @app.route("/api/state")
 def api_state():
     return jsonify(get_state())
+
+
+@app.route("/api/symbols")
+def api_symbols():
+    """预设品种清单 + 当前聚焦品种（顶栏品种切换器用）。"""
+    return jsonify({
+        "symbols": [{"symbol": p["symbol"], "name": p["name"]} for p in symbols.PRESETS],
+        "current": config.SYMBOL,
+    })
+
+
+@app.route("/api/symbol", methods=["POST"])
+def api_symbol():
+    """热切换聚焦品种：登记请求，行情线程换订阅、重置看门狗，无需重启。"""
+    global _symbol_request
+    data = request.get_json(force=True, silent=True) or {}
+    sym = (data.get("symbol") or "").strip()
+    if not sym:
+        return jsonify({"ok": False, "error": "缺少 symbol"}), 400
+    with _symbol_lock:
+        _symbol_request = sym
+    return jsonify({"ok": True, "symbol": sym})
+
+
+@app.route("/api/overview")
+def api_overview():
+    """总览页卡片数据：全部预设品种快照（数据未就绪的品种给占位卡）。"""
+    with _overview_lock:
+        ov = dict(_overview)
+    cards = [{"symbol": p["symbol"], **(ov.get(p["symbol"]) or _collecting_entry(p["name"]))}
+             for p in symbols.PRESETS]
+    # 聚焦品种是预设外的自定义合约时，也补一张卡
+    known = [p["symbol"] for p in symbols.PRESETS]
+    if config.SYMBOL not in known and config.SYMBOL in ov:
+        cards.append({"symbol": config.SYMBOL, **ov[config.SYMBOL]})
+    return jsonify({"symbols": cards, "current": config.SYMBOL})
 
 
 @app.route("/api/periods")

@@ -47,6 +47,17 @@ EXTRA_KLINE_PERIODS = [
 ]
 EXTRA_KLINE_SECONDS = [p for p, _ in EXTRA_KLINE_PERIODS]
 
+# ==== 全局监控层（全品种同时盯）====
+# 取舍说明：TqSdk 免费账号有订阅数上限，11 品种 × 全周期会爆。
+# 全局层每品种只挂 3 条K线：轨道A的趋势/过滤两腿 + 轨道B评分用 1h；
+# 30秒触发腿 和 7档多周期查看 只给"聚焦品种"订阅（见 app.py 懒加载）。
+# 全局层轨道A因此是"两腿雷达"（方向+位置过滤），完整三腿共振以聚焦面板为准。
+GLOBAL_TREND_PERIOD = 15 * 60    # 全局层轨道A 趋势腿
+GLOBAL_FILTER_PERIOD = 3 * 60    # 全局层轨道A 过滤腿
+GLOBAL_TRACKB_PERIOD = 60 * 60   # 全局层轨道B 评分周期（1h）
+# 全局层 tick 级节流：每 N 轮刷新才重算一次轨道B评分（省CPU，K线未收盘时评分不变）
+GLOBAL_TRACKB_EVERY = 3
+
 # ==== 轨道B 双底评分引擎参数（double_bottom.py 使用）====
 # A. 结构识别
 DB_LOOKBACK = 60         # N：回溯窗口根数（在此内找左底/左顶）

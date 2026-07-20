@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ symbol_name or "三频共振" }}面板 · {{ symbol }}</title>
+<title>多品种期货信号监控 · {{ symbol }}</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --line: #30363d;
@@ -237,6 +237,33 @@
   .db-light.on { color: var(--amber); }
   .db-light.on .db-dot { background: var(--amber); box-shadow: 0 0 6px rgba(210,153,34,.7); }
   .db-reasons { font-size: 11px; color: var(--dim); line-height: 1.7; }
+
+  /* 总览视图：全品种信号卡片网格 */
+  #overview-view { max-width: 1400px; margin: 0 auto; }
+  .ov-head { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
+  .ov-title { font-size: 18px; font-weight: 700; }
+  .ov-sub { font-size: 12px; color: var(--dim); }
+  .ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .ov-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px; cursor: pointer; transition: border-color .2s; }
+  .ov-card:hover { border-color: var(--blue); }
+  .ov-card.focus { border-color: var(--blue); box-shadow: 0 0 10px rgba(88,166,255,.25); }
+  .ov-row1 { display: flex; align-items: center; justify-content: space-between; }
+  .ov-name { font-size: 14px; font-weight: 700; }
+  .ov-sym { font-size: 10px; color: var(--dim); }
+  .ov-lamp { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .ov-price { font-size: 20px; font-weight: 700; margin: 6px 0; }
+  .ov-row { display: flex; gap: 6px; font-size: 12px; color: var(--dim); align-items: center; }
+  .ov-reason { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+  /* 顶栏控件：总览按钮 + 品种切换器 */
+  .view-btn { background: var(--panel); color: var(--dim); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+  .view-btn:hover { color: var(--text); }
+  .symbol-switch { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 8px; font-size: 12px; max-width: 230px; }
+  .track-label { font-size: 11px; color: var(--dim); margin: 0 0 6px 2px; }
   @media (max-width: 900px) {
     .sub-grid { grid-template-columns: 1fr; }
   }
@@ -250,7 +277,7 @@
 <body>
   <!-- 启动进度遮罩 -->
   <div class="boot-mask" id="boot-mask">
-    <div class="boot-title">白银三频共振面板</div>
+    <div class="boot-title">多品种期货信号监控</div>
     <div class="boot-bar-wrap"><div class="boot-bar" id="boot-bar"></div></div>
     <div class="boot-msg" id="boot-msg">正在启动…</div>
     <div class="boot-err" id="boot-err" style="display:none;"></div>
@@ -260,9 +287,31 @@
     </div>
   </div>
 
+  <!-- 总览视图：全品种信号卡片（默认首页） -->
+  <div id="overview-view">
+    <div class="ov-head">
+      <span class="ov-title">多品种期货信号监控</span>
+      <span class="ov-sub">轨道A · 三频共振（灯色）＋ 轨道B · 双底结构（评分）· 点击卡片进入品种详情</span>
+    </div>
+    <div class="ov-grid" id="ov-grid">
+      <div style="color:var(--dim);font-size:13px;">数据加载中…</div>
+    </div>
+  </div>
+
+  <!-- 详情视图：聚焦品种面板 -->
+  <div id="detail-view" style="display:none;">
   <div class="topbar">
-    <h1>白银三频共振面板</h1>
-    <span class="sym">{% if symbol_name %}<b style="color:var(--text)">{{ symbol_name }}</b> · {% endif %}{{ symbol }} · <span id="combo-desc">15分定方向 / 3分过滤 / 30秒触发</span></span>
+    <h1>多品种期货信号监控</h1>
+    <button class="view-btn" id="btn-overview">← 总览</button>
+    <select class="symbol-switch" id="symbol-switch" title="切换聚焦品种（无需重启）">
+      {% for p in presets %}
+      <option value="{{ p.symbol }}"{% if p.symbol == symbol %} selected{% endif %}>{{ p.name }} · {{ p.symbol }}</option>
+      {% endfor %}
+      {% if not symbol_name %}
+      <option value="{{ symbol }}" selected>{{ symbol }}（自定义）</option>
+      {% endif %}
+    </select>
+    <span class="sym"><span id="combo-desc">15分定方向 / 3分过滤 / 30秒触发</span></span>
     <span class="combo-switch" id="combo-switch" title="切换共振周期组合，无需重启"></span>
     <span class="price">现价 <b id="price">--</b></span>
     <span class="status" id="status">连接中…</span>
@@ -278,6 +327,7 @@
         <div class="dir" id="beacon-dir">等待共振</div>
       </div>
 
+      <div class="track-label">轨道A · 三频共振（周期组合可切）</div>
       <div class="legs">
         <div class="leg" id="leg-trend">
           <div class="dot"></div>
@@ -362,7 +412,7 @@
         <!-- 轨道B 双底评分信号卡（查看 日线/1小时 时显示，可折叠） -->
         <div class="db-card" id="db-card" style="display:none;">
           <div class="db-head" id="db-head">
-            <span class="db-title">轨道B · 双底评分</span>
+            <span class="db-title">轨道B · 双底结构</span>
             <span class="db-verdict" id="db-verdict">--</span>
             <span class="db-toggle" id="db-toggle">收起 ▾</span>
           </div>
@@ -381,6 +431,7 @@
       </div>
     </div>
   </div>
+  </div><!-- /detail-view -->
 
   <!-- 开仓前检查弹窗 -->
   <div class="modal-mask" id="modal-mask">
@@ -782,6 +833,89 @@
     } catch (e) { /* 忽略，下次再点 */ }
   }
 
+  // ===== 总览视图 / 详情视图切换 + 品种热切换（无需重启） =====
+  const overviewView = document.getElementById('overview-view');
+  const detailView = document.getElementById('detail-view');
+  const symbolSwitch = document.getElementById('symbol-switch');
+  let currentSymbol = '{{ symbol }}';
+  let ovTimer = null;
+
+  function showOverview() {
+    detailView.style.display = 'none';
+    overviewView.style.display = 'block';
+    loadOverview();
+    if (ovTimer) clearInterval(ovTimer);
+    ovTimer = setInterval(loadOverview, 3000);
+  }
+  function showDetail() {
+    overviewView.style.display = 'none';
+    detailView.style.display = 'block';
+    if (ovTimer) { clearInterval(ovTimer); ovTimer = null; }
+    drawChart(); drawMultiResize();   // 隐藏时 canvas 尺寸为0，切回需重画
+  }
+  document.getElementById('btn-overview').onclick = showOverview;
+
+  function setCurrentSymbol(sym) {
+    currentSymbol = sym;
+    if (symbolSwitch.value !== sym) symbolSwitch.value = sym;
+    document.title = '多品种期货信号监控 · ' + sym;
+  }
+  async function focusSymbol(sym) {
+    if (!sym) return;
+    if (sym !== currentSymbol) {
+      try {
+        const r = await fetch('/api/symbol', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: sym }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          setCurrentSymbol(sym);
+          statusEl.innerHTML = '<span class="mock">● 正在切换品种…</span>';
+        }
+      } catch (e) { /* 忽略，状态由 poll 同步 */ }
+    }
+    showDetail();
+  }
+  symbolSwitch.onchange = () => focusSymbol(symbolSwitch.value);
+
+  // ===== 总览页：全品种信号卡片 =====
+  async function loadOverview() {
+    try {
+      const d = await (await fetch('/api/overview')).json();
+      renderOverview(d);
+    } catch (e) { /* 后端未就绪，下轮再试 */ }
+  }
+  function renderOverview(d) {
+    const grid = document.getElementById('ov-grid');
+    grid.innerHTML = d.symbols.map(c => {
+      const ta = c.track_a || {};
+      const tb = c.track_b || {};
+      const lampColor = { red: '#da3633', green: '#2ea043', gray: '#484f58' }[c.lamp] || '#484f58';
+      const lampTxt = c.lamp === 'red' ? '共振多' : c.lamp === 'green' ? '共振空' :
+        ({ long: '偏多', short: '偏空', none: '无方向' }[ta.direction] || '--');
+      const score = tb.score;
+      let sc = '#484f58';
+      if (score != null) {
+        if (score >= 75 && tb.direction !== 'wait') sc = tb.direction === 'long' ? '#da3633' : '#2ea043';
+        else if (score >= 55) sc = '#d29922';
+      }
+      return `<div class="ov-card${c.symbol === d.current ? ' focus' : ''}" data-symbol="${c.symbol}">
+        <div class="ov-row1">
+          <span><span class="ov-name">${c.name}</span> <span class="ov-sym">${c.symbol}</span></span>
+          <span class="ov-lamp" style="background:${lampColor};box-shadow:0 0 8px ${lampColor}"></span>
+        </div>
+        <div class="ov-price">${c.price != null ? c.price : '--'}</div>
+        <div class="ov-row"><span>轨道A</span><b style="color:${lampColor}">${lampTxt}</b>
+          <span style="margin-left:auto">轨道B</span><b style="color:${sc};font-size:15px">${score != null ? score : '--'}</b></div>
+        <div class="ov-reason">${(c.reasons && c.reasons[0]) || ''}</div>
+      </div>`;
+    }).join('');
+    grid.querySelectorAll('.ov-card').forEach(el => {
+      el.onclick = () => focusSymbol(el.dataset.symbol);
+    });
+  }
+
   // ===== 多周期K线查看（按需懒加载：切到哪个周期才拉哪个） =====
   const multiHint = document.getElementById('multi-hint');
   const multiCanvas = document.getElementById('multichart');
@@ -984,8 +1118,9 @@
       } else {
         statusEl.innerHTML = '<span class="disc">● 未连接</span> ' + (s.error ? '· ' + s.error : '');
       }
-      // 组合在别处被切换过时，同步高亮
+      // 组合/品种在别处被切换过时，同步高亮
       if (s.combo && s.combo !== comboCurrent) { comboCurrent = s.combo; markComboActive(); }
+      if (s.symbol && s.symbol !== currentSymbol) setCurrentSymbol(s.symbol);
 
       const res = s.result;
       if (!res) { return; }
@@ -1108,5 +1243,6 @@
   setInterval(poll, POLL_MS);
   pollBoot();
   loadCombos();
+  showOverview();   // 默认落地总览页
 </script></body>
 </html>
