@@ -2,7 +2,7 @@
 
 > 本文档是 openclaw 等 AI 智能体对接本工具的唯一必读说明。
 > 项目目录：`D:\SilverResonance` ｜ 本文档位于项目根目录内。
-> 最后更新：2026-07-20 晚（含 entry_check 双模式漏斗 + 四档结论改动）
+> 最后更新：2026-07-21（entry_check 迭代为三批次入场决策模型 + 可视化决策面板，旧双模式漏斗废弃）
 
 ---
 
@@ -90,32 +90,54 @@
 | `/api/period` | POST | 切换共振组合（scalp/swing/position） |
 | `/api/kline?period=N` | GET | 多周期 K 线（86400/3600/1800/900/300/180/60） |
 | `/api/double_bottom?period=N` | GET | 指定周期轨道 B 完整评分 |
-| `/api/entry_check` | GET | "我要开仓"自检：双模式漏斗 + 四档结论（见 5.1 节） |
+| `/api/entry_check` | GET | "我要开仓"决策面板：三批次阶段识别 + 可执行四件套（见 5.1 节） |
 | `/api/config` | GET/POST | 配置读写（同 setup 页） |
 
-### 5.1 开仓自检（entry_check）双模式判定逻辑
+### 5.1 开仓决策面板（entry_check）三批次入场模型
 
-判定口径随当前共振组合自动分流，返回 `"mode": "scalp"|"swing"`：
+**设计原则：阶段识别 → 批次建议，永远有可执行输出，没有"禁止开仓"死路。** 最差情况也是 `standby` + 具体等什么（价位、信号），绝不只说一句"不能做"。
 
-**超短模式（combo=scalp）— 三频共振有一票否决权**
-1. 时机层（否决）：三频共振（三腿状态内嵌为一行）
-2. 位置层（否决）：现价距最近压力/支撑 ≤ `PROXIMITY_TICKS` 跳 → 红灯
-3. 价值层（否决）：结构止损（多头=最近摆动低点，空头=最近摆动高点；找不到回退 `DEFAULT_STOP_TICKS`）算盈亏比 ≥ `MIN_RR`
-4. 共振层（加减分）：轨道 B 同向 ≥55 升档；背离或 <40 降档
+**四阶段（stage 字段，按优先级识别）**：
 
-**波段模式（combo=swing/position）— 三频共振退出否决项（只做参考）**
-1. 结构层（否决）：轨道 B 评分 ≥75 强势 / 55–74 弱档 / <55 否决
-2. 位置层（否决）：距轨道 B 强位（score≥70）过近 → 红灯
-3. 价值层（否决）：直接用轨道 B 的 entry/stop/target1 算盈亏比
-4. 微调层（纯参考）：超短共振状态提示，不影响档位
+| stage | 名称 | 批次 | 识别条件（基于轨道B 1h K线） |
+|---|---|---|---|
+| `2b_probe` | 底部2B·试单 | 试单（计划仓位 34%） | 未放量突破颈位，且现价在 L2 区域（±`STAGE_ZONE_ATR`×ATR） |
+| `retest_confirm` | 突破回踩·确认 | 确认（33%） | 曾放量突破颈位，现价回踩至颈位 ±`RETEST_ZONE_ATR`×ATR 带内 |
+| `range_addon` | 震荡顺势·点3 | 顺势（33%） | 已站稳颈位上方，近 `RANGE_LOOKBACK` 根为整理区 |
+| `standby` | 等待中 | — | 以上都不满足，输出 `wait_for` 具体观察指令 |
 
-**四档结论（verdict 字段，两种模式共用）**：
-- `go-strong` 🟢 条件齐备，重点看
-- `go-weak` 🟡 可进，建议仓位减半
-- `wait` 🟠 条件不足，明说差哪项
-- `stop` 🔴 贴近关键位，追单陷阱
+**四档强度（strength 字段，没有"禁止"档）**：
+- `strong`：触发条件已满足，可按批次计划执行
+- `normal`：阶段已识别，触发未满足，等触发（面板呼吸灯提示）
+- `reduce`：盈亏比 < `MIN_RR`，不禁止但建议本批仓位减半
+- `standby`：观望，附具体等什么
 
-⚠️ 旧版 verdict 值 `go` 已废弃，消费方按上述四个新值判断。
+**各阶段止损规则**：2B试单 = L2 外侧 `DB_STOP_ATR`×ATR；回踩确认 = 回踩低点外 0.5×ATR；点3 = 整理区边沿外 0.3×ATR。
+
+**返回 JSON 契约**：
+
+```json
+{
+  "mode": "scalp|swing", "mode_label": "判定口径文案",
+  "stage": "2b_probe|retest_confirm|range_addon|standby",
+  "stage_name": "突破回踩·确认", "strength": "strong|normal|reduce|standby",
+  "direction": "long|short|none",
+  "tranche": {"name": "确认", "fraction": 0.33, "note": "批次说明"},
+  "stop": {"price": 7180.5, "ticks": 33, "basis": "回踩低点下方0.5×ATR"},
+  "trigger": {"met": true, "text": "缩量企稳已现，可按确认批执行"},
+  "targets": [{"price": 7637.3, "rr": 2.1}],
+  "ladder": {"L1": 6789.5, "L2": 6828.3, "neck": 7213.4, "price": 7227.0,
+             "stop": 7180.5, "target1": 7637.3, "target2": null},
+  "wait_for": null, "summary": "一句话决策摘要"
+}
+```
+
+- `ladder` 七字段供前端画竖向价格阶梯（止损区淡红 / 目标区淡绿 / 现价高亮）。
+- `standby` 时 `tranche`/`stop`/`trigger` 为 null，`wait_for` 非空。
+- 目标位优先取轨道B计划（target1/target2），缺则用丈量目标（颈位±形态高度）或最近强位补齐。
+- 双顶为完全镜像（direction=short，阶段语义相同）。
+
+⚠️ 旧版双模式漏斗（`verdict`/`checks` 字段，go-strong/go-weak/wait/stop 四档）已整体废弃，消费方按上述契约解析。
 
 ## 6. openclaw 盯盘任务建议（三个定时任务）
 
@@ -161,8 +183,12 @@
 | `TREND_SLOPE_MIN` | 0.5‰ | 趋势斜率门槛，太敏感调大 |
 | `OVEREXTENSION_PCT` | 0.8% | 过度延伸保护，越小越不容易追高亮灯 |
 | `PROXIMITY_TICKS` | 5 | 距压力/支撑 ≤ N 跳触发逼近警告 |
-| `MIN_RR` | 1.5 | 开仓自检最小盈亏比 |
+| `MIN_RR` | 1.5 | 开仓决策最小盈亏比（不足时降为 reduce 半仓提示，不禁止） |
 | `DEFAULT_STOP_TICKS` | 13 | 结构止损找不到摆动点时的回退跳数 |
+| `TRANCHE_FRACTIONS` | [0.34, 0.33, 0.33] | 三批次计划仓位比例（试单/确认/顺势） |
+| `STAGE_ZONE_ATR` | 1.0 | 2B试单区域：现价距 L2 ≤ N×ATR |
+| `RETEST_ZONE_ATR` | 0.5 | 回踩确认带：现价距颈位 ≤ N×ATR |
+| `RANGE_LOOKBACK / RANGE_CONTRACT_ATR` | 20 / 2.5 | 点3识别：近 N 根振幅 ≤ 系数×ATR 视为波动收缩（触发条件） |
 | `GLOBAL_TREND_PERIOD` 等 | 15分/3分/1h | 全局监控层周期（省订阅的取舍，注释有说明） |
 | `GLOBAL_TRACKB_EVERY` | 3 | 轨道 B 节流：每 N 轮重算一次评分 |
 | `DB_*`（19 个） | 见文件 | 轨道 B 全部参数：回溯窗口 60、两底容差 3%、颈位反弹 5%、放量 1.5×、四因子权重等 |

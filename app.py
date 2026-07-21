@@ -300,22 +300,148 @@ def _proximity_warning(price, sr):
     return {"side": side, "level": level, "ticks": ticks, "text": text}
 
 
-def _leg_marks(legs):
-    """三腿状态缩成内嵌小标记：趋势✓ 过滤✓ 触发✗。"""
-    def mark(key):
-        return "✓" if legs.get(key, {}).get("ok") else "✗"
-    return f"趋势{mark('trend')} 过滤{mark('filter')} 触发{mark('trigger')}"
+# ---- 三批次入场决策模型：阶段识别 → 可执行四件套（禁止"永远无法开仓"死路） ----
+_STAGE_META = {
+    "2b_probe":       {"stage_name": "底部2B·试单",   "tranche": "试单", "idx": 0},
+    "retest_confirm": {"stage_name": "突破回踩·确认", "tranche": "确认", "idx": 1},
+    "range_addon":    {"stage_name": "震荡顺势·点3",  "tranche": "顺势", "idx": 2},
+    "standby":        {"stage_name": "等待中",        "tranche": None,   "idx": -1},
+}
 
 
-def _rr_line(room_ticks, stop_ticks, stop_src):
-    """价值层文案：掩体空间/结构止损 → RR。返回 (detail, ok)。"""
-    if room_ticks is None:
-        return f"止损{stop_src}；掩体无法估算（缺压力/支撑位）", False
-    if not stop_ticks or stop_ticks <= 0:
-        return f"掩体 {room_ticks} 跳；止损距离异常", False
-    rr = room_ticks / stop_ticks
-    return (f"掩体 {room_ticks} 跳 / 止损 {stop_ticks} 跳（{stop_src}）≈ RR {rr:.1f}",
-            rr >= config.MIN_RR)
+def _reversal_recent(kb, kind, n=3):
+    """近 n 根内是否出现企稳/反转K线（复用轨道B的锤子/吞没判定）。"""
+    for i in range(max(1, len(kb) - n), len(kb)):
+        if double_bottom._reversal_candle(kb, i, kind):
+            return True
+    return False
+
+
+def _stage_advice(kb, tbs, price):
+    """
+    三批次入场决策核心。kb=轨道B周期(1h)K线；tbs=轨道B摘要（overview 条目）；price=现价。
+    按优先级识别阶段：2B试单 → 回踩确认 → 震荡顺势(点3)；
+    无阶段输出 standby + 具体观察指令（等什么、关注哪个价位），永远有可执行输出。
+    """
+    tick = config.PRICE_TICK or 1.0
+    atr = double_bottom._atr(kb) or (price * 0.005 if price else 1.0)
+    # 方向：优先双底(做多)，其次双顶(做空镜像)
+    kind, pattern = None, None
+    pb = double_bottom._find_pattern(kb, "bottom")
+    pt = double_bottom._find_pattern(kb, "top")
+    if pb["found"]:
+        kind, pattern = "bottom", pb
+    elif pt["found"]:
+        kind, pattern = "top", pt
+    direction = {"bottom": "long", "top": "short"}.get(kind, "none")
+
+    def out(**kw):
+        base = {"mode": None, "stage": "standby", "stage_name": "等待中",
+                "strength": "standby", "direction": direction,
+                "tranche": None, "stop": None, "trigger": None, "targets": [],
+                "ladder": {"L1": None, "L2": None, "neck": None, "price": price,
+                           "stop": None, "target1": None, "target2": None},
+                "wait_for": None, "summary": ""}
+        base.update(kw)
+        return base
+
+    if not pattern:
+        return out(wait_for="暂无结构，等双底/双顶左底形成后再评估",
+                   summary="轨道B未识别到双底/双顶，耐心等形态出现，不提前预判进场。")
+
+    L1, L2, neck = pattern["L1"]["price"], pattern["L2"]["price"], pattern["neck"]
+    sgn = 1 if kind == "bottom" else -1   # 交易方向符号：做多 +1 / 做空 -1
+    brk, brk_i, _ = double_bottom._breakout_info(kb, pattern, kind)
+
+    # 目标：优先轨道B计划，缺则丈量目标(颈位±形态高度)/最近强位补齐
+    t1 = (tbs or {}).get("target1") or round(neck + (neck - L1) * sgn, 2)
+    t2 = (tbs or {}).get("target2")
+    if t2 is None and tbs and price:
+        pool = tbs["track_b"]["resistance" if kind == "bottom" else "support"]
+        ahead = [l for l in pool if (l["price"] - price) * sgn > 0]
+        if ahead:
+            t2 = min(ahead, key=lambda l: abs(l["price"] - price))["price"]
+    ladder = {"L1": L1, "L2": L2, "neck": neck, "price": price,
+              "stop": None, "target1": t1, "target2": t2}
+
+    def pkg(stage, stop_price, stop_basis, trig_met, trig_text, note):
+        """组装某阶段的可执行四件套 + 推荐强度（strong/normal/reduce）。"""
+        stop_ticks = round(abs(price - stop_price) / tick) if price and stop_price else None
+        targets = []
+        risk = abs(price - stop_price) if (price and stop_price) else 0
+        for tp in (t1, t2):
+            if tp is None or price is None:
+                continue
+            targets.append({"price": tp, "rr": round(abs(tp - price) / risk, 1) if risk else None})
+        rr1 = targets[0]["rr"] if targets else None
+        meta = _STAGE_META[stage]
+        fraction = config.TRANCHE_FRACTIONS[meta["idx"]]
+        if rr1 is not None and rr1 < config.MIN_RR:
+            strength = "reduce"                       # RR 不足：降仓位比例提示而非禁止
+            fraction = round(fraction / 2, 2)
+            note += f"；RR {rr1}<{config.MIN_RR}，本批仓位建议减半"
+        elif trig_met:
+            strength = "strong"
+        else:
+            strength = "normal"
+        ladder["stop"] = round(stop_price, 2)
+        return out(stage=stage, stage_name=meta["stage_name"], strength=strength,
+                   tranche={"name": meta["tranche"], "fraction": fraction, "note": note},
+                   stop={"price": round(stop_price, 2), "ticks": stop_ticks, "basis": stop_basis},
+                   trigger={"met": bool(trig_met), "text": trig_text},
+                   targets=targets, ladder=dict(ladder),
+                   summary=f"{meta['stage_name']}批（计划仓位{fraction * 100:.0f}%）：{trig_text}"
+                           + (f"；目标 {t1}" if t1 else ""))
+
+    # ---- 阶段识别（按优先级）----
+    if not brk:
+        # 尚未放量突破颈位
+        if price is not None and abs(price - L2) <= config.STAGE_ZONE_ATR * atr:
+            trig = _reversal_recent(kb, kind)
+            return pkg("2b_probe", L2 - sgn * config.DB_STOP_ATR * atr, "L2下方1.5×ATR",
+                       trig,
+                       "企稳K线已出现，可按试单批执行" if trig
+                       else "等企稳K线：锤子/吞没/收盘收回L2上方",
+                       "右底区域试单，止损放L2外侧，破位即走")
+        if price is not None and (price - neck) * sgn > 0:
+            return out(wait_for=f"价已在颈位 {neck} 上方但未放量确认，等放量突破或回踩颈位 {neck}",
+                       summary="价格越过颈位但缺放量确认，不追，等确认批区域。")
+        return out(wait_for=f"等回落至 L2 {L2} 区域试单，或等放量突破颈位 {neck}",
+                   summary=f"结构在（L1 {L1} / 颈位 {neck}），现价不上不下，等价格到位。")
+
+    # 曾放量突破颈位
+    if price is not None and abs(price - neck) <= config.RETEST_ZONE_ATR * atr and (price - L2) * sgn > 0:
+        seg = kb[-10:]
+        ref = min(b["low"] for b in seg) if kind == "bottom" else max(b["high"] for b in seg)
+        stop_price = ref - sgn * 0.5 * atr
+        vols = [b.get("volume", 0) or 0 for b in kb]
+        shrink = len(vols) >= 10 and sum(vols[-5:]) <= sum(vols[-10:-5])   # 缩量回踩
+        trig = shrink and _reversal_recent(kb, kind)
+        return pkg("retest_confirm", stop_price, "回踩低点下方0.5×ATR",
+                   trig,
+                   "缩量企稳已现，可按确认批执行" if trig
+                   else "等触发：缩量回踩+企稳信号，禁止挂限价裸接",
+                   "突破后首次回踩颈位，缩量企稳才接")
+
+    if price is not None and (price - neck) * sgn > config.RETEST_ZONE_ATR * atr:
+        # 已站稳颈位上方：看近 RANGE_LOOKBACK 根是否波动收缩（横盘/回调整理）
+        seg = kb[-config.RANGE_LOOKBACK:]
+        amp = max(b["high"] for b in seg) - min(b["low"] for b in seg)
+        contracted = amp <= config.RANGE_CONTRACT_ATR * atr
+        edge = min(b["low"] for b in seg) if kind == "bottom" else max(b["high"] for b in seg)
+        return pkg("range_addon", edge - sgn * 0.3 * atr,
+                   "整理区下沿" if kind == "bottom" else "整理区上沿",
+                   contracted,
+                   "波动已收缩，可沿突破方向进" if contracted
+                   else "等触发：波动收缩后沿整理区边沿进",
+                   "突破确认后的整理区顺势加仓")
+
+    # 跌回/弹回结构内
+    if price is not None and (price - L2) * sgn <= 0:
+        return out(wait_for=f"已跌回右底 {L2} 之下，结构疑似破坏，等重新企稳或新结构",
+                   summary="价格击穿右底，原结构存疑，离场观望等重新组织。")
+    return out(wait_for=f"等回踩颈位 {neck} 确认（±0.5×ATR 带）",
+               summary="已放量突破，等回踩颈位的确认批机会，不追中间位。")
 
 
 def _focus_track_b():
@@ -329,11 +455,10 @@ def _focus_track_b():
 
 def _entry_check():
     """
-    "我要开仓" 前的盘面自检：按交易风格分流 + 三层漏斗 + 四档结论。
-    超短模式（scalp 组合）：时机(三频共振)/位置/价值 三层否决 + 轨道B加减分。
-    波段模式（swing/position 组合）：结构(轨道B)/位置(强位)/价值(轨道B计划) 三层否决，
-    三频共振退出否决项，只作入场时机参考。
-    返回 JSON 含 "mode": "scalp"|"swing"，checks 每层一行（veto=否决层 / ref=参考层）。
+    "我要开仓" 前的盘面自检：三批次入场决策模型。
+    阶段识别（2B试单 / 回踩确认 / 震荡顺势点3 / 观望）→ 永远给出可执行输出：
+    有阶段=止损+触发+目标+仓位比例四件套；无阶段=standby + 具体等什么。
+    不再有"禁止开仓"档；RR 不足时降为 reduce（仓位减半提示）而非否决。
     """
     st = get_state()
     res = st.get("result")
@@ -341,186 +466,20 @@ def _entry_check():
     mode = "scalp" if combo["key"] == "scalp" else "swing"
     mode_label = ("超短模式" if mode == "scalp" else "波段模式") + \
         f"（{combo['name']} {combo['trend_label']}/{combo['filter_label']}/{combo['trigger_label']}）"
-    if not res:
-        return {"verdict": "wait", "mode": mode, "mode_label": mode_label,
-                "title": "🟠 黄灯：无数据", "checks": [],
-                "summary": "未取到行情，无法检查。"}
-    if mode == "scalp":
-        return _entry_check_scalp(res, mode_label)
-    return _entry_check_swing(res, mode_label)
-
-
-def _entry_check_scalp(res, mode_label):
-    """超短模式：时机/位置/价值三层一票否决，轨道B共振层只加减分。"""
-    direction = res.get("direction", "none")
-    resonance = res.get("resonance", False)
-    price = res.get("price")
-    legs = res.get("legs", {})
-    sr = (res.get("sr") or {}).get("trigger") or (res.get("sr") or {}).get("trend") or {}
-    checks = []
-
-    # 1. 时机层（一票否决）：三频共振（三腿缩成内嵌小标记，不再单列三行）
-    checks.append({"ok": bool(resonance), "layer": "veto", "name": "时机 · 三频共振",
-                   "detail": f"{_leg_marks(legs)}（{'三腿就位' if resonance else '未全部就位'}）"})
-
-    # 2. 位置层（一票否决）：逼近关键位警告
-    warn = _proximity_warning(price, sr)
-    checks.append({"ok": warn is None, "layer": "veto", "name": "位置 · 远离压力/支撑",
-                   "detail": warn["text"] if warn else "现价未贴近关键位"})
-
-    # 3. 价值层（一票否决）：盈亏比，止损取结构位（多头=触发周期最近摆动低点，空头镜像）；
-    #    找不到结构位时回退固定跳数并在文案注明
-    near_res, res_ticks, near_sup, sup_ticks = _nearest_levels(price, sr) if (price and sr) else (None, None, None, None)
-    rr_txt, rr_ok = "方向不明，无法估算", False
-    tick = config.PRICE_TICK or 1.0
-    if direction == "long":
-        if near_sup:
-            stop_ticks = max(1, round((price - near_sup["price"]) / tick))
-            stop_src = f"结构位 {near_sup['price']}（摆动低点）"
-        else:
-            stop_ticks = config.DEFAULT_STOP_TICKS
-            stop_src = f"默认{config.DEFAULT_STOP_TICKS}跳（未找到结构位）"
-        rr_txt, rr_ok = _rr_line(res_ticks, stop_ticks, stop_src)
-    elif direction == "short":
-        if near_res:
-            stop_ticks = max(1, round((near_res["price"] - price) / tick))
-            stop_src = f"结构位 {near_res['price']}（摆动高点）"
-        else:
-            stop_ticks = config.DEFAULT_STOP_TICKS
-            stop_src = f"默认{config.DEFAULT_STOP_TICKS}跳（未找到结构位）"
-        rr_txt, rr_ok = _rr_line(sup_ticks, stop_ticks, stop_src)
-    checks.append({"ok": rr_ok, "layer": "veto", "name": f"价值 · 盈亏比≥{config.MIN_RR}",
-                   "detail": rr_txt})
-
-    # 4. 共振层（加减分，非否决）：轨道B同向≥55 升档；背离或<40 降档
-    tb = _focus_track_b()
-    tb_score = tb["track_b"]["score"] if tb else None
-    tb_dir = tb["track_b"]["direction"] if tb else None
-    if tb is None:
-        checks.append({"ok": None, "layer": "ref", "name": "共振 · 轨道B",
-                       "detail": "轨道B数据收集中，不参与定档"})
-        tb_adj = 0
-    elif tb_score >= 55 and direction != "none" and tb_dir == direction:
-        checks.append({"ok": True, "layer": "ref", "name": "共振 · 轨道B",
-                       "detail": f"同向加持（{tb_score}分）→ 升档"})
-        tb_adj = 1
-    elif tb_score < 40 or (tb_dir not in (None, "wait") and direction != "none" and tb_dir != direction):
-        checks.append({"ok": False, "layer": "ref", "name": "共振 · 轨道B",
-                       "detail": f"背离/低分（{tb_score}分 {tb_dir or '--'}）→ 降档"})
-        tb_adj = -1
-    else:
-        checks.append({"ok": None, "layer": "ref", "name": "共振 · 轨道B",
-                       "detail": f"中性（{tb_score}分 {tb_dir or '--'}），不加减"})
-        tb_adj = 0
-
-    # 定档
-    if warn is not None:
-        verdict, title = "stop", "🔴 红灯：贴近关键位（追单陷阱）"
-        summary = warn["text"] + " 等回踩确认，别追当根。"
-    else:
-        fails = []
-        if not resonance:
-            fails.append("时机·三频共振")
-        if not rr_ok:
-            fails.append("价值·盈亏比")
-        if fails:
-            verdict, title = "wait", "🟠 黄灯：条件不足，建议观望"
-            summary = "未通过：" + "、".join(fails) + "。超短模式任一否决层不满足都不该进。"
-        elif tb_adj < 0:
-            verdict, title = "wait", "🟠 黄灯：轨道B背离，降档观望"
-            summary = "否决层虽全过，但轨道B背离/低分，逆势超短胜率差。"
-        elif tb_adj > 0:
-            verdict, title = "go-strong", "🟢 强绿灯：条件齐备，重点看"
-            summary = "共振就位、位置安全、结构止损盈亏比达标，且轨道B同向加持。仍须你手动确认结构止损位。"
-        else:
-            verdict, title = "go-weak", "🟡 弱绿灯：可进，建议仓位减半"
-            summary = "否决层全过但轨道B未同向确认，建议降半仓试探。"
-    return {"verdict": verdict, "title": title, "mode": "scalp", "mode_label": mode_label,
-            "direction": direction, "price": price, "checks": checks, "summary": summary}
-
-
-def _entry_check_swing(res, mode_label):
-    """波段模式：结构(轨道B)/位置(强位)/价值(轨道B计划) 三层否决，三频共振仅参考。"""
-    price = res.get("price")
-    legs = res.get("legs", {})
-    resonance = res.get("resonance", False)
-    tick = config.PRICE_TICK or 1.0
-    tb = _focus_track_b()
-    checks = []
-
-    # 1. 结构层（一票否决）：轨道B评分与方向（≥75 强势通过；55-74 弱档通过；<55 否决）
-    tb_score = tb["track_b"]["score"] if tb else None
-    direction = tb["track_b"]["direction"] if tb else "wait"
-    if tb is None:
-        s_ok, s_strong, s_txt = False, False, "轨道B数据收集中，稍候再试"
-    elif tb_score >= config.DB_SCORE_GO:
-        s_ok, s_strong = True, True
-        s_txt = f"{tb_score}分 ≥{config.DB_SCORE_GO}，方向{'做多' if direction == 'long' else '做空'}（强势）"
-    elif tb_score >= config.DB_SCORE_WAIT:
-        s_ok, s_strong = True, False
-        s_txt = f"{tb_score}分（55-74 中性），方向{'做多' if direction == 'long' else '做空' if direction == 'short' else '不明'}"
-    else:
-        s_ok, s_strong = False, False
-        s_txt = f"{tb_score}分 <{config.DB_SCORE_WAIT}，结构未成立"
-    checks.append({"ok": s_ok, "layer": "veto", "name": "结构 · 轨道B评分", "detail": s_txt})
-
-    # 2. 位置层（一票否决）：距轨道B强位（score≥70）过近不追
-    pos_ok, pos_txt, pos_stop = True, "现价距强支撑/压力有安全距离", False
-    if tb and direction != "wait" and price:
-        tbd = tb["track_b"]
-        pool, sign = (tbd["resistance"], 1) if direction == "long" else (tbd["support"], -1)
-        strong = [l for l in pool if l["score"] >= config.DB_LEVEL_STRONG
-                  and (l["price"] - price) * sign > 0]
-        if strong:
-            near = min(strong, key=lambda l: abs(l["price"] - price))
-            dist = round(abs(near["price"] - price) / tick)
-            side = "强压力" if direction == "long" else "强支撑"
-            if dist <= config.PROXIMITY_TICKS:
-                pos_ok, pos_stop = False, True
-                pos_txt = f"距{side} {near['price']}（强度{near['score']}）仅 {dist} 跳，追单风险区"
-            else:
-                pos_txt = f"距{side} {near['price']}（强度{near['score']}）尚有 {dist} 跳"
-    checks.append({"ok": pos_ok, "layer": "veto", "name": "位置 · 强位距离", "detail": pos_txt})
-
-    # 3. 价值层（一票否决）：轨道B plan 的 entry/stop/target1 算盈亏比
-    entry, stop, t1 = (tb.get("entry"), tb.get("stop"), tb.get("target1")) if tb else (None, None, None)
-    if entry and stop and t1 and direction != "wait":
-        risk, reward = abs(entry - stop), abs(t1 - entry)
-        rr = reward / risk if risk else 0
-        rr_ok = rr >= config.MIN_RR
-        rr_txt = f"计划 入场{entry} 止损{stop} 目标{t1} ≈ RR {rr:.1f}"
-    else:
-        rr_ok, rr_txt = False, "轨道B未给出交易计划（评分未达标或缺目标位）"
-    checks.append({"ok": rr_ok, "layer": "veto", "name": f"价值 · 盈亏比≥{config.MIN_RR}",
-                   "detail": rr_txt})
-
-    # 4. 微调层（参考，不影响档位）：三频共振只作入场时机提示
-    ref_txt = "超短共振已就位，可直接进" if resonance else "超短共振未就位，可等回调或分批"
-    checks.append({"ok": None, "layer": "ref", "name": "时机 · 超短共振（参考）",
-                   "detail": f"{_leg_marks(legs)} — {ref_txt}"})
-
-    # 定档
-    if pos_stop:
-        verdict, title = "stop", "🔴 红灯：贴近关键位（追单陷阱）"
-        summary = pos_txt + "。等回踩确认，别追。"
-    elif not (s_ok and pos_ok and rr_ok):
-        fails = []
-        if not s_ok:
-            fails.append("结构·轨道B")
-        if not pos_ok:
-            fails.append("位置·强位距离")
-        if not rr_ok:
-            fails.append("价值·盈亏比")
-        verdict, title = "wait", "🟠 黄灯：条件不足，建议观望"
-        summary = "未通过：" + "、".join(fails) + "。波段模式以轨道B结构为准，三频共振不卡否决。"
-    elif s_strong:
-        verdict, title = "go-strong", "🟢 强绿灯：条件齐备，重点看"
-        summary = "轨道B结构强势、位置安全、计划盈亏比达标。止损止盈按轨道B计划执行。"
-    else:
-        verdict, title = "go-weak", "🟡 弱绿灯：可进，建议仓位减半"
-        summary = "否决层全过但轨道B评分中性（55-74），建议降半仓试探。"
-    return {"verdict": verdict, "title": title, "mode": "swing", "mode_label": mode_label,
-            "direction": direction, "price": price, "checks": checks, "summary": summary}
+    kb = _track_b_bars.get(config.SYMBOL)
+    if not kb or len(kb) < 40:
+        return {"mode": mode, "mode_label": mode_label, "stage": "standby",
+                "stage_name": "等待中", "strength": "standby", "direction": "none",
+                "tranche": None, "stop": None, "trigger": None, "targets": [],
+                "ladder": {"L1": None, "L2": None, "neck": None, "price": None,
+                           "stop": None, "target1": None, "target2": None},
+                "wait_for": "轨道B数据收集中（需≥40根1h K线），稍候再试",
+                "summary": "1h K线尚未收齐，无法做阶段识别。"}
+    price = (res or {}).get("price") or kb[-1]["close"]
+    out = _stage_advice(kb, _focus_track_b(), price)
+    out["mode"] = mode
+    out["mode_label"] = mode_label
+    return out
 
 # 共享状态：数据线程写，Flask 读。用锁保护。
 _state_lock = threading.Lock()
@@ -616,6 +575,7 @@ def _consume_symbol_request():
 _overview_lock = threading.Lock()
 _overview = {}   # 品种代码 -> 快照条目（结构即 signals_state.json 的每品种条目）
 _tb_throttle = {}  # 品种 -> {"n": 已跑轮数, "summary": 轨道B摘要缓存}（节流用）
+_track_b_bars = {}  # 品种 -> 最近一份 1h 原始K线（三批次阶段识别用）
 
 
 def _lamp_of(track_a):
@@ -647,6 +607,7 @@ def _track_b_summary(tb):
 
 def _track_b_for(sym, kb):
     """轨道B摘要（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时评分不变）。"""
+    _track_b_bars[sym] = kb          # 三批次阶段识别要用 1h 原始K线
     ent = _tb_throttle.get(sym) or {"n": 0, "summary": None}
     ent["n"] += 1
     if ent["summary"] is None or ent["n"] % max(1, config.GLOBAL_TRACKB_EVERY) == 0:

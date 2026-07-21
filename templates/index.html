@@ -144,20 +144,35 @@
     padding: 18px 20px;
   }
   .modal .verdict { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
-  .modal .verdict.go-strong { color: var(--green); }
-  .modal .verdict.go-weak { color: #d2c022; }
-  .modal .verdict.wait { color: #e08a2e; }
-  .modal .verdict.stop { color: var(--red); }
+  .modal .strength { font-size: 22px; font-weight: 800; letter-spacing: 1px; }
+  .modal .strength.st-strong { color: var(--green); }
+  .modal .strength.st-normal { color: var(--blue); }
+  .modal .strength.st-reduce { color: var(--amber); }
+  .modal .strength.st-standby { color: var(--dim); }
   .modal .mode-tag { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
-  .modal .summ { font-size: 13px; color: var(--dim); line-height: 1.6; margin-bottom: 12px; }
-  .modal .chk { display: flex; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
-  .modal .chk.ref { opacity: .62; }
-  .modal .chk .mk { flex-shrink: 0; }
-  .modal .chk .ok { color: var(--green); }
-  .modal .chk .no { color: var(--red); }
-  .modal .chk .na { color: var(--dim); }
-  .modal .chk .nm { font-weight: 600; }
-  .modal .chk .dt { color: var(--dim); font-size: 12px; }
+  .modal .summ { font-size: 13px; color: var(--dim); line-height: 1.6; margin-top: 10px; }
+  .modal-wide { width: 700px; }
+  .ec-body { display: flex; gap: 16px; }
+  .ec-ladder { flex-shrink: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .ec-info { flex: 1; min-width: 0; }
+  .ec-tranches { display: flex; gap: 8px; margin-bottom: 12px; }
+  .trc { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 8px 6px; text-align: center; }
+  .trc .t-name { font-size: 14px; font-weight: 700; }
+  .trc .t-stage { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .trc .t-frac { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .trc.cur { border-color: var(--blue); background: rgba(88,166,255,.08); }
+  .trc.cur .t-stage { color: var(--blue); }
+  .trc.past { opacity: .45; }
+  .trc.todo { opacity: .7; border-style: dashed; }
+  .frac-bar { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 4px 0 12px; }
+  .frac-fill { height: 100%; background: var(--blue); transition: width .3s; }
+  .trig { font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
+  .trig.met { color: var(--green); border-color: var(--green); }
+  .trig.waiting { color: var(--amber); border-color: var(--amber); animation: breathe 1.6s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+  .targets { font-size: 12px; color: var(--dim); line-height: 1.8; }
+  .targets b { color: var(--text); }
+  .ec-waitbig { font-size: 16px; text-align: center; padding: 34px 12px; color: var(--dim); line-height: 1.8; }
   .ref-tag { font-size: 10px; color: var(--dim); border: 1px solid var(--line);
     border-radius: 3px; padding: 0 4px; margin-left: 4px; }
   .modal .close-btn {
@@ -439,14 +454,29 @@
   </div>
   </div><!-- /detail-view -->
 
-  <!-- 开仓前检查弹窗 -->
+  <!-- 开仓前检查弹窗（三批次入场决策面板） -->
   <div class="modal-mask" id="modal-mask">
-    <div class="modal">
-      <div class="verdict" id="modal-verdict">检查中…</div>
-      <div class="mode-tag" id="modal-mode"></div>
-      <div class="summ" id="modal-summ"></div>
-      <div id="modal-checks"></div>
-      <div class="disclaimer">仅为技术条件核对，不构成投资建议。盈亏比按默认止损跳数估算，实际以你的结构止损为准。是否交易由你决定。</div>
+    <div class="modal modal-wide">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <div class="strength" id="modal-strength">检查中…</div>
+        <div class="mode-tag" id="modal-stage" style="margin-bottom:0"></div>
+        <div class="mode-tag" id="modal-mode" style="margin-left:auto;margin-bottom:0"></div>
+      </div>
+      <div class="ec-body" id="modal-body" style="margin-top:12px">
+        <canvas id="ladder" class="ec-ladder" width="220" height="380"></canvas>
+        <div class="ec-info">
+          <div class="ec-tranches" id="modal-tranches"></div>
+          <div id="modal-fracwrap">
+            <div class="mode-tag" id="modal-frac-label">本批仓位比例</div>
+            <div class="frac-bar"><div class="frac-fill" id="modal-frac"></div></div>
+          </div>
+          <div class="trig" id="modal-trigger"></div>
+          <div class="targets" id="modal-targets"></div>
+          <div class="summ" id="modal-summ"></div>
+        </div>
+      </div>
+      <div class="ec-waitbig" id="modal-wait" style="display:none"></div>
+      <div class="disclaimer">仅为技术条件核对，不构成投资建议。止损/目标为模型给出的技术位，实际以你的结构止损为准。是否交易由你决定。</div>
       <button class="close-btn" id="modal-close">关闭</button>
     </div>
   </div>
@@ -489,9 +519,9 @@
   const proximityEl = document.getElementById('proximity');
   const entryBtn = document.getElementById('entry-btn');
   const modalMask = document.getElementById('modal-mask');
-  const modalVerdict = document.getElementById('modal-verdict');
+  const modalStrength = document.getElementById('modal-strength');
+  const modalStage = document.getElementById('modal-stage');
   const modalSumm = document.getElementById('modal-summ');
-  const modalChecks = document.getElementById('modal-checks');
   const modalClose = document.getElementById('modal-close');
 
   muteBtn.onclick = () => {
@@ -1174,34 +1204,138 @@
     }
   }
 
-  // ===== 我要开仓：开仓前自检（超短/波段双模式漏斗，四档结论） =====
+  // ===== 我要开仓：三批次入场决策面板（阶段识别 → 可执行四件套，永无死路） =====
   const modalMode = document.getElementById('modal-mode');
+  const modalBody = document.getElementById('modal-body');
+  const modalWait = document.getElementById('modal-wait');
+  const modalTranches = document.getElementById('modal-tranches');
+  const modalFracWrap = document.getElementById('modal-fracwrap');
+  const modalFrac = document.getElementById('modal-frac');
+  const modalFracLabel = document.getElementById('modal-frac-label');
+  const modalTrigger = document.getElementById('modal-trigger');
+  const modalTargets = document.getElementById('modal-targets');
+  const ladderCv = document.getElementById('ladder');
+
+  const STRENGTH_TXT = { strong: 'STRONG 强信号', normal: 'NORMAL 可执行',
+                         reduce: 'REDUCE 降仓执行', standby: 'STANDBY 观望' };
+  const TRANCHE_NAMES = ['试单', '确认', '顺势'];
+  const STAGE_IDX = { '2b_probe': 0, 'retest_confirm': 1, 'range_addon': 2 };
+
+  // 竖向价格阶梯：L1/L2/颈位/现价/止损/目标，止损区淡红、目标区淡绿，现价实线高亮
+  function drawLadder(lad, direction) {
+    const ctx = ladderCv.getContext('2d');
+    const W = ladderCv.width, H = ladderCv.height;
+    ctx.clearRect(0, 0, W, H);
+    const rows = [
+      ['target2', '目标2', '#2ea043'],
+      ['target1', '目标1', '#2ea043'],
+      ['neck', '颈位', '#8b949e'],
+      ['price', '现价', '#e3c414'],
+      ['L2', 'L2', '#8b949e'],
+      ['stop', '止损', '#da3633'],
+      ['L1', 'L1', '#8b949e'],
+    ].filter(r => lad[r[0]] !== null && lad[r[0]] !== undefined);
+    if (!rows.length) return;
+    const vals = rows.map(r => lad[r[0]]);
+    let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.001 || 1;
+    lo -= pad; hi += pad;
+    const y = v => 16 + (hi - v) / (hi - lo) * (H - 32);
+    function band(a, b, color) {
+      if (a === null || b === null || a === undefined || b === undefined) return;
+      const y1 = y(a), y2 = y(b);
+      ctx.fillStyle = color;
+      ctx.fillRect(52, Math.min(y1, y2), W - 58, Math.max(2, Math.abs(y2 - y1)));
+    }
+    band(lad.price, lad.stop, 'rgba(218,54,51,.10)');     // 现价→止损 淡红
+    band(lad.price, lad.target1, 'rgba(46,160,67,.10)');  // 现价→目标1 淡绿
+    rows.forEach(r => {
+      const key = r[0], label = r[1], color = r[2];
+      const yy = y(lad[key]);
+      ctx.strokeStyle = color;
+      ctx.setLineDash(key === 'price' ? [] : [5, 4]);
+      ctx.lineWidth = key === 'price' ? 2 : 1;
+      ctx.beginPath(); ctx.moveTo(52, yy); ctx.lineTo(W - 6, yy); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = color; ctx.font = '11px sans-serif';
+      ctx.textAlign = 'left'; ctx.fillText(label, 4, yy + 3);
+      ctx.textAlign = 'right'; ctx.fillText(String(lad[key]), W - 8, yy - 3);
+    });
+  }
+
   entryBtn.onclick = async () => {
-    modalVerdict.textContent = '检查中…';
-    modalVerdict.className = 'verdict';
+    modalStrength.textContent = '检查中…';
+    modalStrength.className = 'strength';
+    modalStage.textContent = '';
     modalMode.textContent = '';
     modalSumm.textContent = '';
-    modalChecks.innerHTML = '';
+    modalBody.style.display = '';
+    modalWait.style.display = 'none';
     modalMask.classList.add('show');
     try {
       const r = await fetch('/api/entry_check');
       const d = await r.json();
-      modalVerdict.textContent = d.title || '检查完成';
-      modalVerdict.className = 'verdict ' + (d.verdict || '');
+      modalStrength.textContent = STRENGTH_TXT[d.strength] || d.strength || '--';
+      modalStrength.className = 'strength st-' + (d.strength || 'standby');
+      modalStage.textContent = (d.stage_name || '') +
+        (d.direction === 'long' ? ' · 做多' : d.direction === 'short' ? ' · 做空' : '');
       modalMode.textContent = d.mode_label ? '判定口径：' + d.mode_label : '';
       modalSumm.textContent = d.summary || '';
-      // 每层一行；参考层（轨道B/超短共振提示）视觉弱化
-      modalChecks.innerHTML = (d.checks || []).map(c => `
-        <div class="chk ${c.layer === 'ref' ? 'ref' : ''}">
-          <span class="mk ${c.ok === null ? 'na' : c.ok ? 'ok' : 'no'}">${c.ok === null ? '·' : c.ok ? '✓' : '✗'}</span>
-          <span><span class="nm">${c.name}</span>${c.layer === 'ref' ? '<span class="ref-tag">参考</span>' : ''}<br><span class="dt">${c.detail}</span></span>
-        </div>`).join('');
-      // 两档绿灯=高音，其它=低音提示
-      beep(d.verdict && d.verdict.startsWith('go') ? 'long' : 'short');
+      drawLadder(d.ladder || {}, d.direction);
+
+      // standby：隐藏批次/比例/触发区，中央大字说清等什么
+      if (d.stage === 'standby' || d.strength === 'standby') {
+        modalBody.style.display = 'none';
+        modalWait.style.display = '';
+        modalWait.innerHTML = '⏳ ' + (d.wait_for || '暂无阶段') +
+          '<br><span style="font-size:13px">' + (d.summary || '') + '</span>';
+        beep('short');
+        return;
+      }
+
+      // 三批次卡片：当前批高亮，之前的标"已过"，之后的"待到来"
+      const cur = STAGE_IDX[d.stage] !== undefined ? STAGE_IDX[d.stage] : -1;
+      modalTranches.innerHTML = TRANCHE_NAMES.map((n, i) => {
+        const st = i === cur ? 'cur' : i < cur ? 'past' : 'todo';
+        const tag = i === cur ? '当前批' : i < cur ? '已过' : '待到来';
+        const frac = i === cur && d.tranche ? (d.tranche.fraction * 100).toFixed(0) + '%' : '';
+        return '<div class="trc ' + st + '"><div class="t-name">' + n +
+               '</div><div class="t-stage">' + tag + '</div><div class="t-frac">' + frac + '</div></div>';
+      }).join('');
+
+      // 仓位比例条
+      if (d.tranche) {
+        modalFracWrap.style.display = '';
+        modalFrac.style.width = (d.tranche.fraction * 100) + '%';
+        modalFrac.style.background = d.strength === 'reduce' ? 'var(--amber)'
+          : d.strength === 'strong' ? 'var(--green)' : 'var(--blue)';
+        modalFracLabel.textContent = '本批仓位比例 ' + (d.tranche.fraction * 100).toFixed(0) + '%' +
+          (d.tranche.note ? ' — ' + d.tranche.note : '');
+      } else modalFracWrap.style.display = 'none';
+
+      // 触发：已满足=绿勾；未满足=呼吸灯+"等触发"
+      if (d.trigger) {
+        modalTrigger.style.display = '';
+        modalTrigger.className = 'trig ' + (d.trigger.met ? 'met' : 'waiting');
+        modalTrigger.textContent = d.trigger.met ? '✓ ' + d.trigger.text : '◌ 等触发：' + d.trigger.text;
+      } else modalTrigger.style.display = 'none';
+
+      // 止损 + 目标行
+      let t = '';
+      if (d.stop) t += '止损 <b>' + d.stop.price + '</b>（' + d.stop.ticks + '跳 · ' + d.stop.basis + '）';
+      if (d.targets && d.targets.length) {
+        t += (t ? '<br>' : '') + d.targets.map((x, i) =>
+          '目标' + (i + 1) + ' <b>' + x.price + '</b>' + (x.rr ? '（RR ' + x.rr + '）' : '')).join('　');
+      }
+      modalTargets.innerHTML = t;
+
+      beep(d.strength === 'strong' ? 'long' : 'short');
     } catch (e) {
-      modalVerdict.textContent = '检查失败';
-      modalVerdict.className = 'verdict wait';
-      modalSumm.textContent = '后端未响应，请确认服务在运行。';
+      modalStrength.textContent = '检查失败';
+      modalStrength.className = 'strength st-standby';
+      modalBody.style.display = 'none';
+      modalWait.style.display = '';
+      modalWait.textContent = '后端未响应，请确认服务在运行。';
     }
   };
   modalClose.onclick = () => modalMask.classList.remove('show');
