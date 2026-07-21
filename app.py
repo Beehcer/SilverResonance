@@ -484,9 +484,9 @@ def _entry_check():
     # 小周期验证：触发周期企稳 且 轨道A方向与目标方向一致（缺数据传 None 不扣分）
     target = {"double_bottom": "long", "double_top": "short"}.get(ev["pattern"].get("type"))
     small_tf = None
-    if target and res and res.get("legs"):
-        small_tf = bool(res.get("direction") == target
-                        and res["legs"].get("trigger", {}).get("ok"))
+    if res and res.get("legs"):
+        small_tf = _small_tf_verify(target, res.get("direction"),
+                                    res["legs"].get("trigger", {}).get("ok"))
     out = entry_logic.decide(ev, price, atr=double_bottom._atr(kb),
                              small_tf_ok=small_tf, regime=regime)
     # stage（三批次阶段）仅作参考坐标；entry_point_ref 按约定由它推导
@@ -685,15 +685,73 @@ def _track_b_summary(tb):
 
 
 def _track_b_for(sym, kb):
-    """轨道B摘要 + 市场状态（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时不变）。"""
+    """轨道B摘要 + 市场状态（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时不变）。
+    返回 (摘要, 本轮是否重算)；evaluate 全量输出缓存在 _tb_throttle[sym]["ev"]，
+    供决策块复用（避免每轮重复跑评分引擎）。"""
     _track_b_bars[sym] = kb          # 三批次阶段识别要用 1h 原始K线
-    ent = _tb_throttle.get(sym) or {"n": 0, "summary": None}
+    ent = _tb_throttle.get(sym) or {"n": 0, "summary": None, "ev": None, "trigger_met": False}
     ent["n"] += 1
-    if ent["summary"] is None or ent["n"] % max(1, config.GLOBAL_TRACKB_EVERY) == 0:
-        ent["summary"] = _track_b_summary(double_bottom.evaluate(kb))
+    refreshed = ent["summary"] is None or ent["n"] % max(1, config.GLOBAL_TRACKB_EVERY) == 0
+    if refreshed:
+        ent["ev"] = double_bottom.evaluate(kb)
+        ent["summary"] = _track_b_summary(ent["ev"])
         _track_b_regime[sym] = entry_logic.detect_regime(kb)
     _tb_throttle[sym] = ent
-    return ent["summary"]
+    return ent["summary"], refreshed
+
+
+# ---------------- 双轴决策块（signals_state 契约，与 /api/entry_check 同源） ----------------
+
+def _small_tf_verify(target, tf_direction, tf_trigger_ok):
+    """小周期企稳验证口径（/api/entry_check 与全局层共用）：
+    轨道A方向与目标方向一致 且 触发周期企稳通过（resonance.trigger_ok）。
+    缺数据返回 None（引擎不扣分）；无目标方向返回 None。"""
+    if not target or tf_direction is None or tf_trigger_ok is None:
+        return None
+    return bool(tf_direction == target and tf_trigger_ok)
+
+
+def _decision_block(d, stabilized, trigger_met):
+    """entry_logic.decide 输出 → signals_state 每品种 decision 决策块（openclaw 契约）。
+    字段名与 /api/entry_check 响应对齐：quadrant/position_pct/location_score/
+    certainty_score/stop{price,basis}/wait_for；stabilized=小周期企稳，trigger_met=阶段触发。"""
+    stop = d.get("stop")
+    return {
+        "quadrant": d["quadrant"],
+        "position_pct": d["position_pct"],
+        "location_score": d["location_score"],
+        "certainty_score": d["certainty_score"],
+        "direction": d["direction"],
+        "stabilized": bool(stabilized),
+        "trigger_met": bool(trigger_met),
+        "stop": {"price": stop["price"], "basis": stop["basis"]} if stop else None,
+        "wait_for": d.get("wait_for"),
+    }
+
+
+def _decision_standby(wait_for):
+    """数据不足/异常降级：standby + wait_for，永不抛异常。"""
+    return {"quadrant": "standby", "position_pct": 0, "location_score": None,
+            "certainty_score": 0, "direction": "none", "stabilized": False,
+            "trigger_met": False, "stop": None, "wait_for": wait_for}
+
+
+def _decision_for(sym, price, tf_direction, tf_trigger_ok):
+    """全局层每品种决策块：复用 entry_logic.decide（与 /api/entry_check 同引擎同口径）。
+    ev/regime/trigger_met 随轨道B节流节奏缓存；位置/确定性分每轮按最新价重算（decide 为纯函数，开销小）。"""
+    try:
+        ent = _tb_throttle.get(sym) or {}
+        ev, kb = ent.get("ev"), _track_b_bars.get(sym)
+        if not ev or not kb or len(kb) < 40:
+            return _decision_standby("轨道B数据收集中（需≥40根1h K线）")
+        target = {"double_bottom": "long", "double_top": "short"}.get(ev["pattern"].get("type"))
+        small_tf = _small_tf_verify(target, tf_direction, tf_trigger_ok)
+        d = entry_logic.decide(ev, price, atr=double_bottom._atr(kb),
+                               small_tf_ok=small_tf, regime=_track_b_regime.get(sym))
+        return _decision_block(d, stabilized=bool(small_tf),
+                               trigger_met=ent.get("trigger_met", False))
+    except Exception as e:  # noqa: BLE001 单品种决策失败降级 standby，不断整轮落盘
+        return _decision_standby(f"决策计算异常：{type(e).__name__}")
 
 
 def _collecting_entry(name):
@@ -707,6 +765,7 @@ def _collecting_entry(name):
                     "volume_oi": {"quadrant": "数据不足", "healthy": False}},
         "regime": None,
         "lamp": "gray", "entry": None, "stop": None, "target1": None,
+        "decision": _decision_standby("数据收集中…"),
         "reasons": ["数据收集中…"],
     }
 
@@ -716,11 +775,12 @@ def _set_overview(sym, entry):
         _overview[sym] = entry
 
 
-def _global_pass(bar_getter, focus_track_a=None):
+def _global_pass(bar_getter, focus_track_a=None, focus_trigger=None):
     """
-    全局监控层：对全部预设品种跑 轨道A两腿雷达 + 轨道B评分，写入 _overview。
+    全局监控层：对全部预设品种跑 轨道A两腿雷达 + 轨道B评分 + 双轴决策块，写入 _overview。
     bar_getter(sym, period) -> K线列表（可能为 []）。
     focus_track_a：聚焦品种的完整三腿结果 (direction, resonance)，有则覆盖两腿雷达（更准）。
+    focus_trigger：聚焦品种触发腿 {"direction", "trigger_ok"}（与 /api/entry_check 小周期验证同源）。
     """
     for p in symbols.PRESETS:
         sym, name = p["symbol"], p["name"]
@@ -739,8 +799,25 @@ def _global_pass(bar_getter, focus_track_a=None):
         track_a = {"direction": direction, "resonance": direction != "none" and f_ok}
         if focus_track_a and sym == config.SYMBOL:
             track_a = dict(focus_track_a)
-        tb = _track_b_for(sym, kb)
+        tb, tb_fresh = _track_b_for(sym, kb)
         price = round(kf[-1]["close"] if kf else kt[-1]["close"], 2)
+        # 小周期企稳（3分级别，trigger_ok 同一口径）：聚焦品种用完整三腿触发腿结果覆盖
+        tf_direction = direction
+        tf_trigger_ok = resonance.trigger_ok(kf, direction) if (kf and direction != "none") else None
+        if focus_trigger and sym == config.SYMBOL:
+            tf_direction = focus_trigger.get("direction")
+            tf_trigger_ok = focus_trigger.get("trigger_ok")
+        # 阶段触发（企稳K线/缩量回踩/波动收缩）：随轨道B节流节奏重算，避免每轮跑形态识别
+        ent = _tb_throttle.get(sym) or {}
+        if tb_fresh:
+            try:
+                stage = _stage_advice(kb, {"target1": tb["target1"], "target2": None,
+                                           "track_b": tb}, price)
+                trig = stage.get("trigger")
+                ent["trigger_met"] = bool(trig and trig.get("met"))
+            except Exception:  # noqa: BLE001 触发判定失败按未触发降级
+                ent["trigger_met"] = False
+            _tb_throttle[sym] = ent
         _set_overview(sym, {
             "name": name, "price": price,
             "track_a": track_a,
@@ -749,6 +826,7 @@ def _global_pass(bar_getter, focus_track_a=None):
             "regime": _track_b_regime.get(sym),
             "lamp": _lamp_of(track_a),
             "entry": tb["entry"], "stop": tb["stop"], "target1": tb["target1"],
+            "decision": _decision_for(sym, price, tf_direction, tf_trigger_ok),
             "reasons": tb["reasons"],
         })
 
@@ -909,7 +987,9 @@ def _mock_loop():
 
         _global_pass(bar_getter,
                      focus_track_a={"direction": result["direction"],
-                                    "resonance": result["resonance"]})
+                                    "resonance": result["resonance"]},
+                     focus_trigger={"direction": result["direction"],
+                                    "trigger_ok": result["legs"]["trigger"]["ok"]})
         _dump_signals_state()
         if first:
             _set_boot("ready", 100, "就绪")
@@ -1075,7 +1155,9 @@ def _tqsdk_loop():
             # 全局层：全部预设品种快照 + 落盘（聚焦品种用三腿结果覆盖）
             _global_pass(lambda s, p: to_list(serial(s, p)),
                          focus_track_a={"direction": result["direction"],
-                                        "resonance": result["resonance"]})
+                                        "resonance": result["resonance"]},
+                         focus_trigger={"direction": result["direction"],
+                                        "trigger_ok": result["legs"]["trigger"]["ok"]})
             _dump_signals_state()
             if first:
                 _set_boot("ready", 100, "就绪")

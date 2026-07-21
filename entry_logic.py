@@ -261,6 +261,13 @@ def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
                     "basis": f"结构宽止损：颈位{'下方' if sgn > 0 else '上方'}{config.AX_CONFIRM_STOP_ATR}×ATR"}
             summary = (f"证据足但位置偏差（位置 {location_score} / 确定性 {certainty_score}）："
                        f"{d_txt}确认仓 {pct}%，{stop['basis']}（{stop['price']}），不追满。")
+            if (regime or {}).get("regime") == "range":
+                # 回测变体 D 验证：震荡市 confirm 13 笔胜率仅 7.7%（-3.15R，追区间边沿被均值回归收割），
+                # 降级为试单仓（止损/目标不变，只降仓位）；趋势市 confirm 照旧。
+                quadrant, pct = "probe", config.AX_POS_PROBE
+                summary = (f"证据足但位置偏差（位置 {location_score} / 确定性 {certainty_score}），"
+                           f"震荡市确认仓降级为试单：{d_txt}试单仓 {pct}%，"
+                           f"{stop['basis']}（{stop['price']}）。")
         else:
             quadrant, pct = "avoid", 0
             stop = None

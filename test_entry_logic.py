@@ -75,7 +75,7 @@ print("== 3. 确定性高 + 位置低 → confirm（证据齐全但突破后延�
 d = el.decide(_ev(), price=7100.0, atr=ATR, small_tf_ok=True)
 show("confirm", d)
 check("3 quadrant=confirm", d["quadrant"] == "confirm", d["quadrant"])
-check("3 仓位=50", d["position_pct"] == 50, d["position_pct"])
+check("3 仓位=25（修复后：50→25，回测变体 C）", d["position_pct"] == 25, d["position_pct"])
 check("3 位置分<65", d["location_score"] < 65, d["location_score"])
 check("3 结构宽止损=颈位下方1×ATR", d["stop"] and d["stop"]["price"] == 6980.0, d["stop"])
 check("3 入场点参考=point3", d["entry_point_ref"] == "point3", d["entry_point_ref"])
@@ -171,6 +171,21 @@ check("10 输出含 regime 块", d_range["regime"] and d_range["regime"]["regime
 print("== 11. 数据不足时 detect_regime 保守返回 range ==")
 rg = el.detect_regime(_bars(10, lambda i, px: px * 1.01))
 check("11 短序列→range", rg["regime"] == "range" and rg["er"] == 0.0, rg)
+
+print("== 12. confirm 修复：震荡市 confirm 降级为 probe，趋势市 confirm 不变 ==")
+# 同一份"确定性高+位置低"输入（同用例 3），仅 regime 不同
+EV_CF = _ev()
+d_tr = el.decide(EV_CF, price=7100.0, atr=ATR, small_tf_ok=True, regime=RG_TREND)
+d_ra = el.decide(EV_CF, price=7100.0, atr=ATR, small_tf_ok=True, regime=RG_RANGE)
+show("trend-confirm", d_tr)
+show("range-demoted", d_ra)
+check("12 趋势市保持 confirm", d_tr["quadrant"] == "confirm", d_tr["quadrant"])
+check("12 趋势市 confirm 仓位=25", d_tr["position_pct"] == 25, d_tr["position_pct"])
+check("12 震荡市降级为 probe", d_ra["quadrant"] == "probe", d_ra["quadrant"])
+check("12 降级后仓位=25（AX_POS_PROBE）", d_ra["position_pct"] == 25, d_ra["position_pct"])
+check("12 降级 summary 注明", "震荡市确认仓降级为试单" in d_ra["summary"], d_ra["summary"])
+check("12 降级仍带颈位宽止损", d_ra["stop"] and d_ra["stop"]["price"] == 6980.0, d_ra["stop"])
+check("12 降级 wait_for 为空", d_ra["wait_for"] is None)
 
 print()
 if FAILS:

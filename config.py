@@ -159,7 +159,9 @@ AX_CERT_FAKE_BREAKOUT = -15 # 假突破迹象（价破颈位但量不足，未�
 AX_POS_MAIN_MIN = 75        # 双高主仓：按双分深度在 75–100% 内插
 AX_POS_MAIN_MAX = 100
 AX_POS_PROBE = 25           # 位置高+确定性低：试单仓（模糊区变明确仓位指令）
-AX_POS_CONFIRM = 50         # 确定性高+位置低：确认仓（配结构宽止损：颈位外侧 1×ATR）
+AX_POS_CONFIRM = 25         # 确定性高+位置低：确认仓（配结构宽止损：颈位外侧 1×ATR）。
+                            # 50→25：回测变体 C 验证 confirm 象限期望为负（-0.196R），降权后总体 +0.018 expR
+                            # （backtest/report.md 第七节）；另震荡市 confirm 在 decide 内降级为 probe（变体 D）
 AX_CONFIRM_STOP_ATR = 1.0   # 确认仓宽止损：颈位外侧 N×ATR
 
 # ==== 市场状态判定（regime：趋势/震荡，entry_logic.detect_regime）====

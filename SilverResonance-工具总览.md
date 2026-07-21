@@ -64,6 +64,17 @@
       },
       "lamp": "red|green|gray",
       "entry": 8115, "stop": 7945, "target1": 8270,
+      "decision": {
+        "quadrant": "main|probe|confirm|avoid|standby",
+        "position_pct": 50,
+        "location_score": 47,
+        "certainty_score": 63,
+        "direction": "long|short|none",
+        "stabilized": false,
+        "trigger_met": false,
+        "stop": { "price": 8044, "basis": "结构宽止损：颈位下方1.0×ATR" },
+        "wait_for": null
+      },
       "reasons": ["识别到双底结构：L1=7950 L2=7980 颈位=8110", "..."]
     }
   }
@@ -76,6 +87,14 @@
 - `track_b.pattern.found`：是否存在双底/双顶结构；三价位 L1/L2/neck 可直接引用
 - `support/resistance[].score`：≥70 强位 / 40–69 中性 / <40 弱位
 - `volume_oi.healthy`：量价持仓是否配合方向
+- `decision`：双轴决策块（与 `/api/entry_check` 同引擎同口径，entry_logic.decide）。字段：
+  - `quadrant` / `position_pct`：象限与建议仓位%（判读见第 5 节象限表）
+  - `location_score` / `certainty_score`：位置分（无结构为 null）/ 确定性分
+  - `stabilized`：小周期企稳——聚焦品种用完整三腿触发腿结果，其余品种用 3 分级 K线跑 `trigger_ok`（与 entry_check 小周期验证同一口径）
+  - `trigger_met`：阶段触发条件（企稳K线/缩量回踩/波动收缩）是否满足，随轨道B节流节奏（`GLOBAL_TRACKB_EVERY` 轮）重算
+  - `stop.price` / `stop.basis`：结构止损位与依据；`wait_for`：观望/不做时明说等什么（含价位）
+  - 数据不足的品种降级为 `standby` + `wait_for` 说明，不会缺失该块
+  - ⚠️ 命名说明：顶层 `entry/stop/target1` 是轨道B计划的**价格**（旧契约保留不变）；双轴决策块独立命名为 `decision`，openclaw 规则请引用 `decision.quadrant` / `decision.position_pct` / `decision.certainty_score` / `decision.trigger_met` / `decision.stop.price`
 - `reasons`：人话理由，可直接用于推送文案
 
 ## 5. 面板 HTTP API（备用，优先读 state 文件）
@@ -117,9 +136,11 @@ ER ≥ `REGIME_ER_TREND`(0.35) 且 |斜率| ≥ `REGIME_SLOPE_MIN`(0.002) → `t
 |---|---|---|---|
 | `main` 主仓 | 位置≥65 且 确定性≥60 | 75–100（按双分深度内插） | L2 外侧 1.5×ATR |
 | `probe` 试单 | 位置≥65 且 确定性<60 | 25 | L2 外侧 1.5×ATR |
-| `confirm` 确认仓 | 位置<65 且 确定性≥60 | 50 | 结构宽止损：颈位外侧 1×ATR |
+| `confirm` 确认仓 | 位置<65 且 确定性≥60，**仅趋势市** | 25（修复后：50→25） | 结构宽止损：颈位外侧 1×ATR |
 | `avoid` 不做 | 双低 | 0 | —（wait_for 明说等什么、含价位） |
 | `standby` 观望 | 位置分 null（无结构）且确定性<45 | 0 | — |
+
+**confirm 修复（回测验证后落地）**：①震荡市（regime=range）的 confirm 一律降级为 probe 25%（summary 注明"震荡市确认仓降级为试单"），止损/目标不变——依据：震荡市 confirm 13 笔胜率仅 7.7%、-3.15R；②confirm 仓位系数 50→25——依据：confirm 象限期望 -0.196R，纯降权后总体 +0.018 expR（回测报告第七节变体 C/D，落地验证见第八节）。
 
 位置分 null（无结构）时降级为仅确定性分驱动：≥`AX_CERT_DEGRADED`(45) → probe 25%，否则 standby。`entry_point_ref`（2b/retest/point3/none）由 stage 推导，仅作坐标参考，不驱动决策。
 

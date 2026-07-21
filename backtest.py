@@ -5,7 +5,7 @@ backtest.py — 双轴评分系统历史回测（一期双轴 + 二期 regime）
 重放规则（严格无前视）：每根 1h K线收盘 t，只用 ≤t 的数据跑
 double_bottom.evaluate + entry_logic.detect_regime + entry_logic.decide。
 - 开仓：quadrant ∈ {main, probe, confirm} 且 direction ≠ none → 次根开盘价入场；
-  仓位只影响 R 倍统计（probe=0.25R、confirm=0.5R、main=1.0R 权重）。
+  仓位只影响 R 倍统计（probe=0.25R、confirm=0.25R、main=1.0R 权重；confirm 已随修复降权）。
 - 出场：止损（decide 的 stop.price）/ 目标 target1 / 超时 60 根收盘强平；
   同一根同时触及止损和目标 → 保守计为止损；最多持一单，持仓期间新信号忽略。
 - 成本：每来回 2 跳（滑点+手续费近似），按各品种 tick 折算进 R。
@@ -40,7 +40,7 @@ import double_bottom
 import entry_logic
 import symbols as symbols_mod
 
-WEIGHTS = {"main": 1.0, "confirm": 0.5, "probe": 0.25}
+WEIGHTS = {"main": 1.0, "confirm": 0.25, "probe": 0.25}   # confirm 0.5→0.25：随 AX_POS_CONFIRM 修复（回测变体 C）
 TRADE_QUADRANTS = ("main", "probe", "confirm")
 FREE_KLINE_CAP = 8900          # 免费账号单次拉取上限留余量
 
@@ -350,7 +350,8 @@ def build_report(all_trades, quality, args):
     L.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
     L.append(f"- 区间：近 {args.days} 个交易日 1h K线｜warmup {args.warmup} 根｜超时 {args.timeout_bars} 根强平")
     L.append("- 成本：每来回 2 跳（滑点+手续费）｜成交假设：次根开盘价入场，止损/目标按触及价成交，"
-             "同根双触保守计止损｜仓位权重：main 1.0 / confirm 0.5 / probe 0.25（只影响加权 R）")
+             "同根双触保守计止损｜仓位权重：main 1.0 / confirm 0.25 / probe 0.25（只影响加权 R；"
+             "confirm 已落地修复：震荡市降级 probe + 权重 0.5→0.25）")
     L.append("- 引擎：double_bottom.evaluate + entry_logic.detect_regime + entry_logic.decide（无前视重放）")
     L.append("")
     L.append("## 一、总体表现")
