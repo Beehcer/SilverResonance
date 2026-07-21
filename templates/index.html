@@ -170,6 +170,8 @@
   .detail-sec .ds-row .v-neg { color: var(--red); flex-shrink: 0; }
   .detail-sec .ds-row .v-val { color: var(--blue); flex-shrink: 0; }
   .ec-waitbig { font-size: 16px; text-align: center; padding: 16px 12px 6px; color: var(--amber); line-height: 1.8; }
+  .regime-tag { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    border: 1px solid currentColor; }
   .ref-tag { font-size: 10px; color: var(--dim); border: 1px solid var(--line);
     border-radius: 3px; padding: 0 4px; margin-left: 4px; }
   .modal .close-btn {
@@ -457,6 +459,7 @@
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
         <div class="strength" id="modal-strength">检查中…</div>
         <div class="mode-tag" id="modal-stage" style="margin-bottom:0"></div>
+        <div class="regime-tag" id="modal-regime" style="display:none"></div>
         <div class="mode-tag" id="modal-mode" style="margin-left:auto;margin-bottom:0"></div>
       </div>
       <div class="ec-body" id="modal-body" style="margin-top:12px">
@@ -933,6 +936,10 @@
         if (score >= 75 && tb.direction !== 'wait') sc = tb.direction === 'long' ? '#da3633' : '#2ea043';
         else if (score >= 55) sc = '#d29922';
       }
+      // 市场状态小标签（趋势市·多=红 / 趋势市·空=绿 / 震荡市=琥珀，涨红跌绿约定）
+      const RG_COLOR = { trend_up: '#da3633', trend_down: '#2ea043', range: '#d29922' };
+      const rg = c.regime;
+      const rgTag = rg ? `<span style="font-size:11px;color:${RG_COLOR[rg.regime] || '#8b949e'}">${rg.label} ER${rg.er}</span>` : '';
       return `<div class="ov-card${c.symbol === d.current ? ' focus' : ''}" data-symbol="${c.symbol}">
         <div class="ov-row1">
           <span><span class="ov-name">${c.name}</span> <span class="ov-sym">${c.symbol}</span></span>
@@ -941,7 +948,7 @@
         <div class="ov-price">${c.price != null ? c.price : '--'}</div>
         <div class="ov-row"><span>轨道A</span><b style="color:${lampColor}">${lampTxt}</b>
           <span style="margin-left:auto">轨道B</span><b style="color:${sc};font-size:15px">${score != null ? score : '--'}</b></div>
-        <div class="ov-reason">${(c.reasons && c.reasons[0]) || ''}</div>
+        <div class="ov-reason">${(c.reasons && c.reasons[0]) || ''} ${rgTag}</div>
       </div>`;
     }).join('');
     grid.querySelectorAll('.ov-card').forEach(el => {
@@ -1217,6 +1224,8 @@
                        avoid: '#8b949e', standby: '#8b949e' };
   const LOC_HIGH = 65, CERT_HIGH = 60;   // 与 config.AX_LOCATION_HIGH / AX_CERTAINTY_HIGH 保持一致
   const REF_TXT = { '2b': '2B区域', retest: '回踩颈位', point3: '整理区点3', none: '' };
+  const RG_COLOR = { trend_up: '#da3633', trend_down: '#2ea043', range: '#d29922' };  // 涨红跌绿
+  const modalRegime = document.getElementById('modal-regime');
 
   // 双轴象限图：X=位置分，Y=确定性分；四象限底色 + 阈值虚线 + 当前状态发光点
   function drawQuad(d) {
@@ -1319,6 +1328,9 @@
       (score === null || score === undefined ? '—' : score) + ' 分</div>';
     html += (items || []).map(i => {
       if (kind === 'cer') {
+        if (i.delta === null || i.delta === undefined) {
+          return '<div class="ds-row"><span>' + i.item + '</span><span class="v-val">—</span></div>';
+        }
         const cls = i.delta >= 0 ? 'v-pos' : 'v-neg';
         return '<div class="ds-row"><span>' + i.item + '</span><span class="' + cls + '">' +
                (i.delta >= 0 ? '+' : '') + i.delta + '</span></div>';
@@ -1337,6 +1349,7 @@
     modalMode.textContent = '';
     modalSumm.textContent = '';
     modalWait.style.display = 'none';
+    modalRegime.style.display = 'none';
     modalMask.classList.add('show');
     try {
       const r = await fetch('/api/entry_check' + (demoQ ? '?demo=' + encodeURIComponent(demoQ) : ''));
@@ -1348,6 +1361,12 @@
         (refTxt ? ' · 参考入场点：' + refTxt : '');
       modalMode.textContent = d.mode_label ? '判定口径：' + d.mode_label : '';
       modalSumm.textContent = d.summary || '';
+      // 市场状态标签（象限图上方，带色）
+      if (d.regime && d.regime.label) {
+        modalRegime.style.display = '';
+        modalRegime.style.color = RG_COLOR[d.regime.regime] || 'var(--dim)';
+        modalRegime.textContent = d.regime.label + ' · ER ' + d.regime.er;
+      } else modalRegime.style.display = 'none';
       drawQuad(d);
       drawLadder(d.ladder || {}, d.direction);
 

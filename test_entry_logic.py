@@ -119,6 +119,58 @@ show("short-mirror", d)
 check("7 direction=short", d["direction"] == "short", d["direction"])
 check("7 止损在 L2 上方", d["stop"] and d["stop"]["price"] == 7180.0 + 30, d["stop"])
 check("7 quadrant=main", d["quadrant"] == "main", d["quadrant"])
+check("7 无 regime 时输出 regime=None", d["regime"] is None)
+
+
+def _bars(n, step_fn, base=7000.0):
+    """合成K线：step_fn(i, px) -> 新价。"""
+    out, px = [], base
+    for i in range(n):
+        o = px
+        px = step_fn(i, px)
+        out.append({"open": round(o, 2), "close": round(px, 2),
+                    "high": round(max(o, px) * 1.0005, 2), "low": round(min(o, px) * 0.9995, 2),
+                    "volume": 1000, "oi": 10})
+    return out
+
+
+print("== 8. detect_regime：稳涨序列 → trend_up ==")
+rg = el.detect_regime(_bars(60, lambda i, px: px * 1.004))
+print(f"  regime={rg['regime']} er={rg['er']} slope={rg['slope']} label={rg['label']}")
+check("8 trend_up", rg["regime"] == "trend_up", rg)
+check("8 ER 接近 1", rg["er"] >= 0.9, rg["er"])
+check("8 label=趋势市·多", rg["label"] == "趋势市·多")
+
+print("== 9. detect_regime：拉锯序列 → range ==")
+rg = el.detect_regime(_bars(60, lambda i, px: px * (1.004 if i % 2 == 0 else 0.996)))
+print(f"  regime={rg['regime']} er={rg['er']} slope={rg['slope']} label={rg['label']}")
+check("9 range", rg["regime"] == "range", rg)
+check("9 ER 接近 0", rg["er"] < 0.15, rg["er"])
+
+print("== 10. 震荡市：方向项减半（+15→+8）+ 结构补偿 +5 ==")
+RG_RANGE = {"regime": "range", "er": 0.12, "slope": 0.0004, "label": "震荡市"}
+RG_TREND = {"regime": "trend_up", "er": 0.71, "slope": 0.011, "label": "趋势市·多"}
+EV1 = _ev(confs=("L2反转K线", "回踩不破颈位", "RSI底背离"))
+d_trend = el.decide(EV1, price=6825.0, atr=ATR, small_tf_ok=True, regime=RG_TREND)
+d_range = el.decide(EV1, price=6825.0, atr=ATR, small_tf_ok=True, regime=RG_RANGE)
+show("trend ", d_trend)
+show("range ", d_range)
+cer_r = d_range["scores_detail"]["certainty"]
+dir_item = [i for i in cer_r if "方向一致" in i["item"]]
+check("10 震荡市方向项=+8", dir_item and dir_item[0]["delta"] == 8, dir_item)
+check("10 方向项注明减半", dir_item and "减半" in dir_item[0]["item"])
+bonus = [i for i in cer_r if "结构补偿" in i["item"]]
+check("10 震荡市结构补偿+5", bonus and bonus[0]["delta"] == 5, bonus)
+rg_row = [i for i in cer_r if i["item"].startswith("市场状态")]
+check("10 市场状态明细行", len(rg_row) == 1 and rg_row[0]["delta"] is None, rg_row)
+check("10 趋势市不调整（95 vs 93）",
+      d_trend["certainty_score"] == 95 and d_range["certainty_score"] == 93,
+      (d_trend["certainty_score"], d_range["certainty_score"]))
+check("10 输出含 regime 块", d_range["regime"] and d_range["regime"]["regime"] == "range")
+
+print("== 11. 数据不足时 detect_regime 保守返回 range ==")
+rg = el.detect_regime(_bars(10, lambda i, px: px * 1.01))
+check("11 短序列→range", rg["regime"] == "range" and rg["er"] == 0.0, rg)
 
 print()
 if FAILS:

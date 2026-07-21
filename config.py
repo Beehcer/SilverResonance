@@ -162,6 +162,17 @@ AX_POS_PROBE = 25           # 位置高+确定性低：试单仓（模糊区变�
 AX_POS_CONFIRM = 50         # 确定性高+位置低：确认仓（配结构宽止损：颈位外侧 1×ATR）
 AX_CONFIRM_STOP_ATR = 1.0   # 确认仓宽止损：颈位外侧 N×ATR
 
+# ==== 市场状态判定（regime：趋势/震荡，entry_logic.detect_regime）====
+# 两个维度：Kaufman ER（方向效率）+ MA 斜率。让确定性分"知道现在是什么市"。
+REGIME_ER_WINDOW = 20       # Kaufman ER 窗口根数：ER=|N根净位移|÷逐根位移绝对值之和
+REGIME_ER_TREND = 0.35      # ER ≥ 此值 = 趋势顺畅（< 此值 = 来回拉锯）。Kaufman 经典区间 0.3–0.5 取中偏严
+REGIME_MA_PERIOD = 20       # 斜率用均线周期（与轨道B动能 MA20 一致）
+REGIME_SLOPE_WINDOW = 5     # 斜率比较窗口：MA 现值相对 N 根前的变化率
+REGIME_SLOPE_MIN = 0.002    # 斜率方向阈值：相对变化率 |slope| ≥ 此值才算有方向（1h 约 0.2%/5根）
+# 震荡市权重调整：方向项减半（震荡里"方向"本身是噪音）；结构类信号补偿（震荡边沿反转结构更可靠）
+REGIME_RANGE_DIR_DISCOUNT = 0.5   # 震荡市方向项折扣：+15→+8、+8→+4（round 后）
+REGIME_RANGE_STRUCT_BONUS = 5     # 震荡市结构补偿分（双底/双顶成立时加）
+
 # ==== 天勤账号 ====
 # 分发版：账号不写在这里，由首次启动的配置页填入，存到 user_config.json。
 # 下面仅作为运行时默认占位，app.py 启动时会用用户配置覆盖。

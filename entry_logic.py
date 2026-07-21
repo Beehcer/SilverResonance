@@ -15,6 +15,39 @@
 """
 
 import config
+import double_bottom   # 只读复用 _ma_list（不改其判定语义）
+
+
+# ================= 市场状态判定（趋势/震荡） =================
+
+def detect_regime(klines):
+    """
+    市场状态判定（二期）：让确定性分"知道现在是什么市"。输入 1h K线。
+    两个维度：
+      1. 方向效率（Kaufman ER）：ER = |近 N 根净位移| ÷ 逐根位移绝对值之和。
+         ER 高 = 趋势顺畅（一路走），ER 低 = 来回拉锯（位移互相抵消）。
+      2. 均线斜率：MA20 现值相对 REGIME_SLOPE_WINDOW 根前的变化率（复用斜率思路）。
+    ER ≥ REGIME_ER_TREND 且斜率同向（|slope| ≥ REGIME_SLOPE_MIN）= 趋势；否则震荡。
+    数据不足时保守返回 range（不加分也不误导）。
+    """
+    if not klines or len(klines) < config.REGIME_ER_WINDOW + 2:
+        return {"regime": "range", "er": 0.0, "slope": 0.0, "label": "震荡市"}
+    closes = [k["close"] for k in klines]
+    n = config.REGIME_ER_WINDOW
+    seg = closes[-n - 1:]
+    net = abs(seg[-1] - seg[0])
+    path = sum(abs(seg[i] - seg[i - 1]) for i in range(1, len(seg)))
+    er = round(net / path, 3) if path else 0.0
+    ma = double_bottom._ma_list(closes, config.REGIME_MA_PERIOD)
+    w = config.REGIME_SLOPE_WINDOW
+    slope = 0.0
+    if len(ma) > w and ma[-1] is not None and ma[-1 - w] is not None and ma[-1 - w]:
+        slope = round((ma[-1] - ma[-1 - w]) / ma[-1 - w], 5)
+    if er >= config.REGIME_ER_TREND and abs(slope) >= config.REGIME_SLOPE_MIN:
+        if slope > 0:
+            return {"regime": "trend_up", "er": er, "slope": slope, "label": "趋势市·多"}
+        return {"regime": "trend_down", "er": er, "slope": slope, "label": "趋势市·空"}
+    return {"regime": "range", "er": er, "slope": slope, "label": "震荡市"}
 
 
 # ================= 位置分（0–100） =================
@@ -97,22 +130,30 @@ def _location_score(ev, kind, price, atr, sgn):
 
 # ================= 确定性分（0–100） =================
 
-def _certainty_score(ev, target_dir, price, small_tf_ok):
-    """证据计数加权（全部来自轨道B已有输出，不做新指标）。返回 (score, detail_items)。"""
+def _certainty_score(ev, target_dir, price, small_tf_ok, regime=None):
+    """证据计数加权（全部来自轨道B已有输出，不做新指标）。返回 (score, detail_items)。
+    regime（detect_regime 输出）让分数"知道现在是什么市"：
+    震荡市方向项减半（方向本身是噪音）+ 结构补偿（边沿反转结构更可靠）；趋势市照旧。"""
     items = []
     total = 0
 
     def add(item, delta):
         nonlocal total
         items.append({"item": item, "delta": delta})
-        total += delta
+        total += delta or 0
 
     p = ev["pattern"]
+    is_range = (regime or {}).get("regime") == "range"
+    if regime:
+        items.append({"item": f"市场状态：{regime['label']}（ER {regime['er']}，斜率 {regime['slope']}）"
+                      + ("，方向项减半/结构+5" if is_range else ""), "delta": None})
     confs = p.get("confirmations") or []
     plain = [c for c in confs if "RSI" not in c]            # RSI 背离单独加权，避免重复计
     if p.get("found"):
         add("结构成立（%s）" % ("双底" if p["type"] == "double_bottom" else "双顶"),
             config.AX_CERT_STRUCTURE)
+        if is_range:
+            add("震荡市结构补偿（边沿反转结构更可靠）", config.REGIME_RANGE_STRUCT_BONUS)
     if plain:
         add(f"确认信号 {len(plain)} 项（{'、'.join(plain)}）",
             min(len(plain) * config.AX_CERT_CONFIRM, config.AX_CERT_CONFIRM_CAP))
@@ -123,12 +164,15 @@ def _certainty_score(ev, target_dir, price, small_tf_ok):
         add(f"动能三指标共振 {mc}/3", min(mc * config.AX_CERT_MOMENTUM, config.AX_CERT_MOMENTUM_CAP))
     if (ev.get("volume_oi") or {}).get("healthy"):
         add("仓量象限健康", config.AX_CERT_VOL_OI)
+    dir_disc = config.REGIME_RANGE_DIR_DISCOUNT if is_range else 1.0
     ev_score, ev_dir = ev.get("score", 0), ev.get("direction", "wait")
     if ev_score >= config.DB_SCORE_GO and ev_dir == target_dir:
-        add(f"轨道B方向一致且评分 {ev_score}≥{config.DB_SCORE_GO}", config.AX_CERT_DIR_GO)
+        add(f"轨道B方向一致且评分 {ev_score}≥{config.DB_SCORE_GO}" + ("（震荡市减半）" if is_range else ""),
+            round(config.AX_CERT_DIR_GO * dir_disc))
     elif config.DB_SCORE_WAIT <= ev_score < config.DB_SCORE_GO:
-        add(f"轨道B评分 {ev_score}（{config.DB_SCORE_WAIT}–{config.DB_SCORE_GO - 1} 中性区）",
-            config.AX_CERT_DIR_WAIT)
+        add(f"轨道B评分 {ev_score}（{config.DB_SCORE_WAIT}–{config.DB_SCORE_GO - 1} 中性区）"
+            + ("（震荡市减半）" if is_range else ""),
+            round(config.AX_CERT_DIR_WAIT * dir_disc))
     if small_tf_ok:
         add("小周期企稳验证通过", config.AX_CERT_SMALL_TF)
     # 假突破迹象：价已破颈位但无"放量突破颈位"确认（量不足）
@@ -146,11 +190,12 @@ _QUADRANT_NAME = {"main": "主仓", "probe": "试单", "confirm": "确认仓",
                   "avoid": "不做", "standby": "观望"}
 
 
-def decide(ev, price, atr=None, small_tf_ok=None):
+def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
     """
     双轴评分 → 象限决策主入口。
     ev: double_bottom.evaluate() 输出；price: 现价；
-    atr: ATR(14)（缺省按 price×0.005 估算）；small_tf_ok: 小周期验证（True/False/None=缺数据）。
+    atr: ATR(14)（缺省按 price×0.005 估算）；small_tf_ok: 小周期验证（True/False/None=缺数据）；
+    regime: detect_regime() 输出（缺省 None = 不做市况调整）。
     """
     if atr is None or atr <= 0:
         atr = (price or 1.0) * 0.005
@@ -166,7 +211,7 @@ def decide(ev, price, atr=None, small_tf_ok=None):
         location_score, loc_items, stop = _location_score(ev, kind, price, atr, sgn)
     else:
         loc_items.append({"item": "无结构，位置无法评估", "value": None})
-    certainty_score, cer_items = _certainty_score(ev, target_dir, price, small_tf_ok)
+    certainty_score, cer_items = _certainty_score(ev, target_dir, price, small_tf_ok, regime)
 
     # ---- 入场点坐标参考（2B/回踩/点3 只是光谱采样，不驱动决策）----
     ref = "none"
@@ -232,6 +277,7 @@ def decide(ev, price, atr=None, small_tf_ok=None):
         "position_pct": pct,
         "stop": stop,
         "entry_point_ref": ref,
+        "regime": regime,
         "scores_detail": {"location": loc_items, "certainty": cer_items},
         "wait_for": wait_for,
         "summary": summary,

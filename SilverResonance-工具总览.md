@@ -2,7 +2,7 @@
 
 > 本文档是 openclaw 等 AI 智能体对接本工具的唯一必读说明。
 > 项目目录：`D:\SilverResonance` ｜ 本文档位于项目根目录内。
-> 最后更新：2026-07-21（entry_check 升级为双轴评分引擎：位置分×确定性分→象限决策，entry_logic.py 纯函数）
+> 最后更新：2026-07-21（二期：市场状态判定 detect_regime 接入确定性分——震荡市方向项减半+结构补偿，regime 贯通弹窗/总览/落盘）
 
 ---
 
@@ -105,6 +105,12 @@
 **确定性分 certainty_score（0–100）**：证据计数加权，全部来自轨道B已有输出——
 结构成立 +20；确认信号每条 +5（上限15）；RSI背离 +10；动能共振每条 +5（上限15）；仓量健康 +10；方向一致且 score≥75 +15（55–74 +8）；小周期企稳验证 +15（缺数据不扣分）；**假突破迹象（价破颈位但无放量确认）−15**。
 
+**市场状态 regime（二期）**：`detect_regime(1h K线)` 用两个维度判定市况——
+1. **方向效率（Kaufman ER）**：ER = |近 `REGIME_ER_WINDOW`(20) 根净位移| ÷ 逐根位移绝对值之和。ER→1 一路走（趋势顺畅），ER→0 来回拉锯。
+2. **均线斜率**：MA20 现值相对 `REGIME_SLOPE_WINDOW`(5) 根前的变化率。
+
+ER ≥ `REGIME_ER_TREND`(0.35) 且 |斜率| ≥ `REGIME_SLOPE_MIN`(0.002) → `trend_up`/`trend_down`；否则 `range`。接入确定性分：**震荡市方向项减半**（+15→+8、+8→+4，震荡里"方向"本身是噪音），**结构类信号 +5 补偿**（震荡边沿反转结构比趋势可靠）；趋势市照旧。`scores_detail.certainty` 首行单列"市场状态"明细。响应 JSON 含 `"regime": {"regime","er","slope","label"}` 块；总览卡片与 signals_state.json 每品种亦带 regime 字段（openclaw 可做"震荡市+逼近边沿"提醒）。
+
 **象限决策（quadrant 字段）**：
 
 | quadrant | 条件 | position_pct | 止损 |
@@ -196,6 +202,9 @@
 | `AX_RR_WEIGHT` | 0.3 | 隐含盈亏比并入位置分的权重（RR≥2 满分、<1 大幅减分） |
 | `AX_CERT_*`（10 项） | 见文件 | 确定性分各项权重：结构+20、确认+5(≤15)、RSI背离+10、动能+5(≤15)、仓量+10、方向+15/+8、小周期+15、假突破−15 |
 | `AX_POS_MAIN_MIN/MAX、AX_POS_PROBE、AX_POS_CONFIRM` | 75/100、25、50 | 象限仓位比例（主仓按双分深度内插 75–100%） |
+| `REGIME_ER_WINDOW / REGIME_ER_TREND` | 20 / 0.35 | Kaufman ER 窗口与趋势阈值（ER≥阈值且斜率同向=趋势市） |
+| `REGIME_MA_PERIOD / REGIME_SLOPE_WINDOW / REGIME_SLOPE_MIN` | 20 / 5 / 0.002 | 斜率判定：MA20 相对 5 根前变化率 ≥0.2% 才算有方向 |
+| `REGIME_RANGE_DIR_DISCOUNT / REGIME_RANGE_STRUCT_BONUS` | 0.5 / 5 | 震荡市：方向项减半（+15→+8、+8→+4）、结构补偿 +5 |
 | `GLOBAL_TREND_PERIOD` 等 | 15分/3分/1h | 全局监控层周期（省订阅的取舍，注释有说明） |
 | `GLOBAL_TRACKB_EVERY` | 3 | 轨道 B 节流：每 N 轮重算一次评分 |
 | `DB_*`（19 个） | 见文件 | 轨道 B 全部参数：回溯窗口 60、两底容差 3%、颈位反弹 5%、放量 1.5×、四因子权重等 |
@@ -206,9 +215,9 @@
 app.py              TqSdk 数据线程 + Flask 后端 + 全局/聚焦双层调度 + 落盘
 resonance.py        轨道A 三频共振纯函数（可单测）
 double_bottom.py    轨道B 双底评分引擎纯函数（无前视偏差，可单测）
-entry_logic.py      双轴评分引擎纯函数（位置分×确定性分→象限决策，可单测）
+entry_logic.py      双轴评分引擎纯函数（位置分×确定性分→象限决策 + detect_regime 市场状态判定，可单测）
 test_double_bottom.py  轨道B 自测 6 项
-test_entry_logic.py    双轴引擎自测 7 项（四象限+降级+假突破+做空镜像）
+test_entry_logic.py    双轴引擎自测 11 项（四象限+降级+假突破+做空镜像+regime×4）
 symbols.py          品种预设表（代码/中文名/tick/每跳盈亏）
 config.py           全部可调参数
 user_settings.py    user_config.json 读写

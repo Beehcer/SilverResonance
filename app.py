@@ -472,6 +472,7 @@ def _entry_check():
                 "stage_name": "等待中", "location_score": None, "certainty_score": 0,
                 "quadrant": "standby", "quadrant_name": "观望", "direction": "none",
                 "position_pct": 0, "stop": None, "entry_point_ref": "none",
+                "regime": None,
                 "scores_detail": {"location": [], "certainty": []},
                 "ladder": {"L1": None, "L2": None, "neck": None, "price": None,
                            "stop": None, "target1": None, "target2": None},
@@ -479,13 +480,15 @@ def _entry_check():
                 "summary": "1h K线尚未收齐，无法做双轴评分。"}
     price = (res or {}).get("price") or kb[-1]["close"]
     ev = double_bottom.evaluate(kb)
+    regime = entry_logic.detect_regime(kb)
     # 小周期验证：触发周期企稳 且 轨道A方向与目标方向一致（缺数据传 None 不扣分）
     target = {"double_bottom": "long", "double_top": "short"}.get(ev["pattern"].get("type"))
     small_tf = None
     if target and res and res.get("legs"):
         small_tf = bool(res.get("direction") == target
                         and res["legs"].get("trigger", {}).get("ok"))
-    out = entry_logic.decide(ev, price, atr=double_bottom._atr(kb), small_tf_ok=small_tf)
+    out = entry_logic.decide(ev, price, atr=double_bottom._atr(kb),
+                             small_tf_ok=small_tf, regime=regime)
     # stage（三批次阶段）仅作参考坐标；entry_point_ref 按约定由它推导
     stage_ref = _stage_advice(kb, _focus_track_b(), price)
     out["stage"] = stage_ref["stage"]
@@ -501,6 +504,13 @@ def _entry_check():
 
 
 # ---- mock 演示：四象限合成输入（/api/entry_check?demo=main|probe|confirm|avoid）----
+_DEMO_REGIME = {
+    "main":    {"regime": "trend_up", "er": 0.71, "slope": 0.011, "label": "趋势市·多"},
+    "probe":   {"regime": "range", "er": 0.12, "slope": 0.0004, "label": "震荡市"},
+    "confirm": {"regime": "trend_up", "er": 0.68, "slope": 0.009, "label": "趋势市·多"},
+    "avoid":   {"regime": "range", "er": 0.09, "slope": -0.0002, "label": "震荡市"},
+}
+
 _DEMO_EV = {
     # 双高：贴 L2 + 证据齐全
     "main": ({"found": True, "type": "double_bottom",
@@ -540,7 +550,8 @@ def _demo_entry_check(kind):
           "plan": {"entry": price, "stop": 6790.0, "target1": 7200.0, "target2": None}
           if direction != "wait" else None,
           "reasons": []}
-    out = entry_logic.decide(ev, price, atr=20.0, small_tf_ok=small_tf)
+    out = entry_logic.decide(ev, price, atr=20.0, small_tf_ok=small_tf,
+                             regime=_DEMO_REGIME[kind])
     out.update({"mode": "demo", "mode_label": f"演示模式（{kind} 象限合成数据）",
                 "stage": "standby", "stage_name": "演示",
                 "ladder": {"L1": 6800.0, "L2": 6820.0, "neck": 7000.0, "price": price,
@@ -643,6 +654,7 @@ _overview_lock = threading.Lock()
 _overview = {}   # 品种代码 -> 快照条目（结构即 signals_state.json 的每品种条目）
 _tb_throttle = {}  # 品种 -> {"n": 已跑轮数, "summary": 轨道B摘要缓存}（节流用）
 _track_b_bars = {}  # 品种 -> 最近一份 1h 原始K线（三批次阶段识别用）
+_track_b_regime = {}  # 品种 -> 市场状态（detect_regime 输出，随轨道B节流重算）
 
 
 def _lamp_of(track_a):
@@ -673,12 +685,13 @@ def _track_b_summary(tb):
 
 
 def _track_b_for(sym, kb):
-    """轨道B摘要（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时评分不变）。"""
+    """轨道B摘要 + 市场状态（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时不变）。"""
     _track_b_bars[sym] = kb          # 三批次阶段识别要用 1h 原始K线
     ent = _tb_throttle.get(sym) or {"n": 0, "summary": None}
     ent["n"] += 1
     if ent["summary"] is None or ent["n"] % max(1, config.GLOBAL_TRACKB_EVERY) == 0:
         ent["summary"] = _track_b_summary(double_bottom.evaluate(kb))
+        _track_b_regime[sym] = entry_logic.detect_regime(kb)
     _tb_throttle[sym] = ent
     return ent["summary"]
 
@@ -692,6 +705,7 @@ def _collecting_entry(name):
                     "pattern": {"found": False, "type": None, "L1": None, "L2": None, "neck": None},
                     "support": [], "resistance": [],
                     "volume_oi": {"quadrant": "数据不足", "healthy": False}},
+        "regime": None,
         "lamp": "gray", "entry": None, "stop": None, "target1": None,
         "reasons": ["数据收集中…"],
     }
@@ -732,6 +746,7 @@ def _global_pass(bar_getter, focus_track_a=None):
             "track_a": track_a,
             "track_b": {k: tb[k] for k in
                         ("score", "direction", "pattern", "support", "resistance", "volume_oi")},
+            "regime": _track_b_regime.get(sym),
             "lamp": _lamp_of(track_a),
             "entry": tb["entry"], "stop": tb["stop"], "target1": tb["target1"],
             "reasons": tb["reasons"],
