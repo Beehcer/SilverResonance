@@ -2,7 +2,7 @@
 
 > 本文档是 openclaw 等 AI 智能体对接本工具的唯一必读说明。
 > 项目目录：`D:\SilverResonance` ｜ 本文档位于项目根目录内。
-> 最后更新：2026-07-21（entry_check 迭代为三批次入场决策模型 + 可视化决策面板，旧双模式漏斗废弃）
+> 最后更新：2026-07-21（entry_check 升级为双轴评分引擎：位置分×确定性分→象限决策，entry_logic.py 纯函数）
 
 ---
 
@@ -90,54 +90,55 @@
 | `/api/period` | POST | 切换共振组合（scalp/swing/position） |
 | `/api/kline?period=N` | GET | 多周期 K 线（86400/3600/1800/900/300/180/60） |
 | `/api/double_bottom?period=N` | GET | 指定周期轨道 B 完整评分 |
-| `/api/entry_check` | GET | "我要开仓"决策面板：三批次阶段识别 + 可执行四件套（见 5.1 节） |
+| `/api/entry_check` | GET | "我要开仓"决策面板：双轴评分（位置分×确定性分→象限），见 5.1 节；mock 下 `?demo=main|probe|confirm|avoid` 强制象限演示 |
 | `/api/config` | GET/POST | 配置读写（同 setup 页） |
 
-### 5.1 开仓决策面板（entry_check）三批次入场模型
+### 5.1 开仓决策面板（entry_check）双轴评分模型（一期）
 
-**设计原则：阶段识别 → 批次建议，永远有可执行输出，没有"禁止开仓"死路。** 最差情况也是 `standby` + 具体等什么（价位、信号），绝不只说一句"不能做"。
+**设计立场：位置优先 vs 确定性优先是两种入场逻辑（取舍立场），2B/回踩/点3 只是光谱上的入场点采样。** 位置分与确定性分各自独立量化，入场方案由两个分数驱动；**唯一的"不做"区是双低象限（avoid）**，消灭"永远无法开仓"。引擎为 `entry_logic.py` 纯函数（可单测），输入是轨道B `evaluate()` 输出 + 现价 + 可选小周期验证，不改 resonance/double_bottom 判定语义。
 
-**四阶段（stage 字段，按优先级识别）**：
+**位置分 location_score（0–100，无结构时 null）**：
+- 距离用 ATR(14) 度量：贴 L2/强位 ±`AX_L2_ZONE_ATR`×ATR = 90–100；颈位 ±`AX_NECK_ZONE_ATR`×ATR = 55–70；突破后延伸 >`AX_EXTEND_ATR`×ATR = <30（之后每 ATR −10）；跌破 L2 = 15
+- 隐含盈亏比按 30% 权重并入（`AX_RR_WEIGHT`）：结构止损 L2 外侧 `DB_STOP_ATR`×ATR → 目标1，RR≥2 满分、RR=1 得 50、<1 大幅减分
+- 方向侧强位（score≥70）贴合奖励：±0.5×ATR 内至少 92 分
 
-| stage | 名称 | 批次 | 识别条件（基于轨道B 1h K线） |
+**确定性分 certainty_score（0–100）**：证据计数加权，全部来自轨道B已有输出——
+结构成立 +20；确认信号每条 +5（上限15）；RSI背离 +10；动能共振每条 +5（上限15）；仓量健康 +10；方向一致且 score≥75 +15（55–74 +8）；小周期企稳验证 +15（缺数据不扣分）；**假突破迹象（价破颈位但无放量确认）−15**。
+
+**象限决策（quadrant 字段）**：
+
+| quadrant | 条件 | position_pct | 止损 |
 |---|---|---|---|
-| `2b_probe` | 底部2B·试单 | 试单（计划仓位 34%） | 未放量突破颈位，且现价在 L2 区域（±`STAGE_ZONE_ATR`×ATR） |
-| `retest_confirm` | 突破回踩·确认 | 确认（33%） | 曾放量突破颈位，现价回踩至颈位 ±`RETEST_ZONE_ATR`×ATR 带内 |
-| `range_addon` | 震荡顺势·点3 | 顺势（33%） | 已站稳颈位上方，近 `RANGE_LOOKBACK` 根为整理区 |
-| `standby` | 等待中 | — | 以上都不满足，输出 `wait_for` 具体观察指令 |
+| `main` 主仓 | 位置≥65 且 确定性≥60 | 75–100（按双分深度内插） | L2 外侧 1.5×ATR |
+| `probe` 试单 | 位置≥65 且 确定性<60 | 25 | L2 外侧 1.5×ATR |
+| `confirm` 确认仓 | 位置<65 且 确定性≥60 | 50 | 结构宽止损：颈位外侧 1×ATR |
+| `avoid` 不做 | 双低 | 0 | —（wait_for 明说等什么、含价位） |
+| `standby` 观望 | 位置分 null（无结构）且确定性<45 | 0 | — |
 
-**四档强度（strength 字段，没有"禁止"档）**：
-- `strong`：触发条件已满足，可按批次计划执行
-- `normal`：阶段已识别，触发未满足，等触发（面板呼吸灯提示）
-- `reduce`：盈亏比 < `MIN_RR`，不禁止但建议本批仓位减半
-- `standby`：观望，附具体等什么
-
-**各阶段止损规则**：2B试单 = L2 外侧 `DB_STOP_ATR`×ATR；回踩确认 = 回踩低点外 0.5×ATR；点3 = 整理区边沿外 0.3×ATR。
+位置分 null（无结构）时降级为仅确定性分驱动：≥`AX_CERT_DEGRADED`(45) → probe 25%，否则 standby。`entry_point_ref`（2b/retest/point3/none）由 stage 推导，仅作坐标参考，不驱动决策。
 
 **返回 JSON 契约**：
 
 ```json
 {
   "mode": "scalp|swing", "mode_label": "判定口径文案",
-  "stage": "2b_probe|retest_confirm|range_addon|standby",
-  "stage_name": "突破回踩·确认", "strength": "strong|normal|reduce|standby",
-  "direction": "long|short|none",
-  "tranche": {"name": "确认", "fraction": 0.33, "note": "批次说明"},
-  "stop": {"price": 7180.5, "ticks": 33, "basis": "回踩低点下方0.5×ATR"},
-  "trigger": {"met": true, "text": "缩量企稳已现，可按确认批执行"},
-  "targets": [{"price": 7637.3, "rr": 2.1}],
-  "ladder": {"L1": 6789.5, "L2": 6828.3, "neck": 7213.4, "price": 7227.0,
-             "stop": 7180.5, "target1": 7637.3, "target2": null},
-  "wait_for": null, "summary": "一句话决策摘要"
+  "location_score": 96, "certainty_score": 95,
+  "quadrant": "main|probe|confirm|avoid|standby", "quadrant_name": "主仓",
+  "direction": "long|short|none", "position_pct": 97,
+  "stop": {"price": 6790.0, "basis": "L2下方1.5×ATR"},
+  "entry_point_ref": "2b|retest|point3|none",
+  "stage": "2b_probe|…", "stage_name": "（参考信息，不驱动决策）",
+  "scores_detail": {"location": [{"item": "贴近 L2 6820（0.25×ATR）", "value": 95}],
+                    "certainty": [{"item": "结构成立（双底）", "delta": 20}]},
+  "ladder": {"L1":…, "L2":…, "neck":…, "price":…, "stop":…, "target1":…, "target2":…},
+  "wait_for": null, "summary": "人话总结"
 }
 ```
 
-- `ladder` 七字段供前端画竖向价格阶梯（止损区淡红 / 目标区淡绿 / 现价高亮）。
-- `standby` 时 `tranche`/`stop`/`trigger` 为 null，`wait_for` 非空。
-- 目标位优先取轨道B计划（target1/target2），缺则用丈量目标（颈位±形态高度）或最近强位补齐。
-- 双顶为完全镜像（direction=short，阶段语义相同）。
+- 前端弹窗：双轴象限图（X=位置/Y=确定性，四象限底色+发光点）+ 缩小价格阶梯 + 加减分明细列表。
+- mock 演示：`/api/entry_check?demo=main|probe|confirm|avoid`（合成输入走真实引擎）；前端开 `/?demo=xxx` 后点"我要开仓"自动透传。
 
-⚠️ 旧版双模式漏斗（`verdict`/`checks` 字段，go-strong/go-weak/wait/stop 四档）已整体废弃，消费方按上述契约解析。
+⚠️ 旧三批次模型的 `strength`/`tranche`/`trigger`/`targets` 字段已随双轴升级废弃；stage/stage_name 保留为参考信息。
 
 ## 6. openclaw 盯盘任务建议（三个定时任务）
 
@@ -183,12 +184,18 @@
 | `TREND_SLOPE_MIN` | 0.5‰ | 趋势斜率门槛，太敏感调大 |
 | `OVEREXTENSION_PCT` | 0.8% | 过度延伸保护，越小越不容易追高亮灯 |
 | `PROXIMITY_TICKS` | 5 | 距压力/支撑 ≤ N 跳触发逼近警告 |
-| `MIN_RR` | 1.5 | 开仓决策最小盈亏比（不足时降为 reduce 半仓提示，不禁止） |
+| `MIN_RR` | 1.5 | 最小盈亏比（双轴引擎内置于位置分 RR 修正；stage 参考模型沿用） |
 | `DEFAULT_STOP_TICKS` | 13 | 结构止损找不到摆动点时的回退跳数 |
 | `TRANCHE_FRACTIONS` | [0.34, 0.33, 0.33] | 三批次计划仓位比例（试单/确认/顺势） |
 | `STAGE_ZONE_ATR` | 1.0 | 2B试单区域：现价距 L2 ≤ N×ATR |
 | `RETEST_ZONE_ATR` | 0.5 | 回踩确认带：现价距颈位 ≤ N×ATR |
 | `RANGE_LOOKBACK / RANGE_CONTRACT_ATR` | 20 / 2.5 | 点3识别：近 N 根振幅 ≤ 系数×ATR 视为波动收缩（触发条件） |
+| `AX_LOCATION_HIGH / AX_CERTAINTY_HIGH` | 65 / 60 | 双轴象限阈值：位置分/确定性分"高"半区下沿 |
+| `AX_CERT_DEGRADED` | 45 | 无结构降级模式的确定性门槛（结构/确认分天然拿不到） |
+| `AX_L2_ZONE_ATR / AX_NECK_ZONE_ATR / AX_EXTEND_ATR` | 0.5 / 0.5 / 2.0 | 位置分锚点：贴 L2/强位=90–100、颈位带=55–70、延伸>N×ATR=<30 |
+| `AX_RR_WEIGHT` | 0.3 | 隐含盈亏比并入位置分的权重（RR≥2 满分、<1 大幅减分） |
+| `AX_CERT_*`（10 项） | 见文件 | 确定性分各项权重：结构+20、确认+5(≤15)、RSI背离+10、动能+5(≤15)、仓量+10、方向+15/+8、小周期+15、假突破−15 |
+| `AX_POS_MAIN_MIN/MAX、AX_POS_PROBE、AX_POS_CONFIRM` | 75/100、25、50 | 象限仓位比例（主仓按双分深度内插 75–100%） |
 | `GLOBAL_TREND_PERIOD` 等 | 15分/3分/1h | 全局监控层周期（省订阅的取舍，注释有说明） |
 | `GLOBAL_TRACKB_EVERY` | 3 | 轨道 B 节流：每 N 轮重算一次评分 |
 | `DB_*`（19 个） | 见文件 | 轨道 B 全部参数：回溯窗口 60、两底容差 3%、颈位反弹 5%、放量 1.5×、四因子权重等 |
@@ -199,7 +206,9 @@
 app.py              TqSdk 数据线程 + Flask 后端 + 全局/聚焦双层调度 + 落盘
 resonance.py        轨道A 三频共振纯函数（可单测）
 double_bottom.py    轨道B 双底评分引擎纯函数（无前视偏差，可单测）
+entry_logic.py      双轴评分引擎纯函数（位置分×确定性分→象限决策，可单测）
 test_double_bottom.py  轨道B 自测 6 项
+test_entry_logic.py    双轴引擎自测 7 项（四象限+降级+假突破+做空镜像）
 symbols.py          品种预设表（代码/中文名/tick/每跳盈亏）
 config.py           全部可调参数
 user_settings.py    user_config.json 读写

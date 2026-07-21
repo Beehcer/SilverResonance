@@ -20,6 +20,7 @@ import config
 import resonance
 import symbols
 import double_bottom
+import entry_logic
 import user_settings
 
 
@@ -455,10 +456,9 @@ def _focus_track_b():
 
 def _entry_check():
     """
-    "我要开仓" 前的盘面自检：三批次入场决策模型。
-    阶段识别（2B试单 / 回踩确认 / 震荡顺势点3 / 观望）→ 永远给出可执行输出：
-    有阶段=止损+触发+目标+仓位比例四件套；无阶段=standby + 具体等什么。
-    不再有"禁止开仓"档；RR 不足时降为 reduce（仓位减半提示）而非否决。
+    "我要开仓" 决策面板：双轴评分模型（位置分 × 确定性分 → 象限决策）。
+    唯一的"不做"区是双低象限（avoid）；位置分无法评估时降级为仅确定性分驱动。
+    stage 字段（三批次阶段识别）保留为入场点坐标参考，不驱动决策。
     """
     st = get_state()
     res = st.get("result")
@@ -469,16 +469,83 @@ def _entry_check():
     kb = _track_b_bars.get(config.SYMBOL)
     if not kb or len(kb) < 40:
         return {"mode": mode, "mode_label": mode_label, "stage": "standby",
-                "stage_name": "等待中", "strength": "standby", "direction": "none",
-                "tranche": None, "stop": None, "trigger": None, "targets": [],
+                "stage_name": "等待中", "location_score": None, "certainty_score": 0,
+                "quadrant": "standby", "quadrant_name": "观望", "direction": "none",
+                "position_pct": 0, "stop": None, "entry_point_ref": "none",
+                "scores_detail": {"location": [], "certainty": []},
                 "ladder": {"L1": None, "L2": None, "neck": None, "price": None,
                            "stop": None, "target1": None, "target2": None},
                 "wait_for": "轨道B数据收集中（需≥40根1h K线），稍候再试",
-                "summary": "1h K线尚未收齐，无法做阶段识别。"}
+                "summary": "1h K线尚未收齐，无法做双轴评分。"}
     price = (res or {}).get("price") or kb[-1]["close"]
-    out = _stage_advice(kb, _focus_track_b(), price)
+    ev = double_bottom.evaluate(kb)
+    # 小周期验证：触发周期企稳 且 轨道A方向与目标方向一致（缺数据传 None 不扣分）
+    target = {"double_bottom": "long", "double_top": "short"}.get(ev["pattern"].get("type"))
+    small_tf = None
+    if target and res and res.get("legs"):
+        small_tf = bool(res.get("direction") == target
+                        and res["legs"].get("trigger", {}).get("ok"))
+    out = entry_logic.decide(ev, price, atr=double_bottom._atr(kb), small_tf_ok=small_tf)
+    # stage（三批次阶段）仅作参考坐标；entry_point_ref 按约定由它推导
+    stage_ref = _stage_advice(kb, _focus_track_b(), price)
+    out["stage"] = stage_ref["stage"]
+    out["stage_name"] = stage_ref["stage_name"]
+    out["entry_point_ref"] = {"2b_probe": "2b", "retest_confirm": "retest",
+                              "range_addon": "point3"}.get(stage_ref["stage"], "none")
+    out["ladder"] = stage_ref["ladder"]
+    if out["stop"]:
+        out["ladder"]["stop"] = out["stop"]["price"]
     out["mode"] = mode
     out["mode_label"] = mode_label
+    return out
+
+
+# ---- mock 演示：四象限合成输入（/api/entry_check?demo=main|probe|confirm|avoid）----
+_DEMO_EV = {
+    # 双高：贴 L2 + 证据齐全
+    "main": ({"found": True, "type": "double_bottom",
+              "L1": {"price": 6800.0, "index": 10}, "L2": {"price": 6820.0, "index": 30},
+              "neck": 7000.0,
+              "confirmations": ["L2反转K线", "回踩不破颈位", "RSI底背离"],
+              "rsi_divergence": True},
+             80, "long", 3, True, 6825.0, True),
+    # 位置高+确定性低：同位置，证据薄弱
+    "probe": ({"found": True, "type": "double_bottom",
+               "L1": {"price": 6800.0, "index": 10}, "L2": {"price": 6820.0, "index": 30},
+               "neck": 7000.0, "confirmations": ["L2反转K线"], "rsi_divergence": False},
+              40, "wait", 0, False, 6825.0, None),
+    # 确定性高+位置低：证据齐全但突破后延伸
+    "confirm": ({"found": True, "type": "double_bottom",
+                 "L1": {"price": 6800.0, "index": 10}, "L2": {"price": 6820.0, "index": 30},
+                 "neck": 7000.0,
+                 "confirmations": ["L2反转K线", "放量突破颈位", "回踩不破颈位", "RSI底背离"],
+                 "rsi_divergence": True},
+                80, "long", 3, True, 7100.0, True),
+    # 双低：中间位 + 证据薄弱
+    "avoid": ({"found": True, "type": "double_bottom",
+               "L1": {"price": 6800.0, "index": 10}, "L2": {"price": 6820.0, "index": 30},
+               "neck": 7000.0, "confirmations": ["L2反转K线"], "rsi_divergence": False},
+              40, "wait", 0, False, 6970.0, None),
+}
+
+
+def _demo_entry_check(kind):
+    """mock 下按象限名合成 evaluate 输入，走真实 decide() 引擎（演示/联调用）。"""
+    pattern, score, direction, mom, healthy, price, small_tf = _DEMO_EV[kind]
+    ev = {"score": score, "direction": direction, "pattern": pattern,
+          "levels": {"support": [], "resistance": []},
+          "momentum": {"macd": mom >= 1, "rsi": mom >= 2, "ma_slope": mom >= 3,
+                       "resonance_count": mom},
+          "volume_oi": {"quadrant": "演示", "healthy": healthy},
+          "plan": {"entry": price, "stop": 6790.0, "target1": 7200.0, "target2": None}
+          if direction != "wait" else None,
+          "reasons": []}
+    out = entry_logic.decide(ev, price, atr=20.0, small_tf_ok=small_tf)
+    out.update({"mode": "demo", "mode_label": f"演示模式（{kind} 象限合成数据）",
+                "stage": "standby", "stage_name": "演示",
+                "ladder": {"L1": 6800.0, "L2": 6820.0, "neck": 7000.0, "price": price,
+                           "stop": out["stop"]["price"] if out["stop"] else None,
+                           "target1": 7200.0, "target2": None}})
     return out
 
 # 共享状态：数据线程写，Flask 读。用锁保护。
@@ -1186,6 +1253,10 @@ def api_double_bottom():
 
 @app.route("/api/entry_check")
 def api_entry_check():
+    # mock 演示：?demo=main|probe|confirm|avoid 强制某象限（合成输入走真实引擎）
+    demo = request.args.get("demo")
+    if demo and config.MOCK_MODE and demo in _DEMO_EV:
+        return jsonify(_demo_entry_check(demo))
     return jsonify(_entry_check())
 
 

@@ -145,34 +145,31 @@
   }
   .modal .verdict { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
   .modal .strength { font-size: 22px; font-weight: 800; letter-spacing: 1px; }
-  .modal .strength.st-strong { color: var(--green); }
-  .modal .strength.st-normal { color: var(--blue); }
-  .modal .strength.st-reduce { color: var(--amber); }
-  .modal .strength.st-standby { color: var(--dim); }
+  .modal .strength.st-main { color: var(--green); }
+  .modal .strength.st-probe { color: var(--amber); }
+  .modal .strength.st-confirm { color: var(--blue); }
+  .modal .strength.st-avoid, .modal .strength.st-standby { color: var(--dim); }
   .modal .mode-tag { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
   .modal .summ { font-size: 13px; color: var(--dim); line-height: 1.6; margin-top: 10px; }
-  .modal-wide { width: 700px; }
-  .ec-body { display: flex; gap: 16px; }
+  .modal-wide { width: 780px; }
+  .ec-body { display: flex; gap: 14px; }
+  .ec-quad { flex-shrink: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
   .ec-ladder { flex-shrink: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
   .ec-info { flex: 1; min-width: 0; }
-  .ec-tranches { display: flex; gap: 8px; margin-bottom: 12px; }
-  .trc { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 8px 6px; text-align: center; }
-  .trc .t-name { font-size: 14px; font-weight: 700; }
-  .trc .t-stage { font-size: 11px; color: var(--dim); margin-top: 2px; }
-  .trc .t-frac { font-size: 12px; color: var(--dim); margin-top: 4px; }
-  .trc.cur { border-color: var(--blue); background: rgba(88,166,255,.08); }
-  .trc.cur .t-stage { color: var(--blue); }
-  .trc.past { opacity: .45; }
-  .trc.todo { opacity: .7; border-style: dashed; }
-  .frac-bar { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 4px 0 12px; }
+  .pos-line { font-size: 14px; margin: 2px 0 4px; }
+  .pos-line b { font-size: 18px; }
+  .frac-bar { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 4px 0 10px; }
   .frac-fill { height: 100%; background: var(--blue); transition: width .3s; }
-  .trig { font-size: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; }
-  .trig.met { color: var(--green); border-color: var(--green); }
-  .trig.waiting { color: var(--amber); border-color: var(--amber); animation: breathe 1.6s ease-in-out infinite; }
-  @keyframes breathe { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
   .targets { font-size: 12px; color: var(--dim); line-height: 1.8; }
   .targets b { color: var(--text); }
-  .ec-waitbig { font-size: 16px; text-align: center; padding: 34px 12px; color: var(--dim); line-height: 1.8; }
+  .detail-sec { margin-top: 8px; }
+  .detail-sec .ds-title { font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+  .detail-sec .ds-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px;
+    color: var(--dim); padding: 2px 0; border-top: 1px dashed var(--line); }
+  .detail-sec .ds-row .v-pos { color: var(--green); flex-shrink: 0; }
+  .detail-sec .ds-row .v-neg { color: var(--red); flex-shrink: 0; }
+  .detail-sec .ds-row .v-val { color: var(--blue); flex-shrink: 0; }
+  .ec-waitbig { font-size: 16px; text-align: center; padding: 16px 12px 6px; color: var(--amber); line-height: 1.8; }
   .ref-tag { font-size: 10px; color: var(--dim); border: 1px solid var(--line);
     border-radius: 3px; padding: 0 4px; margin-left: 4px; }
   .modal .close-btn {
@@ -454,7 +451,7 @@
   </div>
   </div><!-- /detail-view -->
 
-  <!-- 开仓前检查弹窗（三批次入场决策面板） -->
+  <!-- 开仓前检查弹窗（双轴评分 · 象限决策面板） -->
   <div class="modal-mask" id="modal-mask">
     <div class="modal modal-wide">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
@@ -463,15 +460,14 @@
         <div class="mode-tag" id="modal-mode" style="margin-left:auto;margin-bottom:0"></div>
       </div>
       <div class="ec-body" id="modal-body" style="margin-top:12px">
-        <canvas id="ladder" class="ec-ladder" width="220" height="380"></canvas>
+        <canvas id="quad" class="ec-quad" width="300" height="300"></canvas>
+        <canvas id="ladder" class="ec-ladder" width="150" height="300"></canvas>
         <div class="ec-info">
-          <div class="ec-tranches" id="modal-tranches"></div>
-          <div id="modal-fracwrap">
-            <div class="mode-tag" id="modal-frac-label">本批仓位比例</div>
-            <div class="frac-bar"><div class="frac-fill" id="modal-frac"></div></div>
-          </div>
-          <div class="trig" id="modal-trigger"></div>
-          <div class="targets" id="modal-targets"></div>
+          <div class="pos-line">建议仓位 <b id="modal-pct">--</b></div>
+          <div class="frac-bar"><div class="frac-fill" id="modal-frac"></div></div>
+          <div class="targets" id="modal-stop"></div>
+          <div class="detail-sec" id="modal-detail-loc"></div>
+          <div class="detail-sec" id="modal-detail-cer"></div>
           <div class="summ" id="modal-summ"></div>
         </div>
       </div>
@@ -1204,24 +1200,78 @@
     }
   }
 
-  // ===== 我要开仓：三批次入场决策面板（阶段识别 → 可执行四件套，永无死路） =====
+  // ===== 我要开仓：双轴评分 · 象限决策面板（位置分 × 确定性分，唯一不做区=双低） =====
   const modalMode = document.getElementById('modal-mode');
-  const modalBody = document.getElementById('modal-body');
   const modalWait = document.getElementById('modal-wait');
-  const modalTranches = document.getElementById('modal-tranches');
-  const modalFracWrap = document.getElementById('modal-fracwrap');
+  const modalPct = document.getElementById('modal-pct');
   const modalFrac = document.getElementById('modal-frac');
-  const modalFracLabel = document.getElementById('modal-frac-label');
-  const modalTrigger = document.getElementById('modal-trigger');
-  const modalTargets = document.getElementById('modal-targets');
+  const modalStop = document.getElementById('modal-stop');
+  const modalDetailLoc = document.getElementById('modal-detail-loc');
+  const modalDetailCer = document.getElementById('modal-detail-cer');
   const ladderCv = document.getElementById('ladder');
+  const quadCv = document.getElementById('quad');
 
-  const STRENGTH_TXT = { strong: 'STRONG 强信号', normal: 'NORMAL 可执行',
-                         reduce: 'REDUCE 降仓执行', standby: 'STANDBY 观望' };
-  const TRANCHE_NAMES = ['试单', '确认', '顺势'];
-  const STAGE_IDX = { '2b_probe': 0, 'retest_confirm': 1, 'range_addon': 2 };
+  const QUAD_TXT = { main: '主仓 MAIN', probe: '试单 PROBE', confirm: '确认仓 CONFIRM',
+                     avoid: '不做 AVOID', standby: '观望 STANDBY' };
+  const QUAD_COLOR = { main: '#2ea043', probe: '#d29922', confirm: '#58a6ff',
+                       avoid: '#8b949e', standby: '#8b949e' };
+  const LOC_HIGH = 65, CERT_HIGH = 60;   // 与 config.AX_LOCATION_HIGH / AX_CERTAINTY_HIGH 保持一致
+  const REF_TXT = { '2b': '2B区域', retest: '回踩颈位', point3: '整理区点3', none: '' };
 
-  // 竖向价格阶梯：L1/L2/颈位/现价/止损/目标，止损区淡红、目标区淡绿，现价实线高亮
+  // 双轴象限图：X=位置分，Y=确定性分；四象限底色 + 阈值虚线 + 当前状态发光点
+  function drawQuad(d) {
+    const ctx = quadCv.getContext('2d');
+    const W = quadCv.width, H = quadCv.height;
+    const M = { l: 34, r: 10, t: 12, b: 26 };
+    const pw = W - M.l - M.r, ph = H - M.t - M.b;
+    const X = v => M.l + (v / 100) * pw;
+    const Y = v => M.t + (1 - v / 100) * ph;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(46,160,67,.13)';   // 右上：主仓
+    ctx.fillRect(X(LOC_HIGH), M.t, W - M.r - X(LOC_HIGH), Y(CERT_HIGH) - M.t);
+    ctx.fillStyle = 'rgba(210,153,34,.13)';  // 右下：试单
+    ctx.fillRect(X(LOC_HIGH), Y(CERT_HIGH), W - M.r - X(LOC_HIGH), H - M.b - Y(CERT_HIGH));
+    ctx.fillStyle = 'rgba(88,166,255,.13)';  // 左上：确认
+    ctx.fillRect(M.l, M.t, X(LOC_HIGH) - M.l, Y(CERT_HIGH) - M.t);
+    ctx.fillStyle = 'rgba(139,148,158,.10)'; // 左下：不做
+    ctx.fillRect(M.l, Y(CERT_HIGH), X(LOC_HIGH) - M.l, H - M.b - Y(CERT_HIGH));
+    ctx.strokeStyle = '#30363d'; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(X(LOC_HIGH), M.t); ctx.lineTo(X(LOC_HIGH), H - M.b); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(M.l, Y(CERT_HIGH)); ctx.lineTo(W - M.r, Y(CERT_HIGH)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(201,209,217,.55)';
+    ctx.textAlign = 'right';
+    ctx.fillText('主仓', W - M.r - 4, M.t + 12);
+    ctx.fillText('试单', W - M.r - 4, H - M.b - 4);
+    ctx.textAlign = 'left';
+    ctx.fillText('确认', M.l + 4, M.t + 12);
+    ctx.fillText('不做', M.l + 4, H - M.b - 4);
+    ctx.fillStyle = '#8b949e'; ctx.textAlign = 'center';
+    ctx.fillText('位置分 →', M.l + pw / 2, H - 8);
+    ctx.save(); ctx.translate(11, M.t + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText('确定性分 →', 0, 0); ctx.restore();
+    // 当前状态发光点（位置无法评估时画在左缘空心圈）
+    const locNone = d.location_score === null || d.location_score === undefined;
+    const cx = locNone ? M.l + 6 : X(Math.max(0, Math.min(100, d.location_score)));
+    const cy = Y(Math.max(0, Math.min(100, d.certainty_score || 0)));
+    const color = QUAD_COLOR[d.quadrant] || '#8b949e';
+    ctx.shadowColor = color; ctx.shadowBlur = 14;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    if (locNone) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.stroke();
+    }
+    const label = (d.quadrant_name || '') + (d.position_pct ? ' ' + d.position_pct + '%' : '');
+    ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = color;
+    const lw = ctx.measureText(label).width;
+    const leftSide = cx + 12 + lw > W - M.r;
+    ctx.textAlign = leftSide ? 'right' : 'left';
+    ctx.fillText(label, leftSide ? cx - 12 : cx + 12, cy - 10);
+  }
+
+  // 竖向价格阶梯（小图）：L1/L2/颈位/现价/止损/目标，止损区淡红、目标区淡绿
   function drawLadder(lad, direction) {
     const ctx = ladderCv.getContext('2d');
     const W = ladderCv.width, H = ladderCv.height;
@@ -1240,100 +1290,89 @@
     let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
     const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.001 || 1;
     lo -= pad; hi += pad;
-    const y = v => 16 + (hi - v) / (hi - lo) * (H - 32);
+    const y = v => 14 + (hi - v) / (hi - lo) * (H - 28);
     function band(a, b, color) {
       if (a === null || b === null || a === undefined || b === undefined) return;
       const y1 = y(a), y2 = y(b);
       ctx.fillStyle = color;
-      ctx.fillRect(52, Math.min(y1, y2), W - 58, Math.max(2, Math.abs(y2 - y1)));
+      ctx.fillRect(42, Math.min(y1, y2), W - 48, Math.max(2, Math.abs(y2 - y1)));
     }
-    band(lad.price, lad.stop, 'rgba(218,54,51,.10)');     // 现价→止损 淡红
-    band(lad.price, lad.target1, 'rgba(46,160,67,.10)');  // 现价→目标1 淡绿
+    band(lad.price, lad.stop, 'rgba(218,54,51,.10)');
+    band(lad.price, lad.target1, 'rgba(46,160,67,.10)');
     rows.forEach(r => {
       const key = r[0], label = r[1], color = r[2];
       const yy = y(lad[key]);
       ctx.strokeStyle = color;
-      ctx.setLineDash(key === 'price' ? [] : [5, 4]);
+      ctx.setLineDash(key === 'price' ? [] : [4, 3]);
       ctx.lineWidth = key === 'price' ? 2 : 1;
-      ctx.beginPath(); ctx.moveTo(52, yy); ctx.lineTo(W - 6, yy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(42, yy); ctx.lineTo(W - 4, yy); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = color; ctx.font = '11px sans-serif';
-      ctx.textAlign = 'left'; ctx.fillText(label, 4, yy + 3);
-      ctx.textAlign = 'right'; ctx.fillText(String(lad[key]), W - 8, yy - 3);
+      ctx.fillStyle = color; ctx.font = '10px sans-serif';
+      ctx.textAlign = 'left'; ctx.fillText(label, 3, yy + 3);
+      ctx.textAlign = 'right'; ctx.fillText(String(lad[key]), W - 6, yy - 3);
     });
   }
 
+  // 加减分明细：确定性分=带符号着色；位置分=蓝色数值
+  function renderDetail(el, title, score, items, kind) {
+    let html = '<div class="ds-title">' + title + '：' +
+      (score === null || score === undefined ? '—' : score) + ' 分</div>';
+    html += (items || []).map(i => {
+      if (kind === 'cer') {
+        const cls = i.delta >= 0 ? 'v-pos' : 'v-neg';
+        return '<div class="ds-row"><span>' + i.item + '</span><span class="' + cls + '">' +
+               (i.delta >= 0 ? '+' : '') + i.delta + '</span></div>';
+      }
+      return '<div class="ds-row"><span>' + i.item + '</span><span class="v-val">' +
+             (i.value === null || i.value === undefined ? '—' : i.value) + '</span></div>';
+    }).join('');
+    el.innerHTML = html;
+  }
+
+  const demoQ = new URLSearchParams(location.search).get('demo');   // mock 象限演示透传
   entryBtn.onclick = async () => {
     modalStrength.textContent = '检查中…';
     modalStrength.className = 'strength';
     modalStage.textContent = '';
     modalMode.textContent = '';
     modalSumm.textContent = '';
-    modalBody.style.display = '';
     modalWait.style.display = 'none';
     modalMask.classList.add('show');
     try {
-      const r = await fetch('/api/entry_check');
+      const r = await fetch('/api/entry_check' + (demoQ ? '?demo=' + encodeURIComponent(demoQ) : ''));
       const d = await r.json();
-      modalStrength.textContent = STRENGTH_TXT[d.strength] || d.strength || '--';
-      modalStrength.className = 'strength st-' + (d.strength || 'standby');
-      modalStage.textContent = (d.stage_name || '') +
-        (d.direction === 'long' ? ' · 做多' : d.direction === 'short' ? ' · 做空' : '');
+      modalStrength.textContent = QUAD_TXT[d.quadrant] || d.quadrant || '--';
+      modalStrength.className = 'strength st-' + (d.quadrant || 'standby');
+      const refTxt = REF_TXT[d.entry_point_ref] || '';
+      modalStage.textContent = (d.direction === 'long' ? '做多' : d.direction === 'short' ? '做空' : '方向不明') +
+        (refTxt ? ' · 参考入场点：' + refTxt : '');
       modalMode.textContent = d.mode_label ? '判定口径：' + d.mode_label : '';
       modalSumm.textContent = d.summary || '';
+      drawQuad(d);
       drawLadder(d.ladder || {}, d.direction);
 
-      // standby：隐藏批次/比例/触发区，中央大字说清等什么
-      if (d.stage === 'standby' || d.strength === 'standby') {
-        modalBody.style.display = 'none';
+      // 仓位条
+      modalPct.textContent = (d.position_pct || 0) + '%';
+      modalPct.style.color = QUAD_COLOR[d.quadrant] || 'var(--dim)';
+      modalFrac.style.width = (d.position_pct || 0) + '%';
+      modalFrac.style.background = QUAD_COLOR[d.quadrant] || 'var(--gray)';
+      // 止损基准
+      modalStop.innerHTML = d.stop
+        ? '止损 <b>' + d.stop.price + '</b>（' + d.stop.basis + '）'
+        : '止损 —（本象限不交易/无结构位）';
+      // 双分明细
+      const sd = d.scores_detail || {};
+      renderDetail(modalDetailLoc, '位置分', d.location_score, sd.location, 'loc');
+      renderDetail(modalDetailCer, '确定性分', d.certainty_score, sd.certainty, 'cer');
+      // avoid/standby：大字说清等什么
+      if (d.quadrant === 'avoid' || d.quadrant === 'standby') {
         modalWait.style.display = '';
-        modalWait.innerHTML = '⏳ ' + (d.wait_for || '暂无阶段') +
-          '<br><span style="font-size:13px">' + (d.summary || '') + '</span>';
-        beep('short');
-        return;
+        modalWait.innerHTML = '⏳ ' + (d.wait_for || d.summary || '');
       }
-
-      // 三批次卡片：当前批高亮，之前的标"已过"，之后的"待到来"
-      const cur = STAGE_IDX[d.stage] !== undefined ? STAGE_IDX[d.stage] : -1;
-      modalTranches.innerHTML = TRANCHE_NAMES.map((n, i) => {
-        const st = i === cur ? 'cur' : i < cur ? 'past' : 'todo';
-        const tag = i === cur ? '当前批' : i < cur ? '已过' : '待到来';
-        const frac = i === cur && d.tranche ? (d.tranche.fraction * 100).toFixed(0) + '%' : '';
-        return '<div class="trc ' + st + '"><div class="t-name">' + n +
-               '</div><div class="t-stage">' + tag + '</div><div class="t-frac">' + frac + '</div></div>';
-      }).join('');
-
-      // 仓位比例条
-      if (d.tranche) {
-        modalFracWrap.style.display = '';
-        modalFrac.style.width = (d.tranche.fraction * 100) + '%';
-        modalFrac.style.background = d.strength === 'reduce' ? 'var(--amber)'
-          : d.strength === 'strong' ? 'var(--green)' : 'var(--blue)';
-        modalFracLabel.textContent = '本批仓位比例 ' + (d.tranche.fraction * 100).toFixed(0) + '%' +
-          (d.tranche.note ? ' — ' + d.tranche.note : '');
-      } else modalFracWrap.style.display = 'none';
-
-      // 触发：已满足=绿勾；未满足=呼吸灯+"等触发"
-      if (d.trigger) {
-        modalTrigger.style.display = '';
-        modalTrigger.className = 'trig ' + (d.trigger.met ? 'met' : 'waiting');
-        modalTrigger.textContent = d.trigger.met ? '✓ ' + d.trigger.text : '◌ 等触发：' + d.trigger.text;
-      } else modalTrigger.style.display = 'none';
-
-      // 止损 + 目标行
-      let t = '';
-      if (d.stop) t += '止损 <b>' + d.stop.price + '</b>（' + d.stop.ticks + '跳 · ' + d.stop.basis + '）';
-      if (d.targets && d.targets.length) {
-        t += (t ? '<br>' : '') + d.targets.map((x, i) =>
-          '目标' + (i + 1) + ' <b>' + x.price + '</b>' + (x.rr ? '（RR ' + x.rr + '）' : '')).join('　');
-      }
-      modalTargets.innerHTML = t;
-
-      beep(d.strength === 'strong' ? 'long' : 'short');
+      beep(d.quadrant === 'main' ? 'long' : 'short');
     } catch (e) {
       modalStrength.textContent = '检查失败';
       modalStrength.className = 'strength st-standby';
-      modalBody.style.display = 'none';
       modalWait.style.display = '';
       modalWait.textContent = '后端未响应，请确认服务在运行。';
     }

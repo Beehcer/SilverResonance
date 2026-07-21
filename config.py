@@ -129,6 +129,39 @@ RANGE_LOOKBACK = 20
 # 整理收缩阈值：近 RANGE_LOOKBACK 根总振幅 ≤ 本系数×ATR 视为波动收缩（触发条件）
 RANGE_CONTRACT_ATR = 2.5
 
+# ==== 双轴评分引擎（entry_logic：位置分 × 确定性分 → 象限决策）====
+# 设计立场：位置优先 vs 确定性优先是两种入场逻辑（取舍立场），
+# 2B/回踩/点3 只是光谱上的入场点采样（坐标参考，不驱动决策）。
+# 唯一的"不做"区是双低象限（avoid），消灭"永远无法开仓"。
+# -- 象限阈值 --
+AX_LOCATION_HIGH = 65       # 位置分 ≥ 此值 = "位置好"（高位置半区）
+AX_CERTAINTY_HIGH = 60      # 确定性分 ≥ 此值 = "证据足"（高确定性半区）
+AX_CERT_DEGRADED = 45       # 无结构降级模式的确定性门槛（结构/确认分天然拿不到，阈值相应降低）
+# -- 位置分锚点（距离用 ATR(14) 度量）--
+AX_L2_ZONE_ATR = 0.5        # 现价贴 L2/强位 ±N×ATR 内 = 90–100 分
+AX_NECK_ZONE_ATR = 0.5      # 现价在颈位 ±N×ATR 内 = 55–70 分
+AX_EXTEND_ATR = 2.0         # 突破后延伸 >N×ATR = <30 分（之后每多 1×ATR 再减 10，地板 0）
+AX_BELOW_L2_SCORE = 15      # 跌破 L2（结构受损）时的位置基础分
+AX_RR_WEIGHT = 0.3          # 隐含盈亏比并入位置分的权重（RR≥2 满分 100，RR=1 得 50，<1 大幅减分）
+# -- 确定性分权重（证据计数加权，全部来自轨道B已有输出，不做新指标）--
+AX_CERT_STRUCTURE = 20      # 结构成立（pattern.found）
+AX_CERT_CONFIRM = 5         # 每条确认信号
+AX_CERT_CONFIRM_CAP = 15    # 确认信号加分上限
+AX_CERT_RSI_DIV = 10        # RSI 背离（最强确认，单独加权）
+AX_CERT_MOMENTUM = 5        # 动能三指标每条共振
+AX_CERT_MOMENTUM_CAP = 15   # 动能加分上限
+AX_CERT_VOL_OI = 10         # 仓量象限 healthy
+AX_CERT_DIR_GO = 15         # 轨道B方向与目标方向一致且 score≥75
+AX_CERT_DIR_WAIT = 8        # 轨道B score 55–74（方向未确认但结构分尚可）
+AX_CERT_SMALL_TF = 15       # 小周期验证通过（30分/3分级别企稳；数据缺则 0，不扣分）
+AX_CERT_FAKE_BREAKOUT = -15 # 假突破迹象（价破颈位但量不足，未见"放量突破颈位"确认）
+# -- 象限仓位比例（占计划总仓位 %）--
+AX_POS_MAIN_MIN = 75        # 双高主仓：按双分深度在 75–100% 内插
+AX_POS_MAIN_MAX = 100
+AX_POS_PROBE = 25           # 位置高+确定性低：试单仓（模糊区变明确仓位指令）
+AX_POS_CONFIRM = 50         # 确定性高+位置低：确认仓（配结构宽止损：颈位外侧 1×ATR）
+AX_CONFIRM_STOP_ATR = 1.0   # 确认仓宽止损：颈位外侧 N×ATR
+
 # ==== 天勤账号 ====
 # 分发版：账号不写在这里，由首次启动的配置页填入，存到 user_config.json。
 # 下面仅作为运行时默认占位，app.py 启动时会用用户配置覆盖。
