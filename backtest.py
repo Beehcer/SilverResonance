@@ -18,6 +18,13 @@ double_bottom.evaluate + entry_logic.detect_regime + entry_logic.decide。
   python backtest.py                          # 全量 11 品种 250 交易日
   python backtest.py --days 60 --symbols ag,rb   # 小样本验证
   python backtest.py --symbols ss,m,jm --append  # 分批跑后合并出总报告
+  python backtest.py --cache-only             # 只拉数写缓存 backtest/cache/，不回测
+  python backtest.py --variant A --variant-out backtest/variants/A.csv
+      # confirm 敏感性变体：复用缓存重放，不动 results.csv / report.md
+      --variant 支持预设别名 base/A/B/C/D，或逗号 token 自由组合：
+      cert70（confirm 确定性门槛）、minconf2（确认信号≥N 条）、
+      pullback（等回踩颈位 0.5×ATR 内入场，10 根放弃）、
+      w0.25（confirm 权重）、trendonly（震荡市 confirm 降级 probe）
 """
 import argparse
 import csv
@@ -105,13 +112,77 @@ def fetch_bars(api, preset, days, notes):
     return None, None
 
 
+# ---------------- 数据缓存（变体复测复用，避免重复下载） ----------------
+
+def cache_file(out_dir, symbol, days):
+    return os.path.join(out_dir, "cache", f"{symbol.replace('.', '_')}_{days}d.json")
+
+
+def load_cache(out_dir, symbol, days):
+    path = cache_file(out_dir, symbol, days)
+    if not os.path.exists(path):
+        return None, None
+    with open(path, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    return d["bars"], d["source"]
+
+
+def save_cache(out_dir, symbol, days, bars, source):
+    path = cache_file(out_dir, symbol, days)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"symbol": symbol, "days": days, "source": source, "bars": bars}, f)
+
+
+# ---------------- confirm 敏感性变体 ----------------
+
+VARIANT_ALIASES = {
+    "base": "",
+    "A": "cert70,minconf2",     # 收紧确认条件：确定性 ≥70 且确认信号 ≥2 条
+    "B": "pullback",            # 等回踩颈位 ±0.5×ATR 入场，10 根不回踩放弃
+    "C": "w0.25",               # 纯降权：confirm 0.5 → 0.25
+    "D": "trendonly",           # confirm 只在趋势市放行，震荡市降级 probe
+}
+
+
+def parse_variant(arg):
+    """--variant 字符串 → 变体参数 dict。别名或逗号 token 组合。"""
+    if not arg:
+        return None
+    s = VARIANT_ALIASES.get(arg, arg)
+    v = {"tag": arg}
+    for tok in [t.strip() for t in s.split(",") if t.strip()]:
+        if tok.startswith("cert"):
+            v["cert_min"] = float(tok[4:])
+        elif tok.startswith("minconf"):
+            v["min_confirms"] = int(tok[7:])
+        elif tok == "pullback":
+            v["pullback"] = True
+        elif tok.startswith("w"):
+            v["confirm_weight"] = float(tok[1:])
+        elif tok == "trendonly":
+            v["trend_only"] = True
+        else:
+            raise ValueError(f"未知 variant token：{tok}")
+    return v
+
+
 # ---------------- 无前视重放 ----------------
 
-def run_symbol(preset, bars, warmup, timeout_bars):
-    """单品种重放，返回逐笔交易列表。严格无前视：t 根收盘只用 bars[:t+1]。"""
+def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
+    """单品种重放，返回逐笔交易列表。严格无前视：t 根收盘只用 bars[:t+1]。
+    variant（confirm 敏感性）：只改 confirm 象限的放行/入场/权重，probe/main 逻辑不动。
+    info：可选 dict，回传过滤计数（gate_drop / pullback_expired / pullback_filled）。"""
+    variant = variant or {}
+    cert_min = variant.get("cert_min")
+    min_confirms = variant.get("min_confirms")
+    use_pullback = variant.get("pullback")
+    trend_only = variant.get("trend_only")
+    confirm_w = variant.get("confirm_weight", WEIGHTS["confirm"])
     tick = preset["tick"]
     trades = []
     pos = None
+    pending = None                    # pullback 模式下的待回踩 confirm 信号
     for t in range(warmup, len(bars)):
         bar = bars[t]
         if pos:
@@ -135,12 +206,68 @@ def run_symbol(preset, bars, warmup, timeout_bars):
                            "weighted_R": round(r * pos["weight"], 3)})
             pos = None
             continue
+        # ---- 空仓：pullback 待入场信号先检查（confirm 等回踩颈位 ±0.5×ATR）----
+        if pending:
+            if t > pending["expire"]:
+                pending = None
+                if info is not None:
+                    info["pullback_expired"] = info.get("pullback_expired", 0) + 1
+            else:
+                z = 0.5 * pending["atr"]
+                ref = pending["ref"]
+                if bar["low"] <= ref + z and bar["high"] >= ref - z and t + 1 < len(bars):
+                    entry = bars[t + 1]["open"]
+                    sgn = pending["sgn"]
+                    risk = (entry - pending["stop"]) * sgn
+                    if risk > 0:            # 回踩后次根开盘仍未越过止损 → 入场
+                        pos = {"entry_i": t + 1, "entry": entry, "stop": pending["stop"],
+                               "target": pending["target"], "sgn": sgn, "risk": risk,
+                               "weight": pending["weight"],
+                               "meta": {**pending["meta"], "entry_time": bars[t + 1]["dt"],
+                                        "entry_price": entry, "stop": pending["stop"],
+                                        "target": pending["target"]}}
+                        if info is not None:
+                            info["pullback_filled"] = info.get("pullback_filled", 0) + 1
+                    pending = None
+                    if pos:
+                        continue
         # ---- 空仓：跑引擎找信号（只用到 t，无前视）----
         kb = bars[:t + 1]
         ev = double_bottom.evaluate(kb)
         rg = entry_logic.detect_regime(kb)
-        d = entry_logic.decide(ev, bar["close"], atr=double_bottom._atr(kb), regime=rg)
-        if d["quadrant"] not in TRADE_QUADRANTS or d["direction"] not in ("long", "short") \
+        atr = double_bottom._atr(kb)
+        d = entry_logic.decide(ev, bar["close"], atr=atr, regime=rg)
+        quadrant = d["quadrant"]
+        p = ev["pattern"]
+        if quadrant == "confirm":
+            # 变体 A：收紧确认条件（确定性门槛上调 + 确认信号条数下限）
+            if cert_min is not None and (d["certainty_score"] or 0) < cert_min:
+                if info is not None:
+                    info["gate_drop"] = info.get("gate_drop", 0) + 1
+                continue
+            if min_confirms is not None:
+                plain = [c for c in (p.get("confirmations") or []) if "RSI" not in c]
+                if len(plain) < min_confirms:
+                    if info is not None:
+                        info["gate_drop"] = info.get("gate_drop", 0) + 1
+                    continue
+            # 变体 D：震荡市 confirm 降级为 probe（信号/止损不变，只降权重）
+            if trend_only and rg["regime"] == "range":
+                quadrant = "probe"
+            # 变体 B：confirm 不立即入场，挂起等回踩颈位（10 根内有效，先到先挂）
+            if quadrant == "confirm" and use_pullback:
+                if pending is None and d["stop"]:
+                    sgn = 1 if d["direction"] == "long" else -1
+                    t1 = (ev.get("plan") or {}).get("target1") \
+                        or round(2 * p["neck"] - p["L1"]["price"], 2)
+                    pending = {"ref": p["neck"], "atr": atr, "expire": t + 10,
+                               "sgn": sgn, "stop": d["stop"]["price"], "target": t1,
+                               "weight": confirm_w,
+                               "meta": {"symbol": preset["symbol"], "name": preset["name"],
+                                        "direction": d["direction"], "quadrant": "confirm",
+                                        "regime": rg["regime"], "weight": confirm_w}}
+                continue
+        if quadrant not in TRADE_QUADRANTS or d["direction"] not in ("long", "short") \
                 or not d["stop"] or t + 1 >= len(bars):
             continue
         entry = bars[t + 1]["open"]
@@ -149,14 +276,14 @@ def run_symbol(preset, bars, warmup, timeout_bars):
         risk = (entry - stop) * sgn
         if risk <= 0:                       # 次根开盘已越过止损，信号失效
             continue
-        p = ev["pattern"]
+        weight = confirm_w if quadrant == "confirm" else WEIGHTS[quadrant]
         t1 = (ev.get("plan") or {}).get("target1") \
             or round(2 * p["neck"] - p["L1"]["price"], 2)   # 丈量目标：2×颈位−L1（双向通用）
         pos = {"entry_i": t + 1, "entry": entry, "stop": stop, "target": t1,
-               "sgn": sgn, "risk": risk, "weight": WEIGHTS[d["quadrant"]],
+               "sgn": sgn, "risk": risk, "weight": weight,
                "meta": {"symbol": preset["symbol"], "name": preset["name"],
-                        "direction": d["direction"], "quadrant": d["quadrant"],
-                        "regime": rg["regime"], "weight": WEIGHTS[d["quadrant"]],
+                        "direction": d["direction"], "quadrant": quadrant,
+                        "regime": rg["regime"], "weight": weight,
                         "entry_time": bars[t + 1]["dt"], "entry_price": entry,
                         "stop": stop, "target": t1}}
     if pos:                                 # 数据末尾强平
@@ -282,6 +409,10 @@ def main():
     ap.add_argument("--out", type=str, default="backtest", help="输出目录（默认 backtest）")
     ap.add_argument("--append", action="store_true", help="追加到已有 results.csv 后合并出总报告")
     ap.add_argument("--report-only", action="store_true", help="不拉数，用既有结果重建报告")
+    ap.add_argument("--cache-only", action="store_true", help="只拉数写缓存 backtest/cache/，不回测")
+    ap.add_argument("--variant", type=str, default="",
+                    help="confirm 敏感性变体：base/A/B/C/D 或逗号 token（cert70,minconf2,pullback,w0.25,trendonly）")
+    ap.add_argument("--variant-out", type=str, default="", help="变体交易明细输出 csv 路径")
     args = ap.parse_args()
 
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.out)
@@ -322,33 +453,78 @@ def main():
         print("无可回测品种。")
         return 1
 
-    # 账号：仅脚本内使用，禁止输出
-    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_config.json")
-    with open(cfg_path, "r", encoding="utf-8-sig") as f:
-        auth = json.load(f)
-    from tqsdk import TqApi, TqAuth
-    api = TqApi(auth=TqAuth(auth.get("tq_user", ""), auth.get("tq_password", "")))
+    variant = parse_variant(args.variant) if args.variant else None
+    cache_only = args.cache_only
 
-    new_trades, quality, notes = [], [], []
+    # 缓存命中则不联网；仅在有品种缺缓存时才创建 TqApi（账号仅脚本内使用，禁止输出）
+    cached = {p["symbol"]: load_cache(out_dir, p["symbol"], args.days) for p in presets}
+    api = None
+    if any(v[0] is None for v in cached.values()):
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_config.json")
+        with open(cfg_path, "r", encoding="utf-8-sig") as f:
+            auth = json.load(f)
+        from tqsdk import TqApi, TqAuth
+        api = TqApi(auth=TqAuth(auth.get("tq_user", ""), auth.get("tq_password", "")))
+
+    new_trades, quality, notes, vinfo = [], [], [], {}
     try:
         for i, p in enumerate(presets):
             t0 = time.time()
-            bars, source = fetch_bars(api, p, args.days, notes)
+            bars, source = cached[p["symbol"]]
+            if bars is None:
+                bars, source = fetch_bars(api, p, args.days, notes)
+                if bars:
+                    save_cache(out_dir, p["symbol"], args.days, bars, source)
+                    time.sleep(args.sleep)      # 仅真实下载后限流
+            else:
+                source += "（缓存）"
             if not bars:
                 quality.append(f"{p['name']}（{p['symbol']}）：拉取失败，已跳过")
                 print(f"[{i + 1}/{len(presets)}] {p['name']} 拉取失败，跳过")
                 continue
-            trades = run_symbol(p, bars, args.warmup, args.timeout_bars)
+            if cache_only:
+                print(f"[{i + 1}/{len(presets)}] {p['name']} {source} {len(bars)}根 已缓存")
+                continue
+            trades = run_symbol(p, bars, args.warmup, args.timeout_bars,
+                                variant=variant, info=vinfo)
             new_trades.extend(trades)
             span = f"{bars[0]['dt']} ~ {bars[-1]['dt']}"
             quality.append(f"{p['name']}：{source}，{len(bars)} 根 1h（{span}），"
                            f"交易 {len(trades)} 笔，耗时 {time.time() - t0:.0f}s")
             print(f"[{i + 1}/{len(presets)}] {p['name']} {source} {len(bars)}根 "
                   f"→ {len(trades)} 笔（{time.time() - t0:.0f}s）")
-            if i < len(presets) - 1:
-                time.sleep(args.sleep)
     finally:
-        api.close()
+        if api is not None:
+            api.close()
+    if cache_only:
+        print("缓存完成。")
+        return 0
+
+    # 变体模式：只写变体明细 csv + 打印统计，不动 results.csv / quality.txt / report.md
+    if variant is not None:
+        s_all = stats_of(new_trades)
+        cf = [t for t in new_trades if t["quadrant"] == "confirm"]
+        s_cf = stats_of(cf)
+        print(f"\n[variant {variant['tag']}] 过滤计数：{vinfo or '无'}")
+        for label, s in (("confirm 象限", s_cf), ("系统总体", s_all)):
+            if s:
+                print(f"{label}：{s['n']} 笔 | 胜率 {fmt_pct(s['winrate'])} | "
+                      f"期望R {s['expR']:+.3f} | PF {fmt_pf(s['pf'])} | "
+                      f"连亏 {s['max_consec_loss']} | 累计R {s['cumR']:+.2f}")
+            else:
+                print(f"{label}：0 笔")
+        if args.variant_out:
+            vpath = args.variant_out
+            if not os.path.isabs(vpath):
+                vpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), vpath)
+            os.makedirs(os.path.dirname(vpath), exist_ok=True)
+            with open(vpath, "w", encoding="utf-8", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                w.writeheader()
+                for t in new_trades:
+                    w.writerow({k: t.get(k) for k in CSV_FIELDS})
+            print(f"变体明细：{vpath}")
+        return 0
     quality += [f"拉取备注：{n}" for n in notes]
 
     # 合并既有 CSV（--append 分批跑）
