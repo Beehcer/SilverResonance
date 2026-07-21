@@ -114,7 +114,7 @@ def _location_score(ev, kind, price, atr, sgn):
     # 隐含盈亏比：结构止损 = L2 外侧 DB_STOP_ATR×ATR；目标1 = 轨道B计划，缺则丈量目标
     stop_price = round(L2 - sgn * config.DB_STOP_ATR * atr, 2)
     plan = ev.get("plan") or {}
-    t1 = plan.get("target1") or round(neck + (neck - L1) * sgn, 2)
+    t1 = plan.get("target1") or round(2 * neck - L1, 2)   # 丈量目标：2×颈位−L1（双向通用）
     risk = abs(price - stop_price)
     rr = abs(t1 - price) / risk if risk else 0.0
     rr_score = min(100.0, 50.0 * rr)                       # RR≥2 满分；RR=1 得 50；<1 大幅减分

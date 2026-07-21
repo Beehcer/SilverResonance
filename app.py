@@ -354,8 +354,8 @@ def _stage_advice(kb, tbs, price):
     sgn = 1 if kind == "bottom" else -1   # 交易方向符号：做多 +1 / 做空 -1
     brk, brk_i, _ = double_bottom._breakout_info(kb, pattern, kind)
 
-    # 目标：优先轨道B计划，缺则丈量目标(颈位±形态高度)/最近强位补齐
-    t1 = (tbs or {}).get("target1") or round(neck + (neck - L1) * sgn, 2)
+    # 目标：优先轨道B计划，缺则丈量目标(2×颈位−L1，双向通用)/最近强位补齐
+    t1 = (tbs or {}).get("target1") or round(2 * neck - L1, 2)
     t2 = (tbs or {}).get("target2")
     if t2 is None and tbs and price:
         pool = tbs["track_b"]["resistance" if kind == "bottom" else "support"]
