@@ -18,6 +18,7 @@ PRESETS = [
     {"symbol": "SHFE.ss2608", "name": "不锈钢2608", "tick": 5.0,  "tick_value": 25.0},
     {"symbol": "DCE.m2609",   "name": "豆粕2609",   "tick": 1.0,  "tick_value": 10.0},
     {"symbol": "DCE.jm2609",  "name": "焦煤2609",   "tick": 0.5,  "tick_value": 30.0},
+    {"symbol": "CZCE.MA609",  "name": "甲醇609",    "tick": 1.0,  "tick_value": 10.0},   # 换月维护：609→701 时改此处
 ]
 
 

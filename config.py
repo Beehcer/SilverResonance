@@ -191,3 +191,34 @@ HOST = "127.0.0.1"
 PORT = 8848
 # 前端轮询间隔(毫秒)
 POLL_INTERVAL_MS = 1000
+
+# ==== 基本面模块（fundamentals.py：库存/基差/主力席位，akshare 数据源）====
+FUND_REFRESH_HOUR = 20      # 每日刷新时点（收盘结算数据盘后出齐）：20:30 后刷新一次
+FUND_REFRESH_MINUTE = 30
+FUND_HTTP_TIMEOUT = 20      # 单接口超时（秒）；超时/失败保留旧缓存并标注日期
+FUND_INV_TIMEOUT = 12       # 库存接口单品种超时（12 品种逐个拉，别太长）
+
+BROKER_WATCHLIST = [        # 席位动向关注名单：name=显示名，alias=交易所席位名匹配关键字
+    {"name": "高盛",   "alias": ["高盛", "乾坤"]},      # 高盛国内期货业务主体为乾坤期货
+    {"name": "东证",   "alias": ["东证"]},
+    {"name": "摩根大通", "alias": ["摩根大通", "摩根"]},
+]
+
+# 品种 → akshare 参数映射。键 = 品种代码（与 symbols.PRESETS 合约去数字后一致，大小写敏感）：
+#   inv   = futures_inventory_em 的中文品种名（None=该品种无库存接口数据）
+#   basis = futures_spot_price 返回表里的 symbol 品种代码
+#   exch/var = 持仓排名交易所与品种代码（dce 接口当前不可用，运行时降级"暂无数据"）
+FUND_MAP = {
+    "ag": {"inv": "白银",   "basis": "AG", "exch": "shfe", "var": "AG"},
+    "au": {"inv": "黄金",   "basis": "AU", "exch": "shfe", "var": "AU"},
+    "rb": {"inv": "螺纹钢", "basis": "RB", "exch": "shfe", "var": "RB"},
+    "SA": {"inv": "纯碱",   "basis": "SA", "exch": "czce", "var": "SA"},
+    "FG": {"inv": "玻璃",   "basis": "FG", "exch": "czce", "var": "FG"},
+    "bu": {"inv": "沥青",   "basis": "BU", "exch": "shfe", "var": "BU"},
+    "CF": {"inv": "棉花",   "basis": "CF", "exch": "czce", "var": "CF"},
+    "sp": {"inv": "纸浆",   "basis": "SP", "exch": "shfe", "var": "SP"},
+    "ss": {"inv": "不锈钢", "basis": "SS", "exch": "shfe", "var": "SS"},
+    "m":  {"inv": "豆粕",   "basis": "M",  "exch": "dce",  "var": "M"},
+    "jm": {"inv": "焦煤",   "basis": "JM", "exch": "dce",  "var": "JM"},
+    "MA": {"inv": "甲醇",   "basis": "MA", "exch": "czce", "var": "MA"},
+}

@@ -29,12 +29,12 @@
 ## 3. 架构（v2 双层监控）
 
 ```
-全局监控层：11 品种 × 3 条K线（15分/3分/1h）→ 每轮计算灯色 + 轨道B评分
+全局监控层：12 品种 × 3 条K线（15分/3分/1h）→ 每轮计算灯色 + 轨道B评分
 聚焦层：    当前查看品种额外挂 30秒触发腿 + 7 档多周期K线（懒加载）
 落盘：      每轮把全部品种快照原子写入 state/signals_state.json
 ```
 
-- 总订阅约 35–41 条（(品种,周期) 缓存复用），免费天勤账号可承受；若报订阅超限，调小 `config.py` 全局层参数或精简品种
+- 总订阅约 38–44 条（(品种,周期) 缓存复用），免费天勤账号可承受；若报订阅超限，调小 `config.py` 全局层参数或精简品种
 - 全局层轨道 A 是"两腿雷达"（趋势+过滤，无 30 秒触发腿）；聚焦品种才是完整三腿
 
 ## 4. openclaw 对接核心：`state/signals_state.json`
@@ -64,6 +64,13 @@
       },
       "lamp": "red|green|gray",
       "entry": 8115, "stop": 7945, "target1": 8270,
+      "fundamentals": {
+        "inventory_trend": "去库↓偏多|累库↑偏空|持平|null",
+        "basis_rate": 0.4,
+        "broker_flow": "东证偏多↑；高盛偏空↓",
+        "summary": "去库↓偏多 · 现货升水↑ · 东证偏多↑",
+        "date": "20260722", "stale": false
+      },
       "decision": {
         "quadrant": "main|probe|confirm|avoid|standby",
         "position_pct": 50,
@@ -95,15 +102,21 @@
   - `stop.price` / `stop.basis`：结构止损位与依据；`wait_for`：观望/不做时明说等什么（含价位）
   - 数据不足的品种降级为 `standby` + `wait_for` 说明，不会缺失该块
   - ⚠️ 命名说明：顶层 `entry/stop/target1` 是轨道B计划的**价格**（旧契约保留不变）；双轴决策块独立命名为 `decision`，openclaw 规则请引用 `decision.quadrant` / `decision.position_pct` / `decision.certainty_score` / `decision.trigger_met` / `decision.stop.price`
+- `fundamentals`：基本面摘要（akshare 日频，后台线程每日 20:30 后刷新，失败保留旧缓存 `stale=true`）：
+  - `inventory_trend`：库存近 5 期趋势（去库↓偏多 / 累库↑偏空 / 持平；无数据为 null）
+  - `basis_rate`：基差率 %（现货−期货，正=现货升水偏多 / 负=贴水；|率|≤1% 视为平水）
+  - `broker_flow`：关注席位（高盛/东证/摩根大通，config.BROKER_WATCHLIST 可配）日度多/空持仓变化方向；席位未上前 20 榜或大商所品种（接口不可用）为 null
+  - `summary`：三维度合成一句话，可直接用于推送文案
 - `reasons`：人话理由，可直接用于推送文案
 
 ## 5. 面板 HTTP API（备用，优先读 state 文件）
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/overview` | GET | 11 品种总览卡片数据（灯色/评分/方向/理由） |
+| `/api/overview` | GET | 12 品种总览卡片数据（灯色/评分/方向/理由/基本面摘要） |
 | `/api/state` | GET | 当前聚焦品种完整状态 |
 | `/api/symbols` | GET | 品种清单（代码/中文名/tick） |
+| `/api/fundamentals` | GET | `?symbol=X` 该品种库存/基差/席位动向（读后台日频缓存，不阻塞） |
 | `/api/symbol` | POST | 热切换聚焦品种，body `{"symbol": "SHFE.rb2610"}` |
 | `/api/periods` | GET | 共振周期组合清单 |
 | `/api/period` | POST | 切换共振组合（scalp/swing/position） |

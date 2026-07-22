@@ -43,15 +43,6 @@
     <label>天勤密码</label>
     <input type="password" id="tq_password" placeholder="仅保存在本机 user_config.json" autocomplete="off">
 
-    <label>合约 <span class="hint">下拉选常用品种，换月时改这里；也可选"自定义"手填代码</span></label>
-    <select id="symbol_select">
-      {% for p in presets %}
-      <option value="{{ p.symbol }}">{{ p.name }} · {{ p.symbol }}</option>
-      {% endfor %}
-      <option value="__custom__">自定义（手填代码）</option>
-    </select>
-    <input type="text" id="symbol" value="{{ symbol }}" placeholder="如 SHFE.ag2608" style="display:none; margin-top:6px;">
-
     <div class="row-check">
       <input type="checkbox" id="mock_mode">
       <label for="mock_mode" style="margin:0;">仅预览界面（模拟数据，不连行情，不用账号）</label>
@@ -70,22 +61,6 @@
   const $ = id => document.getElementById(id);
   const msg = $('msg');
 
-  // 合约下拉：当前值命中预设则选中；否则走"自定义"并显示输入框
-  const sel = $('symbol_select'), symInput = $('symbol');
-  const presetVals = Array.from(sel.options).map(o => o.value);
-  const cur = symInput.value.trim();
-  if (cur && presetVals.includes(cur)) {
-    sel.value = cur;
-  } else {
-    sel.value = '__custom__';
-    symInput.style.display = 'block';
-  }
-  sel.onchange = () => {
-    const custom = sel.value === '__custom__';
-    symInput.style.display = custom ? 'block' : 'none';
-    if (!custom) symInput.value = sel.value;  // 选预设时同步到保存字段
-  };
-
   // 勾选模拟模式时禁用账号输入
   $('mock_mode').onchange = e => {
     const m = e.target.checked;
@@ -97,7 +72,7 @@
     const body = {
       tq_user: $('tq_user').value.trim(),
       tq_password: $('tq_password').value.trim(),
-      symbol: $('symbol').value.trim() || 'SHFE.ag2608',
+      // 品种选择已移除（v2 多品种总览后无需指定），后端默认取预设第一个
       mock_mode: mock,
     };
     if (!mock && (!body.tq_user || !body.tq_password)) {

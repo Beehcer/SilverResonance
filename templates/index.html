@@ -258,6 +258,32 @@
   .db-light.on .db-dot { background: var(--amber); box-shadow: 0 0 6px rgba(210,153,34,.7); }
   .db-reasons { font-size: 11px; color: var(--dim); line-height: 1.7; }
 
+  /* 基本面三卡（库存/基差/席位，可折叠，深色一致） */
+  .fund-card { margin-top: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .fund-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; user-select: none; }
+  .fund-title { font-size: 13px; font-weight: 700; }
+  .fund-sum { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fund-toggle { margin-left: auto; font-size: 11px; color: var(--dim); flex-shrink: 0; }
+  .fund-body { display: flex; gap: 10px; padding: 0 12px 12px; }
+  .fund-body.hide { display: none; }
+  .fund-item { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; }
+  .fund-item .fi-t { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
+  .fi-big { font-size: 22px; font-weight: 800; line-height: 1.2; }
+  .fi-sub { font-size: 11px; color: var(--dim); margin-top: 4px; line-height: 1.5; }
+  .fi-up { color: #da3633; }   /* 涨红 */
+  .fi-down { color: #2ea043; } /* 跌绿 */
+  .fi-bars { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin-top: 8px; }
+  .fi-bar { flex: 1; border-radius: 2px 2px 0 0; background: #388bfd; opacity: .85; min-height: 2px; }
+  .fi-tag { display: inline-block; font-size: 11px; border-radius: 4px; padding: 1px 6px; margin-top: 4px; }
+  .fi-badge { display: inline-block; font-size: 11px; border: 1px solid var(--line); border-radius: 10px;
+    padding: 2px 8px; margin: 2px 4px 2px 0; background: var(--bg); }
+  .fi-badge.b-long { border-color: #da3633; color: #da3633; }
+  .fi-badge.b-short { border-color: #2ea043; color: #2ea043; }
+  .fi-badge.b-flat { color: var(--dim); }
+  .fi-none { color: var(--dim); font-size: 12px; padding: 8px 0; }
+  @media (max-width: 900px) { .fund-body { flex-direction: column; } }
+
   /* 总览视图：全品种信号卡片网格 */
   #overview-view { max-width: 1400px; margin: 0 auto; }
   .ov-head { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
@@ -446,6 +472,20 @@
             <div class="db-sec" id="db-momentum"></div>
             <div class="db-sec" id="db-plan"></div>
             <div class="db-sec db-reasons" id="db-reasons"></div>
+          </div>
+        </div>
+
+        <!-- 基本面三卡：库存 / 基差 / 席位动向（akshare 日频数据，可折叠） -->
+        <div class="fund-card" id="fund-card">
+          <div class="fund-head" id="fund-head">
+            <span class="fund-title">基本面 · 库存/基差/席位</span>
+            <span class="fund-sum" id="fund-sum">加载中…</span>
+            <span class="fund-toggle" id="fund-toggle">收起 ▾</span>
+          </div>
+          <div class="fund-body" id="fund-body">
+            <div class="fund-item" id="fund-inv"><div class="fi-t">库存（交易所周度）</div><div class="fi-none">加载中…</div></div>
+            <div class="fund-item" id="fund-basis"><div class="fi-t">基差（现货 − 期货）</div><div class="fi-none">加载中…</div></div>
+            <div class="fund-item" id="fund-broker"><div class="fi-t">关注席位动向（日度）</div><div class="fi-none">加载中…</div></div>
           </div>
         </div>
       </div>
@@ -895,7 +935,65 @@
     currentSymbol = sym;
     if (symbolSwitch.value !== sym) symbolSwitch.value = sym;
     document.title = '多品种期货信号监控 · ' + sym;
+    loadFund();
   }
+
+  // ===== 基本面三卡（库存/基差/席位，akshare 日频缓存） =====
+  let fundTimer = null;
+  async function loadFund() {
+    try {
+      const d = await (await fetch('/api/fundamentals?symbol=' + encodeURIComponent(currentSymbol))).json();
+      renderFund(d);
+    } catch (e) { /* 下轮再试 */ }
+  }
+  function renderFund(d) {
+    document.getElementById('fund-sum').textContent =
+      (d.summary || '暂无数据') + (d.stale ? '（旧缓存 ' + (d.date || '') + '）' : (d.date ? '（' + d.date + '）' : ''));
+    // ---- 库存卡：大数字 + 增减箭头 + 近5期迷你柱 ----
+    const invEl = document.getElementById('fund-inv');
+    const inv = d.inventory;
+    if (inv && inv.latest != null) {
+      const up = inv.delta >= 0;
+      const maxV = Math.max(...inv.series, 1);
+      invEl.innerHTML = `<div class="fi-t">库存（近5期趋势：${inv.trend}）</div>
+        <div class="fi-big">${Number(inv.latest).toLocaleString()}</div>
+        <div class="fi-sub">较上期 <span class="${up ? 'fi-up' : 'fi-down'}">${up ? '▲ +' : '▼ '}${Number(inv.delta).toLocaleString()}</span></div>
+        <div class="fi-bars">${inv.series.map(v => `<div class="fi-bar" style="height:${Math.max(4, v / maxV * 100)}%"></div>`).join('')}</div>`;
+    } else {
+      invEl.innerHTML = '<div class="fi-t">库存</div><div class="fi-none">暂无数据</div>';
+    }
+    // ---- 基差卡：基差率大字带色 + 现货/期货小字 + 升贴水标签 ----
+    const bEl = document.getElementById('fund-basis');
+    const b = d.basis;
+    if (b && b.basis_rate != null) {
+      const up = b.basis_rate > 0;
+      const tagCls = Math.abs(b.basis_rate) <= 1 ? '' : (up ? 'fi-up' : 'fi-down');
+      bEl.innerHTML = `<div class="fi-t">基差（现货 − 期货）</div>
+        <div class="fi-big ${tagCls}">${up ? '+' : ''}${b.basis_rate}%</div>
+        <div class="fi-tag ${tagCls}" style="border:1px solid currentColor">${b.tag || ''}</div>
+        <div class="fi-sub">现货 ${Number(b.spot).toLocaleString()} · 主力 ${Number(b.future).toLocaleString()}<br>基差 ${up ? '+' : ''}${Number(b.basis).toLocaleString()}</div>`;
+    } else {
+      bEl.innerHTML = '<div class="fi-t">基差（现货 − 期货）</div><div class="fi-none">暂无数据</div>';
+    }
+    // ---- 席位卡：关注席位横向 badge ----
+    const kEl = document.getElementById('fund-broker');
+    const brs = d.brokers || [];
+    if (brs.length) {
+      kEl.innerHTML = '<div class="fi-t">关注席位动向（日度增减）</div>' + brs.map(x => {
+        const cls = x.tag === '偏多↑' ? 'b-long' : (x.tag === '偏空↓' ? 'b-short' : 'b-flat');
+        const fmt = v => (v == null ? '--' : (v >= 0 ? '+' : '') + Number(v).toLocaleString());
+        return `<span class="fi-badge ${cls}">${x.name} ${x.tag}<br><span style="font-size:10px">多${fmt(x.long_chg)} 空${fmt(x.short_chg)}</span></span>`;
+      }).join('');
+    } else {
+      kEl.innerHTML = `<div class="fi-t">关注席位动向（日度）</div><div class="fi-none">${(d.note && d.note.includes('席位')) ? d.note : '暂无数据（席位未上前20榜）'}</div>`;
+    }
+  }
+  document.getElementById('fund-head').onclick = () => {
+    const body = document.getElementById('fund-body');
+    body.classList.toggle('hide');
+    document.getElementById('fund-toggle').textContent = body.classList.contains('hide') ? '展开 ▸' : '收起 ▾';
+  };
+
   async function focusSymbol(sym) {
     if (!sym) return;
     if (sym !== currentSymbol) {
@@ -949,6 +1047,7 @@
         <div class="ov-row"><span>轨道A</span><b style="color:${lampColor}">${lampTxt}</b>
           <span style="margin-left:auto">轨道B</span><b style="color:${sc};font-size:15px">${score != null ? score : '--'}</b></div>
         <div class="ov-reason">${(c.reasons && c.reasons[0]) || ''} ${rgTag}</div>
+        ${c.fundamentals && c.fundamentals.summary ? `<div class="ov-row" style="margin-top:4px;font-size:11px"><span>基本面</span><b style="font-weight:400;color:#c9d1d9">${c.fundamentals.summary}${c.fundamentals.stale ? '（旧）' : ''}</b></div>` : ''}
       </div>`;
     }).join('');
     grid.querySelectorAll('.ov-card').forEach(el => {
@@ -1446,6 +1545,8 @@
   setInterval(poll, POLL_MS);
   pollBoot();
   loadCombos();
+  loadFund();
+  fundTimer = setInterval(loadFund, 60000);   // 基本面为日频数据，分钟级轮询足够
   showOverview();   // 默认落地总览页
 </script></body>
 </html>

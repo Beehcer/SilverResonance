@@ -21,6 +21,7 @@ import resonance
 import symbols
 import double_bottom
 import entry_logic
+import fundamentals
 import user_settings
 
 
@@ -754,7 +755,7 @@ def _decision_for(sym, price, tf_direction, tf_trigger_ok):
         return _decision_standby(f"决策计算异常：{type(e).__name__}")
 
 
-def _collecting_entry(name):
+def _collecting_entry(name, sym=None):
     """数据不足时的占位条目（总览页降级显示"数据收集中"）。"""
     return {
         "name": name, "price": None,
@@ -766,6 +767,7 @@ def _collecting_entry(name):
         "regime": None,
         "lamp": "gray", "entry": None, "stop": None, "target1": None,
         "decision": _decision_standby("数据收集中…"),
+        "fundamentals": fundamentals.state_block(sym) if sym else None,
         "reasons": ["数据收集中…"],
     }
 
@@ -791,7 +793,7 @@ def _global_pass(bar_getter, focus_track_a=None, focus_trigger=None):
         except Exception:  # noqa: BLE001 单品种失败跳过，不拖垮全局
             continue
         if len(kt) < config.MA_SLOW + config.TREND_SLOPE_LOOKBACK or len(kb) < 40:
-            _set_overview(sym, _collecting_entry(name))
+            _set_overview(sym, _collecting_entry(name, sym))
             continue
         # 轨道A两腿雷达（全局层没有30秒触发腿，聚焦品种由主流程覆盖为三腿结果）
         direction = resonance.trend_direction(kt)
@@ -827,6 +829,7 @@ def _global_pass(bar_getter, focus_track_a=None, focus_trigger=None):
             "lamp": _lamp_of(track_a),
             "entry": tb["entry"], "stop": tb["stop"], "target1": tb["target1"],
             "decision": _decision_for(sym, price, tf_direction, tf_trigger_ok),
+            "fundamentals": fundamentals.state_block(sym),
             "reasons": tb["reasons"],
         })
 
@@ -1041,7 +1044,7 @@ def _tqsdk_loop():
 
         _set_boot("loading", 60, "正在拉取K线…")
         # K线订阅缓存：(品种,周期)->serial。切换组合/品种/查看多周期时复用，避免重复订阅。
-        # 订阅数估算：全局层 11品种×3周期=33 条（聚焦品种的与全局复用同key），
+        # 订阅数估算：全局层 12品种×3周期=36 条（聚焦品种的与全局复用同key），
         # 聚焦品种额外只有 30秒触发腿 + 前端查看过的多周期（≤7条）。
         _serials = {}
 
@@ -1192,7 +1195,7 @@ def apply_user_settings():
 
 
 def start_data_thread():
-    """启动行情线程（只启动一次）。"""
+    """启动行情线程 + 基本面后台线程（各只启动一次）。"""
     global _data_thread
     with _thread_lock:
         if _data_thread and _data_thread.is_alive():
@@ -1200,6 +1203,7 @@ def start_data_thread():
         target = _mock_loop if config.MOCK_MODE else _tqsdk_loop
         _data_thread = threading.Thread(target=target, daemon=True)
         _data_thread.start()
+    fundamentals.start()
 
 
 # ---------------- 路由 ----------------
@@ -1230,12 +1234,12 @@ def api_config():
         s = user_settings.load_settings()
         s.pop("tq_password", None)  # 不回传密码
         return jsonify(s)
-    # POST：保存配置 → 应用 → 启动行情线程
+    # POST：保存配置 → 应用 → 启动行情线程（symbol 保留兼容：空则取预设第一个）
     data = request.get_json(force=True, silent=True) or {}
     user_settings.save_settings({
         "tq_user": (data.get("tq_user") or "").strip(),
         "tq_password": (data.get("tq_password") or "").strip(),
-        "symbol": (data.get("symbol") or "").strip(),
+        "symbol": (data.get("symbol") or "").strip() or symbols.PRESETS[0]["symbol"],
         "mock_mode": bool(data.get("mock_mode", False)),
     })
     apply_user_settings()
@@ -1276,7 +1280,7 @@ def api_overview():
     """总览页卡片数据：全部预设品种快照（数据未就绪的品种给占位卡）。"""
     with _overview_lock:
         ov = dict(_overview)
-    cards = [{"symbol": p["symbol"], **(ov.get(p["symbol"]) or _collecting_entry(p["name"]))}
+    cards = [{"symbol": p["symbol"], **(ov.get(p["symbol"]) or _collecting_entry(p["name"], p["symbol"]))}
              for p in symbols.PRESETS]
     # 聚焦品种是预设外的自定义合约时，也补一张卡
     known = [p["symbol"] for p in symbols.PRESETS]
@@ -1355,6 +1359,13 @@ def api_entry_check():
     if demo and config.MOCK_MODE and demo in _DEMO_EV:
         return jsonify(_demo_entry_check(demo))
     return jsonify(_entry_check())
+
+
+@app.route("/api/fundamentals")
+def api_fundamentals():
+    """基本面：?symbol=X 该品种的库存/基差/席位动向（缺省聚焦品种）。不阻塞，读后台缓存。"""
+    sym = (request.args.get("symbol") or config.SYMBOL).strip()
+    return jsonify({"symbol": sym, "meta": fundamentals.meta(), **fundamentals.get(sym)})
 
 
 def _open_browser_later():

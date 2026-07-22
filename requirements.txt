@@ -1,3 +1,4 @@
 tqsdk>=3.4.0
 flask>=3.0.0
 pandas>=2.0.0
+akshare>=1.16.0
