@@ -947,8 +947,28 @@
     } catch (e) { /* 下轮再试 */ }
   }
   function renderFund(d) {
-    document.getElementById('fund-sum').textContent =
-      (d.summary || '暂无数据') + (d.stale ? '（旧缓存 ' + (d.date || '') + '）' : (d.date ? '（' + d.date + '）' : ''));
+    const refreshing = d.meta && d.meta.refreshing;
+    const errs = d.errors || {};
+    const emptyAll = !d.inventory && !d.basis && !(d.brokers || []).length;
+    // 头部：刷新中且无数据 → 加载中；否则摘要 + 日期/旧缓存标注
+    let head;
+    if (refreshing && emptyAll) head = '加载中…（首次拉取约 1–3 分钟）';
+    else {
+      head = d.summary || '暂无数据';
+      if (d.stale) head += '（旧缓存' + (d.date ? ' ' + d.date : '') + '）';
+      else if (d.date) head += '（' + d.date + '）';
+      if (refreshing) head += ' · 刷新中…';
+      if (d.meta && d.meta.last_error) head += ' · 上次异常：' + d.meta.last_error;
+    }
+    document.getElementById('fund-sum').textContent = head;
+    // 卡片空态：区分 刷新中 / 拉取失败(含原因) / 真无数据
+    const emptyHtml = (label, err) => {
+      if (refreshing && !d.stale) return `<div class="fi-t">${label}</div><div class="fi-none">加载中…</div>`;
+      if (err && err !== '交易所未公布')
+        return `<div class="fi-t">${label}</div><div class="fi-none">拉取失败：${err}</div>`;
+      return `<div class="fi-t">${label}</div><div class="fi-none">${err || '交易所未公布'}</div>`;
+    };
+    const staleLine = err => (d.stale && err) ? `<div class="fi-sub" style="color:#d29922">${err}，显示旧缓存</div>` : '';
     // ---- 库存卡：大数字 + 增减箭头 + 近5期迷你柱 ----
     const invEl = document.getElementById('fund-inv');
     const inv = d.inventory;
@@ -958,9 +978,9 @@
       invEl.innerHTML = `<div class="fi-t">库存（近5期趋势：${inv.trend}）</div>
         <div class="fi-big">${Number(inv.latest).toLocaleString()}</div>
         <div class="fi-sub">较上期 <span class="${up ? 'fi-up' : 'fi-down'}">${up ? '▲ +' : '▼ '}${Number(inv.delta).toLocaleString()}</span></div>
-        <div class="fi-bars">${inv.series.map(v => `<div class="fi-bar" style="height:${Math.max(4, v / maxV * 100)}%"></div>`).join('')}</div>`;
+        <div class="fi-bars">${inv.series.map(v => `<div class="fi-bar" style="height:${Math.max(4, v / maxV * 100)}%"></div>`).join('')}</div>${staleLine(errs.inventory)}`;
     } else {
-      invEl.innerHTML = '<div class="fi-t">库存</div><div class="fi-none">暂无数据</div>';
+      invEl.innerHTML = emptyHtml('库存', errs.inventory);
     }
     // ---- 基差卡：基差率大字带色 + 现货/期货小字 + 升贴水标签 ----
     const bEl = document.getElementById('fund-basis');
@@ -971,9 +991,9 @@
       bEl.innerHTML = `<div class="fi-t">基差（现货 − 期货）</div>
         <div class="fi-big ${tagCls}">${up ? '+' : ''}${b.basis_rate}%</div>
         <div class="fi-tag ${tagCls}" style="border:1px solid currentColor">${b.tag || ''}</div>
-        <div class="fi-sub">现货 ${Number(b.spot).toLocaleString()} · 主力 ${Number(b.future).toLocaleString()}<br>基差 ${up ? '+' : ''}${Number(b.basis).toLocaleString()}</div>`;
+        <div class="fi-sub">现货 ${Number(b.spot).toLocaleString()} · 主力 ${Number(b.future).toLocaleString()}<br>基差 ${up ? '+' : ''}${Number(b.basis).toLocaleString()}</div>${staleLine(errs.basis)}`;
     } else {
-      bEl.innerHTML = '<div class="fi-t">基差（现货 − 期货）</div><div class="fi-none">暂无数据</div>';
+      bEl.innerHTML = emptyHtml('基差（现货 − 期货）', errs.basis);
     }
     // ---- 席位卡：关注席位横向 badge ----
     const kEl = document.getElementById('fund-broker');
@@ -983,9 +1003,9 @@
         const cls = x.tag === '偏多↑' ? 'b-long' : (x.tag === '偏空↓' ? 'b-short' : 'b-flat');
         const fmt = v => (v == null ? '--' : (v >= 0 ? '+' : '') + Number(v).toLocaleString());
         return `<span class="fi-badge ${cls}">${x.name} ${x.tag}<br><span style="font-size:10px">多${fmt(x.long_chg)} 空${fmt(x.short_chg)}</span></span>`;
-      }).join('');
+      }).join('') + staleLine(errs.brokers);
     } else {
-      kEl.innerHTML = `<div class="fi-t">关注席位动向（日度）</div><div class="fi-none">${(d.note && d.note.includes('席位')) ? d.note : '暂无数据（席位未上前20榜）'}</div>`;
+      kEl.innerHTML = emptyHtml('关注席位动向（日度）', errs.brokers);
     }
   }
   document.getElementById('fund-head').onclick = () => {

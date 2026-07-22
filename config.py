@@ -209,13 +209,13 @@ BROKER_WATCHLIST = [        # 席位动向关注名单：name=显示名，alias=
 #   basis = futures_spot_price 返回表里的 symbol 品种代码
 #   exch/var = 持仓排名交易所与品种代码（dce 接口当前不可用，运行时降级"暂无数据"）
 FUND_MAP = {
-    "ag": {"inv": "白银",   "basis": "AG", "exch": "shfe", "var": "AG"},
-    "au": {"inv": "黄金",   "basis": "AU", "exch": "shfe", "var": "AU"},
+    "ag": {"inv": "沪银",   "basis": "AG", "exch": "shfe", "var": "AG"},
+    "au": {"inv": "沪金",   "basis": "AU", "exch": "shfe", "var": "AU"},
     "rb": {"inv": "螺纹钢", "basis": "RB", "exch": "shfe", "var": "RB"},
     "SA": {"inv": "纯碱",   "basis": "SA", "exch": "czce", "var": "SA"},
     "FG": {"inv": "玻璃",   "basis": "FG", "exch": "czce", "var": "FG"},
     "bu": {"inv": "沥青",   "basis": "BU", "exch": "shfe", "var": "BU"},
-    "CF": {"inv": "棉花",   "basis": "CF", "exch": "czce", "var": "CF"},
+    "CF": {"inv": "郑棉",   "basis": "CF", "exch": "czce", "var": "CF"},
     "sp": {"inv": "纸浆",   "basis": "SP", "exch": "shfe", "var": "SP"},
     "ss": {"inv": "不锈钢", "basis": "SS", "exch": "shfe", "var": "SS"},
     "m":  {"inv": "豆粕",   "basis": "M",  "exch": "dce",  "var": "M"},

@@ -21,6 +21,20 @@ for pkg in ("tqsdk", "pandas", "numpy", "shinny_structlog", "simplejson",
     except Exception:
         pass
 
+# akshare（基本面模块）及其动态依赖：缺了会让 fundamentals 线程在 exe 里静默崩溃
+# （实测根因 2026-07：exe 内 import akshare 失败 → 三卡全"暂无数据"）
+for pkg in ("akshare", "bs4", "soupsieve", "lxml", "html5lib", "openpyxl", "xlrd",
+            "jsonpath", "py_mini_racer", "curl_cffi", "requests", "urllib3",
+            "charset_normalizer", "idna", "decorator", "tabulate", "tqdm",
+            "et_xmlfile", "websocket"):
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception:
+        pass
+
 hiddenimports += collect_submodules("tqsdk")
 
 a = Analysis(

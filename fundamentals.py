@@ -61,13 +61,20 @@ def _num(x):
         return None
 
 
+def _log(msg):
+    """控制台日志（exe 保留 console，打包/排障可见）。"""
+    print(f"[fundamentals {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
 def _with_timeout(fn, timeout):
-    """子线程执行 fn，超时返回 None（akshare 部分接口会挂起，绝不阻塞主流程）。"""
+    """子线程执行 fn，返回 (结果, 错误简述)。超时/异常不阻塞主流程，错误可见。"""
     ex = cf.ThreadPoolExecutor(max_workers=1)
     try:
-        return ex.submit(fn).result(timeout=timeout)
-    except Exception:  # noqa: BLE001 超时/接口异常都按无数据处理
-        return None
+        return ex.submit(fn).result(timeout=timeout), None
+    except cf.TimeoutError:
+        return None, f"接口超时(>{timeout}s)"
+    except Exception as e:  # noqa: BLE001 接口异常按无数据处理，原因透出
+        return None, f"{type(e).__name__}: {str(e)[:60]}"
     finally:
         ex.shutdown(wait=False)
 
@@ -113,10 +120,10 @@ def _save_cache():
 
 # ---------------- 空数据占位 ----------------
 
-def _empty_entry(note="暂无数据"):
-    return {"date": None, "stale": False,
+def _empty_entry(note="暂无数据", status="empty"):
+    return {"date": None, "stale": False, "status": status,
             "inventory": None, "basis": None, "brokers": [],
-            "note": note, "summary": note}
+            "errors": {}, "note": note, "summary": note}
 
 
 def _inv_trend(series):
@@ -170,39 +177,41 @@ def _entry_summary(entry):
 # ---------------- akshare 拉取（真实模式） ----------------
 
 def _fetch_inventory(cn_name):
-    """futures_inventory_em → {latest, delta, series(近5期), trend}；失败 None。"""
+    """futures_inventory_em → ({latest, delta, series(近5期), trend}, None) 或 (None, 原因)。"""
     import akshare as ak
-    df = _with_timeout(lambda: ak.futures_inventory_em(symbol=cn_name), config.FUND_INV_TIMEOUT)
+    df, err = _with_timeout(lambda: ak.futures_inventory_em(symbol=cn_name), config.FUND_INV_TIMEOUT)
+    if err:
+        return None, err
     if df is None or not hasattr(df, "columns") or "库存" not in df.columns:
-        return None
+        return None, "交易所未公布"
     df = df.dropna(subset=["库存"])
     nonzero = df[df["库存"] != 0]
     if not nonzero.empty:
         df = nonzero
     df = df.tail(6)
     if df.empty:
-        return None
+        return None, "交易所未公布"
     vals = [float(v) for v in df["库存"].tolist()]
     last, delta = vals[-1], (vals[-1] - vals[-2] if len(vals) >= 2 else 0)
     series = vals[-5:]
-    return {"latest": last, "delta": delta, "series": series, "trend": _inv_trend(series)}
+    return {"latest": last, "delta": delta, "series": series, "trend": _inv_trend(series)}, None
 
 
 def _fetch_basis_all():
-    """futures_spot_price → {品种代码: {spot, future, basis, basis_rate, tag, date}}；失败 {}。"""
+    """futures_spot_price → ({品种代码: {...}}, None) 或 ({}, 原因)。"""
     import akshare as ak
     date = _recent_trade_date()
-    df = _with_timeout(lambda: ak.futures_spot_price(date), config.FUND_HTTP_TIMEOUT)
+    df, err = _with_timeout(lambda: ak.futures_spot_price(date), config.FUND_HTTP_TIMEOUT)
     for back in range(1, 6):                    # 当日无数据往前找 5 天
         if df is not None and hasattr(df, "columns") and not df.empty:
             break
         d = (datetime.strptime(date, "%Y%m%d") - timedelta(days=back)).strftime("%Y%m%d")
-        df = _with_timeout(lambda: ak.futures_spot_price(d), config.FUND_HTTP_TIMEOUT)
+        df, err = _with_timeout(lambda: ak.futures_spot_price(d), config.FUND_HTTP_TIMEOUT)
         if df is not None and hasattr(df, "columns") and not df.empty:
             date = d
             break
     if df is None or not hasattr(df, "columns") or df.empty:
-        return {}
+        return {}, err or "交易所未公布"
     out = {}
     for _, r in df.iterrows():
         try:
@@ -216,7 +225,7 @@ def _fetch_basis_all():
         out[str(r["symbol"]).upper()] = {"spot": spot, "future": fut, "basis": round(basis, 2),
                                          "basis_rate": rate, "tag": _basis_tag(rate),
                                          "date": date}
-    return out
+    return (out, None) if out else ({}, "品种代码无匹配")
 
 
 def _brokers_from_df(df, strip_suffix=""):
@@ -242,72 +251,106 @@ def _brokers_from_df(df, strip_suffix=""):
 
 
 def _fetch_brokers(exch, var, contract):
-    """按交易所取关注席位动向。dce 接口当前不可用（挂起/BadZipFile），如实返回 None。"""
+    """按交易所取关注席位动向 → (list, None) / (None, 原因)。
+    dce 接口当前不可用（挂起/BadZipFile），如实标注；关注席位未上前 20 榜返回空列表。"""
     import akshare as ak
     date = _recent_trade_date()
+    if exch == "dce":
+        return None, "大商所排名接口暂不可用"
     if exch == "shfe":
-        d = _with_timeout(lambda: ak.get_shfe_rank_table(date=date, vars_list=[var]),
-                          config.FUND_HTTP_TIMEOUT)
+        d, err = _with_timeout(lambda: ak.get_shfe_rank_table(date=date, vars_list=[var]),
+                               config.FUND_HTTP_TIMEOUT)
+        if err:
+            return None, err
         if not isinstance(d, dict) or not d:
-            return None
+            return None, "交易所未公布"
         df = d.get(contract)
         if df is None:
             df = next(iter(d.values()))
-        return _brokers_from_df(df)
+        return _brokers_from_df(df), None
     if exch == "czce":
-        d = _with_timeout(lambda: ak.get_rank_table_czce(date=date), config.FUND_HTTP_TIMEOUT)
+        d, err = _with_timeout(lambda: ak.get_rank_table_czce(date=date), config.FUND_HTTP_TIMEOUT)
+        if err:
+            return None, err
         if not isinstance(d, dict) or not d:
-            return None
+            return None, "交易所未公布"
         frames = [df for df in d.values()
                   if hasattr(df, "columns") and str(df["variety"].iloc[0]).upper() == var]
         if not frames:
-            return None
-        return _brokers_from_df(frames[0], strip_suffix="（代客）")
-    return None                                 # dce：接口不可用，暂无数据
+            return None, "交易所未公布"
+        return _brokers_from_df(frames[0], strip_suffix="（代客）"), None
+    return None, f"未知交易所 {exch}"
 
 
 def _refresh_real():
-    """全量刷新（真实模式）。单品种失败只影响该品种维度，其余保留。"""
+    """全量刷新（真实模式）。单维度失败保留旧值并记录原因（errors），绝不整品种清空。"""
     with _lock:
         old = dict(_state.get("symbols") or {})
-    basis_all = _fetch_basis_all()
+    basis_all, basis_err = _fetch_basis_all()
+    if basis_err:
+        _log(f"基差总表拉取失败：{basis_err}")
     new = {}
     for p in symbols_mod.PRESETS:
-        sym = p["symbol"]
+        sym, name = p["symbol"], p["name"]
         prod = _product_of(sym)
         m = config.FUND_MAP.get(prod)
         prev = old.get(sym) or _empty_entry()
         if not m:
             new[sym] = _empty_entry()
             continue
-        entry = {"date": None, "stale": False, "inventory": prev.get("inventory"),
-                 "basis": prev.get("basis"), "brokers": prev.get("brokers") or [],
-                 "note": None}
-        got_any = False
-        inv = _fetch_inventory(m["inv"]) if m.get("inv") else None
-        if inv:
-            entry["inventory"] = inv
-            entry["date"] = inv.get("date") or _recent_trade_date()
-            got_any = True
-        b = basis_all.get(m["basis"]) if m.get("basis") else None
-        if b:
-            entry["basis"] = b
-            entry["date"] = b.get("date")
-            got_any = True
-        br = _fetch_brokers(m["exch"], m["var"], _contract_of(sym)) if m.get("exch") else None
-        if br:
-            entry["brokers"] = br
-            got_any = True
-        elif m.get("exch") == "dce":
-            entry["note"] = "席位：大商所接口暂不可用"
-        if not got_any:
-            entry["stale"] = bool(prev.get("inventory") or prev.get("basis") or prev.get("brokers"))
-            entry["note"] = entry["note"] or ("刷新失败，保留旧数据" if entry["stale"] else "暂无数据")
+        entry = {"date": None, "stale": False, "status": "ok",
+                 "inventory": prev.get("inventory"), "basis": prev.get("basis"),
+                 "brokers": prev.get("brokers") or [], "errors": {}, "note": None}
+        # 库存
+        if m.get("inv"):
+            inv, err = _fetch_inventory(m["inv"])
+            if inv:
+                entry["inventory"] = inv
+            else:
+                entry["errors"]["inventory"] = err
+        else:
+            entry["errors"]["inventory"] = "交易所未公布"
+        # 基差（全所一张表，已在上面拉好）
+        if m.get("basis"):
+            b = basis_all.get(m["basis"])
+            if b:
+                entry["basis"] = b
+            else:
+                entry["errors"]["basis"] = basis_err or "品种代码无匹配"
+        # 席位
+        if m.get("exch"):
+            br, err = _fetch_brokers(m["exch"], m["var"], _contract_of(sym))
+            if br is not None:
+                entry["brokers"] = br
+                if not br:
+                    entry["errors"]["brokers"] = "关注席位未上前20榜"
+            else:
+                entry["errors"]["brokers"] = err
+        # 状态汇总：三维度全失败且无旧数据=empty；有新数据但部分失败=partial；
+        # 全新数据=ok；无新数据但有旧数据=stale（保留旧缓存并标注）
+        has_old = any([prev.get("inventory"), prev.get("basis"), prev.get("brokers")])
+        got_new = any([entry["inventory"] is not prev.get("inventory"),
+                       entry["basis"] is not prev.get("basis"),
+                       entry["brokers"] is not (prev.get("brokers") or [])])
+        fails = len(entry["errors"])
+        if got_new:
+            entry["status"] = "partial" if fails else "ok"
+            b_dt = (entry.get("basis") or {}).get("date")
+            entry["date"] = b_dt or _recent_trade_date()
+        elif has_old:
+            entry["status"] = "stale"
+            entry["stale"] = True
+            entry["note"] = "刷新失败，显示旧缓存"
+        else:
+            entry["status"] = "empty"
+            entry["note"] = "；".join(v for v in entry["errors"].values() if v) or "暂无数据"
         new[sym] = _entry_summary(entry)
+        _log(f"{name} 状态={new[sym]['status']} 失败项={entry['errors'] or '无'}")
     with _lock:
         _state.update({"updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                        "data_date": _recent_trade_date(),
-                       "stale": False, "source": "akshare", "symbols": new})
+                       "stale": False, "source": "akshare", "symbols": new,
+                       "last_error": None})
     _save_cache()
 
 
@@ -342,12 +385,13 @@ def _refresh_mock():
             sc = int(-side * rnd.randint(0, 1500) + rnd.randint(-200, 200))
             brokers.append({"name": w["name"], "long_chg": lc, "short_chg": sc,
                             "tag": _broker_tag(lc, sc)})
-        new[sym] = _entry_summary({"date": today, "stale": False, "inventory": inv,
-                                   "basis": basis, "brokers": brokers, "note": None})
+        new[sym] = _entry_summary({"date": today, "stale": False, "status": "ok",
+                                   "inventory": inv, "basis": basis, "brokers": brokers,
+                                   "errors": {}, "note": None})
     with _lock:
         _state.update({"updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                        "data_date": today, "stale": False,
-                       "source": "mock", "symbols": new})
+                       "source": "mock", "symbols": new, "last_error": None})
     _save_cache()
 
 
@@ -366,15 +410,24 @@ def _loop():
     while True:
         try:
             if not _state.get("symbols") or _due(datetime.now()):
-                if config.MOCK_MODE:
-                    _refresh_mock()
-                else:
-                    _refresh_real()
-        except Exception:  # noqa: BLE001 刷新失败保留旧缓存，下轮再试
-            with _lock:
-                _state["stale"] = True
+                _refreshing.set()
+                _log("开始刷新基本面数据（MOCK）" if config.MOCK_MODE else "开始刷新基本面数据（akshare）…")
+                try:
+                    if config.MOCK_MODE:
+                        _refresh_mock()
+                    else:
+                        _refresh_real()
+                    _log("刷新完成")
+                except Exception as e:  # noqa: BLE001 刷新失败保留旧缓存，原因上控制台+meta
+                    _log(f"刷新异常：{type(e).__name__}: {e}")
+                    with _lock:
+                        _state["stale"] = True
+                        _state["last_error"] = f"{type(e).__name__}: {str(e)[:80]}"
+                finally:
+                    _refreshing.clear()
+        except Exception as e:  # noqa: BLE001 循环本身不崩
+            _log(f"循环异常：{type(e).__name__}: {e}")
         # 真数据拉取耗时较长（12 品种×库存+排名），完成后歇 60s 再看是否到期
-        _refreshing.clear()
         time.sleep(60)
 
 
@@ -418,13 +471,15 @@ def state_block(symbol):
         "basis_rate": b.get("basis_rate"),
         "broker_flow": "；".join(f"{x['name']}{x['tag']}" for x in br) if br else None,
         "summary": e.get("summary"),
+        "status": e.get("status", "empty"),
         "date": e.get("date") or _state.get("data_date"),
         "stale": bool(e.get("stale") or _state.get("stale")),
     }
 
 
 def meta():
-    """模块级元信息：最近刷新时间/数据日期/来源/是否旧缓存。"""
+    """模块级元信息：最近刷新时间/数据日期/来源/是否旧缓存/是否刷新中/最近错误。"""
     with _lock:
         return {"updated_at": _state.get("updated_at"), "data_date": _state.get("data_date"),
-                "source": _state.get("source"), "stale": bool(_state.get("stale"))}
+                "source": _state.get("source"), "stale": bool(_state.get("stale")),
+                "refreshing": _refreshing.is_set(), "last_error": _state.get("last_error")}

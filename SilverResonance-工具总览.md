@@ -106,7 +106,9 @@
   - `inventory_trend`：库存近 5 期趋势（去库↓偏多 / 累库↑偏空 / 持平；无数据为 null）
   - `basis_rate`：基差率 %（现货−期货，正=现货升水偏多 / 负=贴水；|率|≤1% 视为平水）
   - `broker_flow`：关注席位（高盛/东证/摩根大通，config.BROKER_WATCHLIST 可配）日度多/空持仓变化方向；席位未上前 20 榜或大商所品种（接口不可用）为 null
+  - `status`：`ok` 全部维度刷新成功 / `partial` 部分维度失败 / `stale` 刷新失败显示旧缓存 / `empty` 无数据
   - `summary`：三维度合成一句话，可直接用于推送文案
+  - 排障：`/api/fundamentals?symbol=X` 返回每维度 `errors`（如"接口超时(>20s)"/"交易所未公布"/"大商所排名接口暂不可用"）与 `meta.refreshing/last_error`；面板三卡空态按此区分"加载中…/拉取失败原因/交易所未公布"
 - `reasons`：人话理由，可直接用于推送文案
 
 ## 5. 面板 HTTP API（备用，优先读 state 文件）
