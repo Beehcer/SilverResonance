@@ -4,8 +4,9 @@
 """
 
 # ==== 合约 ====
-# 白银主力 2608。换月时改这里，例如 "SHFE.ag2609"
-SYMBOL = "SHFE.ag2608"
+# 启动时会被 user_config.json / symbols.rollover_if_expired 自动覆盖到当前主力。
+# 这里只留一个占位默认值，正常不会被直接使用。需要锁定某个具体合约时改 user_config.json。
+SYMBOL = "SHFE.ag2612"
 
 # ==== 三个周期(秒) ====
 # 15分=主战场定方向, 3分=过滤位置, 30秒=触发入场
@@ -61,10 +62,10 @@ GLOBAL_TRACKB_EVERY = 3
 # ==== 轨道B 双底评分引擎参数（double_bottom.py 使用）====
 # A. 结构识别
 DB_LOOKBACK = 60         # N：回溯窗口根数（在此内找左底/左顶）
-DB_PIVOT_M = 5           # M：局部极值前后各M根无更低/高点（右侧确认，无前视）
-DB_REBOUND_MIN = 0.05    # 颈位反弹最小幅度 5%
-DB_L2_TOL = 0.03         # |L2-L1|/L1 容差 3%
-DB_L2_GAP_MIN = 10       # L2 与 L1 最小间隔根数
+DB_PIVOT_M = 3           # M：局部极值前后各M根无更低/高点（右侧确认，无前视）
+DB_REBOUND_MIN = 0.03    # 颈位反弹最小幅度 3%（5→3，识别更多次优结构）
+DB_L2_TOL = 0.05         # |L2-L1|/L1 容差 5%（3→5，放宽两底对称要求）
+DB_L2_GAP_MIN = 8        # L2 与 L1 最小间隔根数（10→8，更快识别）
 # B. 确认信号
 DB_VOL_MA = 20           # 均量周期（放量判断基准）
 DB_VOL_BREAKOUT = 1.5    # 突破放量倍数：成交量 ≥ 均量×1.5
@@ -134,12 +135,12 @@ RANGE_CONTRACT_ATR = 2.5
 # 2B/回踩/点3 只是光谱上的入场点采样（坐标参考，不驱动决策）。
 # 唯一的"不做"区是双低象限（avoid），消灭"永远无法开仓"。
 # -- 象限阈值 --
-AX_LOCATION_HIGH = 65       # 位置分 ≥ 此值 = "位置好"（高位置半区）
-AX_CERTAINTY_HIGH = 60      # 确定性分 ≥ 此值 = "证据足"（高确定性半区）
-AX_CERT_DEGRADED = 45       # 无结构降级模式的确定性门槛（结构/确认分天然拿不到，阈值相应降低）
+AX_LOCATION_HIGH = 60       # 位置分 ≥ 此值 = "位置好"（65→60，放宽位置门槛）
+AX_CERTAINTY_HIGH = 50      # 确定性分 ≥ 此值 = "证据足"（60→50，提高开仓率）
+AX_CERT_DEGRADED = 40       # 无结构降级模式的确定性门槛（45→40，配合企稳直通道）
 # -- 位置分锚点（距离用 ATR(14) 度量）--
-AX_L2_ZONE_ATR = 0.5        # 现价贴 L2/强位 ±N×ATR 内 = 90–100 分
-AX_NECK_ZONE_ATR = 0.5      # 现价在颈位 ±N×ATR 内 = 55–70 分
+AX_L2_ZONE_ATR = 0.8        # 现价贴 L2/强位 ±N×ATR 内 = 90–100 分（0.5→0.8，放宽贴近窗口）
+AX_NECK_ZONE_ATR = 0.6      # 现价在颈位 ±N×ATR 内 = 55–70 分（0.5→0.6，微宽回踩带）
 AX_EXTEND_ATR = 2.0         # 突破后延伸 >N×ATR = <30 分（之后每多 1×ATR 再减 10，地板 0）
 AX_BELOW_L2_SCORE = 15      # 跌破 L2（结构受损）时的位置基础分
 AX_RR_WEIGHT = 0.3          # 隐含盈亏比并入位置分的权重（RR≥2 满分 100，RR=1 得 50，<1 大幅减分）
@@ -163,6 +164,14 @@ AX_POS_CONFIRM = 25         # 确定性高+位置低：确认仓（配结构宽�
                             # 50→25：回测变体 C 验证 confirm 象限期望为负（-0.196R），降权后总体 +0.018 expR
                             # （backtest/report.md 第七节）；另震荡市 confirm 在 decide 内降级为 probe（变体 D）
 AX_CONFIRM_STOP_ATR = 1.0   # 确认仓宽止损：颈位外侧 N×ATR
+
+# ==== 企稳直通道（resonance 三频共振 → 直接 probe，不等双底结构）====
+# 设计立场：双底结构在 1h 周期天然稀缺（250 天 × 11 品种 main 只触发 3 笔），
+# 增加一条独立通路：轨道A 三频共振 + 现价不极端 → 直接给 probe 仓。
+# 这是"提高开仓率"的核心松绑，止损用结构止损（L2/颈位/MIN_RR 反推）。
+DIRECT_PROBE_ENABLED = True      # 是否启用企稳直通道
+DIRECT_PROBE_EXTEND_ATR = 1.5    # 现价距 MA20 ≤ N×ATR 才算"不极端"（避免追高/追低）
+DIRECT_PROBE_MIN_RR = 1.2        # 企稳直通道最低盈亏比（结构止损反推入场价）
 
 # ==== 市场状态判定（regime：趋势/震荡，entry_logic.detect_regime）====
 # 两个维度：Kaufman ER（方向效率）+ MA 斜率。让确定性分"知道现在是什么市"。

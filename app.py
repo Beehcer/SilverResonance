@@ -490,6 +490,19 @@ def _entry_check():
                                     res["legs"].get("trigger", {}).get("ok"))
     out = entry_logic.decide(ev, price, atr=double_bottom._atr(kb),
                              small_tf_ok=small_tf, regime=regime)
+    # 企稳直通道：decide 返回 standby/avoid 且轨道A三频共振时，直接给 probe（不等双底结构）
+    if out["quadrant"] in ("standby", "avoid") and res:
+        dp = entry_logic.direct_probe(price, atr=double_bottom._atr(kb) or (price or 1.0) * 0.005,
+                                       resonance=res, klines=kb)
+        if dp:
+            dp["stage"] = "direct_probe"
+            dp["stage_name"] = "企稳直通道"
+            dp["ladder"] = {"L1": None, "L2": None, "neck": None, "price": price,
+                            "stop": dp["stop"]["price"] if dp["stop"] else None,
+                            "target1": None, "target2": None}
+            dp["mode"] = mode
+            dp["mode_label"] = mode_label
+            return dp
     # stage（三批次阶段）仅作参考坐标；entry_point_ref 按约定由它推导
     stage_ref = _stage_advice(kb, _focus_track_b(), price)
     out["stage"] = stage_ref["stage"]
@@ -1031,7 +1044,10 @@ def _tqsdk_loop():
             last = getattr(q, "last_price", float("nan"))
             has_price = isinstance(last, (int, float)) and not math.isnan(last)
             if getattr(q, "expired", False):
-                raise ValueError("合约已到期/换月")
+                raise ValueError(
+                    f"合约 {config.SYMBOL} 已到期且未找到同品种新主力。"
+                    f"请在配置页改选一个当前主力合约（下拉中的品种已自动换月）。"
+                )
             if not dt and not has_price:
                 raise ValueError("查无此合约（无行情数据）")
         except ValueError:
@@ -1118,10 +1134,10 @@ def _tqsdk_loop():
                 if time.time() - wait_start > 30:
                     raise TimeoutError(
                         f"30秒内未取到足够K线（{combo['trend_label']}{len(kt_list)}根/{combo['trigger_label']}{len(kg_list)}根）。"
-                        f"可能原因：①合约 {config.SYMBOL} 非当前主力/已换月 "
+                        f"可能原因：①合约 {config.SYMBOL} 暂无推送（非交易时段） "
                         f"②同一天勤账号在别处登录（同账号不能多设备同时在线）"
-                        f"③当前非交易时段且无历史缓存。"
-                        f"请在配置页核对合约、确认账号未在别处使用后重试。"
+                        f"③网络/行情服务异常。"
+                        f"合约本身会在启动时自动换月，无需手工维护；仍不行请到配置页核对。"
                     )
                 continue
             result = resonance.evaluate(kt_list, kf_list, kg_list, _combo_labels(combo))
@@ -1187,7 +1203,9 @@ def apply_user_settings():
     if s.get("tq_password"):
         config.TQ_PASSWORD = s["tq_password"]
     if s.get("symbol"):
-        config.SYMBOL = s["symbol"]
+        # 自动换月：用户配置的合约若已不在预设表（说明已到期），
+        # 静默换成同品种当前主力，避免每次都死在"合约已到期"。
+        config.SYMBOL = symbols.rollover_if_expired(s["symbol"])
     # 按合约从预设表解析 tick 参数（查不到保留 config.py 默认值）
     symbols.apply_symbol_params(config)
     config.MOCK_MODE = bool(s.get("mock_mode", False))

@@ -1,0 +1,944 @@
+{
+ "updated_at": "2026-08-31T09:38:24",
+ "symbols": {
+  "SHFE.ag2612": {
+   "name": "沪银2612",
+   "price": 16268.0,
+   "track_a": {
+    "direction": "short",
+    "resonance": true
+   },
+   "track_b": {
+    "score": 48,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_bottom",
+     "L1": 16496.0,
+     "L2": 16718.0,
+     "neck": 17068.0
+    },
+    "support": [
+     {
+      "price": 15350.0,
+      "score": 71.6
+     },
+     {
+      "price": 16240.0,
+      "score": 62.5
+     },
+     {
+      "price": 15908.5,
+      "score": 53.0
+     },
+     {
+      "price": 15611.0,
+      "score": 51.4
+     }
+    ],
+    "resistance": [
+     {
+      "price": 17425.0,
+      "score": 98.9
+     },
+     {
+      "price": 17057.71,
+      "score": 68.4
+     },
+     {
+      "price": 16347.5,
+      "score": 62.5
+     },
+     {
+      "price": 16813.0,
+      "score": 61.0
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价跌量缩仓增·方向不明",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "range",
+    "er": 0.235,
+    "slope": -0.00591,
+    "label": "震荡市"
+   },
+   "lamp": "green",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "avoid",
+    "position_pct": 0,
+    "location_score": 40,
+    "certainty_score": 40,
+    "direction": "long",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等回落至 L2 16718.0 区域（±0.8×ATR）改善位置，或确认信号补齐（当前 2 项）提高确定性"
+   },
+   "fundamentals": {
+    "inventory_trend": "去库↓偏多",
+    "basis_rate": -2.0,
+    "broker_flow": "东证偏多↑",
+    "summary": "去库↓偏多 · 现货贴水↓ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双底结构：L1=16496.0 L2=16718.0 颈位=17068.0",
+    "确认信号：放量突破颈位、RSI底背离（共2项）",
+    "RSI底背离（最强确认，单独加权）",
+    "方向侧最强关键位 15350.0 强度71.6/100（强位）",
+    "动能共振 0/3（MACD✗ RSI✗ MA斜率✗）",
+    "仓量象限：价跌量缩仓增·方向不明",
+    "综合 48 分 < 55：不做"
+   ]
+  },
+  "SHFE.au2612": {
+   "name": "沪金2612",
+   "price": 966.96,
+   "track_a": {
+    "direction": "short",
+    "resonance": true
+   },
+   "track_b": {
+    "score": 57,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_top",
+     "L1": 1017.6,
+     "L2": 1006.24,
+     "neck": 986.0
+    },
+    "support": [
+     {
+      "price": 949.76,
+      "score": 49.2
+     }
+    ],
+    "resistance": [
+     {
+      "price": 1010.55,
+      "score": 61.1
+     },
+     {
+      "price": 981.29,
+      "score": 58.5
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价跌量缩仓减·多头离场近尾声",
+     "healthy": true
+    }
+   },
+   "regime": {
+    "regime": "trend_down",
+    "er": 0.477,
+    "slope": -0.00707,
+    "label": "趋势市·空"
+   },
+   "lamp": "green",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "confirm",
+    "position_pct": 25,
+    "location_score": 18,
+    "certainty_score": 68,
+    "direction": "short",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": {
+     "price": 992.51,
+     "basis": "结构宽止损：颈位上方1.0×ATR"
+    },
+    "wait_for": null
+   },
+   "fundamentals": {
+    "inventory_trend": "持平",
+    "basis_rate": -0.09,
+    "broker_flow": "高盛偏空↓；东证偏空↓",
+    "summary": "持平 · 基本平水 · 高盛偏空↓ · 东证偏空↓",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双顶结构：L1=1017.6 L2=1006.24 颈位=986.0",
+    "确认信号：L2反转K线、放量突破颈位、回踩不破颈位、RSI顶背离（共4项）",
+    "RSI顶背离（最强确认，单独加权）",
+    "方向侧最强关键位 1010.55 强度61.1/100（中位）",
+    "动能共振 1/3（MACD✓ RSI✗ MA斜率✗）",
+    "仓量象限：价跌量缩仓减·多头离场近尾声",
+    "综合 57 分：观望，等确认信号补齐或价格就位"
+   ]
+  },
+  "SHFE.rb2610": {
+   "name": "螺纹钢2610",
+   "price": 3147.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": true
+   },
+   "track_b": {
+    "score": 45,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_bottom",
+     "L1": 3013.0,
+     "L2": 3108.0,
+     "neck": 3129.0
+    },
+    "support": [
+     {
+      "price": 3118.5,
+      "score": 58.3
+     },
+     {
+      "price": 3022.03,
+      "score": 48.1
+     }
+    ],
+    "resistance": [],
+    "volume_oi": {
+     "quadrant": "价升量增仓减·方向不明",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "trend_up",
+    "er": 0.697,
+    "slope": 0.00449,
+    "label": "趋势市·多"
+   },
+   "lamp": "red",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "confirm",
+    "position_pct": 25,
+    "location_score": 52,
+    "certainty_score": 50,
+    "direction": "long",
+    "stabilized": true,
+    "trigger_met": false,
+    "stop": {
+     "price": 3117.88,
+     "basis": "结构宽止损：颈位下方1.0×ATR"
+    },
+    "wait_for": null
+   },
+   "fundamentals": {
+    "inventory_trend": "累库↑偏空",
+    "basis_rate": -0.7,
+    "broker_flow": "东证偏多↑",
+    "summary": "累库↑偏空 · 基本平水 · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双底结构：L1=3013.0 L2=3108.0 颈位=3129.0",
+    "确认信号：放量突破颈位、RSI底背离（共2项）",
+    "RSI底背离（最强确认，单独加权）",
+    "方向侧最强关键位 3118.5 强度58.3/100（中位）",
+    "动能共振 0/3（MACD✗ RSI✗ MA斜率✗）",
+    "仓量象限：价升量增仓减·方向不明",
+    "综合 45 分 < 55：不做"
+   ]
+  },
+  "CZCE.SA701": {
+   "name": "纯碱701",
+   "price": 1051.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": true
+   },
+   "track_b": {
+    "score": 47,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_top",
+     "L1": 1071.0,
+     "L2": 1055.0,
+     "neck": 1032.0
+    },
+    "support": [
+     {
+      "price": 1018.0,
+      "score": 66.4
+     }
+    ],
+    "resistance": [
+     {
+      "price": 1052.21,
+      "score": 67.1
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价升量增仓减·方向不明",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "range",
+    "er": 0.121,
+    "slope": 0.00088,
+    "label": "震荡市"
+   },
+   "lamp": "red",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "probe",
+    "position_pct": 25,
+    "location_score": 96,
+    "certainty_score": 40,
+    "direction": "short",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": {
+     "price": 1069.18,
+     "basis": "L2上方1.5×ATR"
+    },
+    "wait_for": null
+   },
+   "fundamentals": {
+    "inventory_trend": "累库↑偏空",
+    "basis_rate": 3.69,
+    "broker_flow": "高盛偏空↓；东证偏多↑",
+    "summary": "累库↑偏空 · 现货升水↑ · 高盛偏空↓ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双顶结构：L1=1071.0 L2=1055.0 颈位=1032.0",
+    "确认信号：放量突破颈位、RSI顶背离（共2项）",
+    "RSI顶背离（最强确认，单独加权）",
+    "方向侧最强关键位 1052.21 强度67.1/100（中位）",
+    "动能共振 0/3（MACD✗ RSI✗ MA斜率✗）",
+    "仓量象限：价升量增仓减·方向不明",
+    "综合 47 分 < 55：不做"
+   ]
+  },
+  "CZCE.FG701": {
+   "name": "玻璃701",
+   "price": 933.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": false
+   },
+   "track_b": {
+    "score": 44,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_bottom",
+     "L1": 897.0,
+     "L2": 895.0,
+     "neck": 932.0
+    },
+    "support": [
+     {
+      "price": 902.22,
+      "score": 64.2
+     },
+     {
+      "price": 928.0,
+      "score": 59.6
+     }
+    ],
+    "resistance": [
+     {
+      "price": 945.0,
+      "score": 67.0
+     },
+     {
+      "price": 979.5,
+      "score": 51.5
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价升量增仓减·方向不明",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "trend_up",
+    "er": 0.371,
+    "slope": 0.00606,
+    "label": "趋势市·多"
+   },
+   "lamp": "gray",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "avoid",
+    "position_pct": 0,
+    "location_score": 57,
+    "certainty_score": 35,
+    "direction": "long",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等回落至 L2 895.0 区域（±0.8×ATR）改善位置，或确认信号补齐（当前 3 项）提高确定性"
+   },
+   "fundamentals": {
+    "inventory_trend": "去库↓偏多",
+    "basis_rate": 3.03,
+    "broker_flow": "高盛偏多↑；东证偏多↑",
+    "summary": "去库↓偏多 · 现货升水↑ · 高盛偏多↑ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双底结构：L1=897.0 L2=895.0 颈位=932.0",
+    "确认信号：L2反转K线、放量突破颈位、回踩不破颈位（共3项）",
+    "方向侧最强关键位 902.22 强度64.2/100（中位）",
+    "动能共振 0/3（MACD✗ RSI✗ MA斜率✗）",
+    "仓量象限：价升量增仓减·方向不明",
+    "综合 44 分 < 55：不做"
+   ]
+  },
+  "SHFE.bu2612": {
+   "name": "沥青2612",
+   "price": 4295.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": false
+   },
+   "track_b": {
+    "score": 0,
+    "direction": "wait",
+    "pattern": {
+     "found": false,
+     "type": null,
+     "L1": null,
+     "L2": null,
+     "neck": null
+    },
+    "support": [
+     {
+      "price": 3908.75,
+      "score": 62.5
+     },
+     {
+      "price": 3790.0,
+      "score": 53.4
+     },
+     {
+      "price": 3685.0,
+      "score": 44.5
+     }
+    ],
+    "resistance": [],
+    "volume_oi": {
+     "quadrant": "价升量增仓增·健康多头",
+     "healthy": true
+    }
+   },
+   "regime": {
+    "regime": "trend_up",
+    "er": 0.603,
+    "slope": 0.01136,
+    "label": "趋势市·多"
+   },
+   "lamp": "gray",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "standby",
+    "position_pct": 0,
+    "location_score": null,
+    "certainty_score": 10,
+    "direction": "none",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等双底/双顶结构形成（左底/左顶枢轴 + 颈位出现）后再评估位置"
+   },
+   "fundamentals": {
+    "inventory_trend": "去库↓偏多",
+    "basis_rate": 2.24,
+    "broker_flow": "高盛偏空↓；东证偏多↑",
+    "summary": "去库↓偏多 · 现货升水↑ · 高盛偏空↓ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "回溯窗口内未发现满足条件的双底/双顶（结构缺失或确认信号不足两个）"
+   ]
+  },
+  "CZCE.CF701": {
+   "name": "棉花701",
+   "price": 16965.0,
+   "track_a": {
+    "direction": "short",
+    "resonance": true
+   },
+   "track_b": {
+    "score": 0,
+    "direction": "wait",
+    "pattern": {
+     "found": false,
+     "type": null,
+     "L1": null,
+     "L2": null,
+     "neck": null
+    },
+    "support": [
+     {
+      "price": 16757.86,
+      "score": 58.5
+     }
+    ],
+    "resistance": [
+     {
+      "price": 17345.0,
+      "score": 68.7
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价跌量缩仓减·多头离场近尾声",
+     "healthy": true
+    }
+   },
+   "regime": {
+    "regime": "range",
+    "er": 0.011,
+    "slope": 0.00329,
+    "label": "震荡市"
+   },
+   "lamp": "green",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "standby",
+    "position_pct": 0,
+    "location_score": null,
+    "certainty_score": 10,
+    "direction": "none",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等双底/双顶结构形成（左底/左顶枢轴 + 颈位出现）后再评估位置"
+   },
+   "fundamentals": {
+    "inventory_trend": "去库↓偏多",
+    "basis_rate": 5.93,
+    "broker_flow": "东证偏多↑",
+    "summary": "去库↓偏多 · 现货升水↑ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "回溯窗口内未发现满足条件的双底/双顶（结构缺失或确认信号不足两个）"
+   ]
+  },
+  "SHFE.sp2705": {
+   "name": "纸浆2705",
+   "price": 5014.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": false
+   },
+   "track_b": {
+    "score": 0,
+    "direction": "wait",
+    "pattern": {
+     "found": false,
+     "type": null,
+     "L1": null,
+     "L2": null,
+     "neck": null
+    },
+    "support": [
+     {
+      "price": 4844.0,
+      "score": 58.4
+     },
+     {
+      "price": 4954.6,
+      "score": 58.4
+     }
+    ],
+    "resistance": [
+     {
+      "price": 5079.33,
+      "score": 58.9
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价升量缩仓增·方向不明",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "range",
+    "er": 0.049,
+    "slope": -0.00116,
+    "label": "震荡市"
+   },
+   "lamp": "gray",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "standby",
+    "position_pct": 0,
+    "location_score": null,
+    "certainty_score": 5,
+    "direction": "none",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等双底/双顶结构形成（左底/左顶枢轴 + 颈位出现）后再评估位置"
+   },
+   "fundamentals": {
+    "inventory_trend": "累库↑偏空",
+    "basis_rate": 1.28,
+    "broker_flow": "东证偏多↑",
+    "summary": "累库↑偏空 · 现货升水↑ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "回溯窗口内未发现满足条件的双底/双顶（结构缺失或确认信号不足两个）"
+   ]
+  },
+  "SHFE.ss2610": {
+   "name": "不锈钢2610",
+   "price": 13920.0,
+   "track_a": {
+    "direction": "short",
+    "resonance": true
+   },
+   "track_b": {
+    "score": 0,
+    "direction": "wait",
+    "pattern": {
+     "found": false,
+     "type": null,
+     "L1": null,
+     "L2": null,
+     "neck": null
+    },
+    "support": [],
+    "resistance": [
+     {
+      "price": 14316.67,
+      "score": 56.0
+     },
+     {
+      "price": 14610.0,
+      "score": 43.3
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价跌量增仓增·空头增仓",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "trend_down",
+    "er": 0.408,
+    "slope": -0.004,
+    "label": "趋势市·空"
+   },
+   "lamp": "green",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "standby",
+    "position_pct": 0,
+    "location_score": null,
+    "certainty_score": 0,
+    "direction": "none",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等双底/双顶结构形成（左底/左顶枢轴 + 颈位出现）后再评估位置"
+   },
+   "fundamentals": {
+    "inventory_trend": "去库↓偏多",
+    "basis_rate": 3.6,
+    "broker_flow": "东证偏多↑",
+    "summary": "去库↓偏多 · 现货升水↑ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "回溯窗口内未发现满足条件的双底/双顶（结构缺失或确认信号不足两个）"
+   ]
+  },
+  "DCE.m2701": {
+   "name": "豆粕2701",
+   "price": 3358.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": false
+   },
+   "track_b": {
+    "score": 0,
+    "direction": "wait",
+    "pattern": {
+     "found": false,
+     "type": null,
+     "L1": null,
+     "L2": null,
+     "neck": null
+    },
+    "support": [
+     {
+      "price": 3327.0,
+      "score": 62.0
+     },
+     {
+      "price": 3217.33,
+      "score": 58.7
+     },
+     {
+      "price": 3135.17,
+      "score": 46.6
+     }
+    ],
+    "resistance": [
+     {
+      "price": 3360.5,
+      "score": 59.1
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价升量缩仓增·方向不明",
+     "healthy": false
+    }
+   },
+   "regime": {
+    "regime": "trend_up",
+    "er": 0.443,
+    "slope": 0.00767,
+    "label": "趋势市·多"
+   },
+   "lamp": "gray",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "standby",
+    "position_pct": 0,
+    "location_score": null,
+    "certainty_score": 0,
+    "direction": "none",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": null,
+    "wait_for": "等双底/双顶结构形成（左底/左顶枢轴 + 颈位出现）后再评估位置"
+   },
+   "fundamentals": {
+    "inventory_trend": "持平",
+    "basis_rate": -3.15,
+    "broker_flow": null,
+    "summary": "持平 · 现货贴水↓",
+    "status": "partial",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "回溯窗口内未发现满足条件的双底/双顶（结构缺失或确认信号不足两个）"
+   ]
+  },
+  "DCE.jm2701": {
+   "name": "焦煤2701",
+   "price": 1709.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": false
+   },
+   "track_b": {
+    "score": 58,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_bottom",
+     "L1": 1561.5,
+     "L2": 1610.5,
+     "neck": 1643.0
+    },
+    "support": [
+     {
+      "price": 1610.5,
+      "score": 72.8
+     },
+     {
+      "price": 1567.11,
+      "score": 67.6
+     },
+     {
+      "price": 1643.0,
+      "score": 66.2
+     },
+     {
+      "price": 1456.5,
+      "score": 62.4
+     }
+    ],
+    "resistance": [],
+    "volume_oi": {
+     "quadrant": "价升量增仓增·健康多头",
+     "healthy": true
+    }
+   },
+   "regime": {
+    "regime": "trend_up",
+    "er": 0.65,
+    "slope": 0.01155,
+    "label": "趋势市·多"
+   },
+   "lamp": "gray",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "confirm",
+    "position_pct": 25,
+    "location_score": 18,
+    "certainty_score": 63,
+    "direction": "long",
+    "stabilized": true,
+    "trigger_met": false,
+    "stop": {
+     "price": 1619.82,
+     "basis": "结构宽止损：颈位下方1.0×ATR"
+    },
+    "wait_for": null
+   },
+   "fundamentals": {
+    "inventory_trend": "去库↓偏多",
+    "basis_rate": 27.56,
+    "broker_flow": null,
+    "summary": "去库↓偏多 · 现货升水↑",
+    "status": "partial",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双底结构：L1=1561.5 L2=1610.5 颈位=1643.0",
+    "确认信号：放量突破颈位、回踩不破颈位（共2项）",
+    "方向侧最强关键位 1610.5 强度72.8/100（强位）",
+    "动能共振 0/3（MACD✗ RSI✗ MA斜率✗）",
+    "仓量象限：价升量增仓增·健康多头",
+    "综合 58 分：观望，等确认信号补齐或价格就位"
+   ]
+  },
+  "CZCE.MA701": {
+   "name": "甲醇701",
+   "price": 2800.0,
+   "track_a": {
+    "direction": "long",
+    "resonance": false
+   },
+   "track_b": {
+    "score": 52,
+    "direction": "wait",
+    "pattern": {
+     "found": true,
+     "type": "double_top",
+     "L1": 2719.0,
+     "L2": 2682.0,
+     "neck": 2604.0
+    },
+    "support": [
+     {
+      "price": 2627.43,
+      "score": 65.1
+     },
+     {
+      "price": 2698.25,
+      "score": 64.0
+     },
+     {
+      "price": 2541.0,
+      "score": 51.4
+     },
+     {
+      "price": 2464.0,
+      "score": 47.0
+     }
+    ],
+    "resistance": [
+     {
+      "price": 2806.0,
+      "score": 86.9
+     }
+    ],
+    "volume_oi": {
+     "quadrant": "价升量增仓增·健康多头",
+     "healthy": true
+    }
+   },
+   "regime": {
+    "regime": "trend_up",
+    "er": 0.533,
+    "slope": 0.00354,
+    "label": "趋势市·多"
+   },
+   "lamp": "gray",
+   "entry": null,
+   "stop": null,
+   "target1": null,
+   "decision": {
+    "quadrant": "probe",
+    "position_pct": 25,
+    "location_score": 94,
+    "certainty_score": 45,
+    "direction": "short",
+    "stabilized": false,
+    "trigger_met": false,
+    "stop": {
+     "price": 2727.7,
+     "basis": "L2上方1.5×ATR"
+    },
+    "wait_for": null
+   },
+   "fundamentals": {
+    "inventory_trend": "累库↑偏空",
+    "basis_rate": 2.8,
+    "broker_flow": "高盛偏空↓；东证偏多↑",
+    "summary": "累库↑偏空 · 现货升水↑ · 高盛偏空↓ · 东证偏多↑",
+    "status": "ok",
+    "date": "20260828",
+    "stale": false
+   },
+   "reasons": [
+    "识别到双顶结构：L1=2719.0 L2=2682.0 颈位=2604.0",
+    "确认信号：L2反转K线、RSI顶背离（共2项）",
+    "RSI顶背离（最强确认，单独加权）",
+    "方向侧最强关键位 2806.0 强度86.9/100（强位）",
+    "动能共振 0/3（MACD✗ RSI✗ MA斜率✗）",
+    "仓量象限：价升量增仓增·健康多头",
+    "综合 52 分 < 55：不做"
+   ]
+  }
+ }
+}

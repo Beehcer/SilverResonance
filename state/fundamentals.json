@@ -1,0 +1,461 @@
+{
+ "updated_at": "2026-08-30T20:30:55",
+ "data_date": "20260828",
+ "stale": false,
+ "source": "akshare",
+ "symbols": {
+  "SHFE.ag2612": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 1409999.0,
+    "delta": -6856.0,
+    "series": [
+     1421123.0,
+     1412903.0,
+     1410544.0,
+     1416855.0,
+     1409999.0
+    ],
+    "trend": "去库↓偏多"
+   },
+   "basis": {
+    "spot": 16877.67,
+    "future": 17215.0,
+    "basis": -337.33,
+    "basis_rate": -2.0,
+    "tag": "现货贴水↓",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "东证",
+     "long_chg": 996,
+     "short_chg": 336,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "去库↓偏多 · 现货贴水↓ · 东证偏多↑"
+  },
+  "SHFE.au2612": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 113658.0,
+    "delta": 0.0,
+    "series": [
+     113658.0,
+     113658.0,
+     113658.0,
+     113658.0,
+     113658.0
+    ],
+    "trend": "持平"
+   },
+   "basis": {
+    "spot": 998.35,
+    "future": 999.28,
+    "basis": -0.93,
+    "basis_rate": -0.09,
+    "tag": "基本平水",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "高盛",
+     "long_chg": -22,
+     "short_chg": null,
+     "tag": "偏空↓"
+    },
+    {
+     "name": "东证",
+     "long_chg": 31,
+     "short_chg": 160,
+     "tag": "偏空↓"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "持平 · 基本平水 · 高盛偏空↓ · 东证偏空↓"
+  },
+  "SHFE.rb2610": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 43940.0,
+    "delta": 0.0,
+    "series": [
+     39130.0,
+     39130.0,
+     39130.0,
+     43940.0,
+     43940.0
+    ],
+    "trend": "累库↑偏空"
+   },
+   "basis": {
+    "spot": 3136.0,
+    "future": 3158.0,
+    "basis": -22.0,
+    "basis_rate": -0.7,
+    "tag": "基本平水",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "东证",
+     "long_chg": 1888,
+     "short_chg": -4437,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "累库↑偏空 · 基本平水 · 东证偏多↑"
+  },
+  "CZCE.SA701": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 8050.0,
+    "delta": 357.0,
+    "series": [
+     7532.0,
+     7568.0,
+     7756.0,
+     7693.0,
+     8050.0
+    ],
+    "trend": "累库↑偏空"
+   },
+   "basis": {
+    "spot": 1087.14,
+    "future": 1047.0,
+    "basis": 40.14,
+    "basis_rate": 3.69,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "高盛",
+     "long_chg": null,
+     "short_chg": 2483,
+     "tag": "偏空↓"
+    },
+    {
+     "name": "东证",
+     "long_chg": 16168,
+     "short_chg": -7508,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "累库↑偏空 · 现货升水↑ · 高盛偏空↓ · 东证偏多↑"
+  },
+  "CZCE.FG701": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 1269.0,
+    "delta": 0.0,
+    "series": [
+     1288.0,
+     1284.0,
+     1273.0,
+     1269.0,
+     1269.0
+    ],
+    "trend": "去库↓偏多"
+   },
+   "basis": {
+    "spot": 956.0,
+    "future": 927.0,
+    "basis": 29.0,
+    "basis_rate": 3.03,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "高盛",
+     "long_chg": null,
+     "short_chg": -22379,
+     "tag": "偏多↑"
+    },
+    {
+     "name": "东证",
+     "long_chg": 7126,
+     "short_chg": -28585,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "去库↓偏多 · 现货升水↑ · 高盛偏多↑ · 东证偏多↑"
+  },
+  "SHFE.bu2612": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 10760.0,
+    "delta": 0.0,
+    "series": [
+     14230.0,
+     14230.0,
+     10760.0,
+     10760.0,
+     10760.0
+    ],
+    "trend": "去库↓偏多"
+   },
+   "basis": {
+    "spot": 4757.5,
+    "future": 4651.0,
+    "basis": 106.5,
+    "basis_rate": 2.24,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "高盛",
+     "long_chg": -124,
+     "short_chg": null,
+     "tag": "偏空↓"
+    },
+    {
+     "name": "东证",
+     "long_chg": 1993,
+     "short_chg": -680,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "去库↓偏多 · 现货升水↑ · 高盛偏空↓ · 东证偏多↑"
+  },
+  "CZCE.CF701": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 9070.0,
+    "delta": -62.0,
+    "series": [
+     9272.0,
+     9232.0,
+     9171.0,
+     9132.0,
+     9070.0
+    ],
+    "trend": "去库↓偏多"
+   },
+   "basis": {
+    "spot": 18263.83,
+    "future": 17180.0,
+    "basis": 1083.83,
+    "basis_rate": 5.93,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "东证",
+     "long_chg": 2973,
+     "short_chg": -3661,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "去库↓偏多 · 现货升水↑ · 东证偏多↑"
+  },
+  "SHFE.sp2705": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 385875.0,
+    "delta": 2901.0,
+    "series": [
+     374481.0,
+     379045.0,
+     379045.0,
+     382974.0,
+     385875.0
+    ],
+    "trend": "累库↑偏空"
+   },
+   "basis": {
+    "spot": 4850.0,
+    "future": 4788.0,
+    "basis": 62.0,
+    "basis_rate": 1.28,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "东证",
+     "long_chg": null,
+     "short_chg": -839,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "累库↑偏空 · 现货升水↑ · 东证偏多↑"
+  },
+  "SHFE.ss2610": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 79541.0,
+    "delta": -846.0,
+    "series": [
+     82050.0,
+     81808.0,
+     80868.0,
+     80387.0,
+     79541.0
+    ],
+    "trend": "去库↓偏多"
+   },
+   "basis": {
+    "spot": 14533.33,
+    "future": 14010.0,
+    "basis": 523.33,
+    "basis_rate": 3.6,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "东证",
+     "long_chg": 1490,
+     "short_chg": -897,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "去库↓偏多 · 现货升水↑ · 东证偏多↑"
+  },
+  "DCE.m2701": {
+   "date": "20260828",
+   "stale": false,
+   "status": "partial",
+   "inventory": {
+    "latest": 31120.0,
+    "delta": 0.0,
+    "series": [
+     31120.0,
+     31120.0,
+     31120.0,
+     31120.0,
+     31120.0
+    ],
+    "trend": "持平"
+   },
+   "basis": {
+    "spot": 3238.0,
+    "future": 3340.0,
+    "basis": -102.0,
+    "basis_rate": -3.15,
+    "tag": "现货贴水↓",
+    "date": "20260828"
+   },
+   "brokers": [],
+   "errors": {
+    "brokers": "大商所排名接口暂不可用"
+   },
+   "note": null,
+   "summary": "持平 · 现货贴水↓"
+  },
+  "DCE.jm2701": {
+   "date": "20260828",
+   "stale": false,
+   "status": "partial",
+   "inventory": {
+    "latest": 297.0,
+    "delta": -436.0,
+    "series": [
+     1661.0,
+     933.0,
+     933.0,
+     733.0,
+     297.0
+    ],
+    "trend": "去库↓偏多"
+   },
+   "basis": {
+    "spot": 2248.75,
+    "future": 1629.0,
+    "basis": 619.75,
+    "basis_rate": 27.56,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [],
+   "errors": {
+    "brokers": "大商所排名接口暂不可用"
+   },
+   "note": null,
+   "summary": "去库↓偏多 · 现货升水↑"
+  },
+  "CZCE.MA701": {
+   "date": "20260828",
+   "stale": false,
+   "status": "ok",
+   "inventory": {
+    "latest": 6440.0,
+    "delta": -110.0,
+    "series": [
+     4564.0,
+     5184.0,
+     5950.0,
+     6550.0,
+     6440.0
+    ],
+    "trend": "累库↑偏空"
+   },
+   "basis": {
+    "spot": 2921.67,
+    "future": 2840.0,
+    "basis": 81.67,
+    "basis_rate": 2.8,
+    "tag": "现货升水↑",
+    "date": "20260828"
+   },
+   "brokers": [
+    {
+     "name": "高盛",
+     "long_chg": -637,
+     "short_chg": null,
+     "tag": "偏空↓"
+    },
+    {
+     "name": "东证",
+     "long_chg": 8749,
+     "short_chg": -14248,
+     "tag": "偏多↑"
+    }
+   ],
+   "errors": {},
+   "note": null,
+   "summary": "累库↑偏空 · 现货升水↑ · 高盛偏空↓ · 东证偏多↑"
+  }
+ },
+ "last_error": null
+}

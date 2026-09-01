@@ -184,6 +184,92 @@ def _certainty_score(ev, target_dir, price, small_tf_ok, regime=None):
     return max(0, min(100, total)), items
 
 
+# ================= 企稳直通道（resonance 三频共振 → 直接 probe） =================
+
+def direct_probe(price, atr, resonance, klines=None):
+    """
+    企稳直通道：轨道A 三频共振 + 现价不极端 → 直接给 probe 仓（不等双底结构）。
+    设计立场：双底结构在 1h 周期天然稀缺（250 天 × 11 品种 main 只触发 3 笔），
+    增加一条独立通路提高开仓率。止损用结构止损反推（MIN_RR 保证盈亏比）。
+
+    输入：
+      price: 现价
+      atr: ATR(14)
+      resonance: resonance.evaluate() 输出 dict（需含 direction/resonance/legs）
+      klines: 1h K线（用于找结构止损位，可选）
+    返回：decision dict 或 None（不满足条件）
+    """
+    if not config.DIRECT_PROBE_ENABLED:
+        return None
+    if not resonance or not resonance.get("resonance"):
+        return None
+    direction = resonance.get("direction")  # long / short
+    if direction not in ("long", "short"):
+        return None
+
+    sgn = 1 if direction == "long" else -1
+
+    # 位置检查：现价距 MA20 不能太极端（避免追高/追低）
+    if klines and len(klines) >= 20:
+        closes = [k["close"] for k in klines]
+        ma20 = sum(closes[-20:]) / 20
+        dist_ma20 = (price - ma20) * sgn / atr
+        if dist_ma20 > config.DIRECT_PROBE_EXTEND_ATR:
+            return None  # 已过度延伸，放弃
+    else:
+        ma20 = None
+        dist_ma20 = 0.0
+
+    # 结构止损：找最近 N 根的摆动低点（做多）/ 高点（做空）
+    stop = None
+    if klines and len(klines) >= 10:
+        look = min(20, len(klines))
+        if direction == "long":
+            swing = min(k["low"] for k in klines[-look:])
+            stop_price = round(swing - 0.3 * atr, 2)  # 摆动低点下方 0.3×ATR
+        else:
+            swing = max(k["high"] for k in klines[-look:])
+            stop_price = round(swing + 0.3 * atr, 2)  # 摆动高点上方 0.3×ATR
+        risk = abs(price - stop_price)
+        # 盈亏比检查：目标 = 入场 + MIN_RR × 风险
+        target = round(price + sgn * config.DIRECT_PROBE_MIN_RR * risk, 2)
+        stop = {"price": stop_price,
+                "basis": f"结构止损：近{look}根摆动{'低' if direction == 'long' else '高'}点{'下方' if direction == 'long' else '上方'}0.3×ATR"}
+    else:
+        # 无 K 线数据时用固定 ATR 止损
+        stop_price = round(price - sgn * config.DB_STOP_ATR * atr, 2)
+        target = round(price + sgn * config.DIRECT_PROBE_MIN_RR * config.DB_STOP_ATR * atr, 2)
+        stop = {"price": stop_price, "basis": f"固定止损：{config.DB_STOP_ATR}×ATR"}
+
+    d_txt = "做多" if direction == "long" else "做空"
+    legs = resonance.get("legs") or {}
+    trend_ok = legs.get("trend", {}).get("ok", False)
+    filter_ok = legs.get("filter", {}).get("ok", False)
+    trigger_ok = legs.get("trigger", {}).get("ok", False)
+
+    summary = (f"企稳直通道（三频共振）：{d_txt}试单仓 {config.AX_POS_PROBE}%，"
+               f"止损 {stop['price']}（{stop['basis']}），目标 {target}。"
+               f"趋势{'✓' if trend_ok else '✗'} 过滤{'✓' if filter_ok else '✗'} 触发{'✓' if trigger_ok else '✗'}")
+
+    return {
+        "location_score": 70,  # 直通道默认位置分（三频共振已含位置过滤）
+        "certainty_score": 55,  # 直通道默认确定性分（三频共振本身即证据）
+        "quadrant": "probe",
+        "quadrant_name": _QUADRANT_NAME["probe"],
+        "direction": direction,
+        "position_pct": config.AX_POS_PROBE,
+        "stop": stop,
+        "entry_point_ref": "direct",
+        "regime": None,
+        "scores_detail": {
+            "location": [{"item": f"企稳直通道：距MA20 {dist_ma20:.2f}×ATR（≤{config.DIRECT_PROBE_EXTEND_ATR}）", "value": 70}],
+            "certainty": [{"item": f"三频共振：趋势{'✓' if trend_ok else '✗'} 过滤{'✓' if filter_ok else '✗'} 触发{'✓' if trigger_ok else '✗'}", "delta": 55}],
+        },
+        "wait_for": None,
+        "summary": summary,
+    }
+
+
 # ================= 象限决策 =================
 
 _QUADRANT_NAME = {"main": "主仓", "probe": "试单", "confirm": "确认仓",
