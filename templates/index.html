@@ -316,9 +316,10 @@
   .adv-item:hover { background: var(--bg); }
   .adv-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .adv-item .nm { font-weight: 700; }
-  .adv-item .dir { font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+  .adv-item .dir { font-size: 11px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
   .adv-item .dir.long { background: rgba(218,54,51,.15); color: #da3633; }
   .adv-item .dir.short { background: rgba(46,160,67,.15); color: #2ea043; }
+  .adv-item .dir.none { background: rgba(139,148,158,.15); color: #8b949e; }
   .adv-item .meta { color: var(--dim); font-size: 11px; margin-left: auto; }
   .adv-empty { color: var(--dim); font-size: 12px; padding: 8px 0; }
 
@@ -518,6 +519,7 @@
   <div class="modal-mask" id="modal-mask">
     <div class="modal modal-wide">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <div class="mode-tag" id="modal-sym" style="margin-bottom:0;font-size:13px;font-weight:700;color:var(--blue)"></div>
         <div class="strength" id="modal-strength">检查中…</div>
         <div class="mode-tag" id="modal-stage" style="margin-bottom:0"></div>
         <div class="regime-tag" id="modal-regime" style="display:none"></div>
@@ -1038,6 +1040,7 @@
   async function focusSymbol(sym) {
     if (!sym) return;
     if (sym !== currentSymbol) {
+      modalMask.classList.remove('show');   // 切品种先收起"我要开仓"弹窗，避免残留上一品种的决策内容
       try {
         const r = await fetch('/api/symbol', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1075,6 +1078,11 @@
         if (score >= 75 && tb.direction !== 'wait') sc = tb.direction === 'long' ? '#da3633' : '#2ea043';
         else if (score >= 55) sc = '#d29922';
       }
+      // 轨道B 决策结构方向（双轨同显：与"我要开仓"弹窗同口径，避免只看首页灯误判方向）
+      const decDir = (c.decision || {}).direction;
+      const decWord = decDir === 'long' ? '结构多' : decDir === 'short' ? '结构空' : '';
+      const decColor = decDir === 'long' ? '#da3633' : decDir === 'short' ? '#2ea043' : '#8b949e';
+      const decWord2 = decWord || ((c.decision || {}).quadrant === 'standby' ? '观望' : '');
       // 市场状态小标签（趋势市·多=红 / 趋势市·空=绿 / 震荡市=琥珀，涨红跌绿约定）
       const RG_COLOR = { trend_up: '#da3633', trend_down: '#2ea043', range: '#d29922' };
       const rg = c.regime;
@@ -1086,7 +1094,7 @@
         </div>
         <div class="ov-price">${c.price != null ? c.price : '--'}</div>
         <div class="ov-row"><span>轨道A</span><b style="color:${lampColor}">${lampTxt}</b>
-          <span style="margin-left:auto">轨道B</span><b style="color:${sc};font-size:15px">${score != null ? score : '--'}</b></div>
+          <span style="margin-left:auto">轨道B</span><b style="color:${sc};font-size:15px">${score != null ? score : '--'}</b>${decWord2 ? `<b style="color:${decColor};font-size:11px;margin-left:4px">${decWord2}</b>` : ''}</div>
         <div class="ov-reason">${(c.reasons && c.reasons[0]) || ''} ${rgTag}</div>
         ${c.fundamentals && c.fundamentals.summary ? `<div class="ov-row" style="margin-top:4px;font-size:11px"><span>基本面</span><b style="font-weight:400;color:#c9d1d9">${c.fundamentals.summary}${c.fundamentals.stale ? '（旧）' : ''}</b></div>` : ''}
       </div>`;
@@ -1118,28 +1126,35 @@
       return { ...c, _score: s };
     });
 
-    // 最清晰：有共振 或 quadrant != standby，按分数排序取 top3
+    // 最清晰：有共振 或 quadrant != standby，按分数排序，不设上限
     const active = scored.filter(c => c.track_a && c.track_a.resonance || (c.decision && c.decision.quadrant !== 'standby'));
     active.sort((a, b) => b._score - a._score);
-    const top = active.slice(0, 3);
+    const top = active;
 
-    // 可关注：无共振但趋势市（ER>0.3）或确定性分>30，按分数排序取 top3
+    // 可关注：无共振但趋势市（ER>0.3）或确定性分>30，按分数排序，不设上限
     const watch = scored.filter(c => !active.includes(c) && ((c.regime && c.regime.er > 0.3) || (c.decision && c.decision.certainty_score > 30)));
     watch.sort((a, b) => b._score - a._score);
-    const watchTop = watch.slice(0, 3);
+    const watchTop = watch;
 
     const LAMP_COLOR = { red: '#da3633', green: '#2ea043', gray: '#484f58' };
-    const DIR_TXT = { long: '做多', short: '做空', none: '--' };
 
     function itemHtml(c, rank) {
       const ta = c.track_a || {};
       const dec = c.decision || {};
       const rg = c.regime || {};
       const lamp = LAMP_COLOR[c.lamp] || '#484f58';
-      const dirCls = ta.direction === 'long' ? 'long' : ta.direction === 'short' ? 'short' : '';
+      // —— 双轨方向同显：chip1=轨道A（共振多/共振空 或 偏多/偏空/无方向），chip2=轨道B决策结构方向（结构多/结构空）——
+      const aDir = ta.direction;
+      const aCls = aDir === 'long' ? 'long' : aDir === 'short' ? 'short' : 'none';
+      const aWord = ta.resonance ? (aDir === 'long' ? '共振多' : aDir === 'short' ? '共振空' : '共振')
+        : (aDir === 'long' ? '偏多' : aDir === 'short' ? '偏空' : '无方向');
+      const bDir = dec.direction;
+      const bWord = bDir === 'long' ? '结构多' : bDir === 'short' ? '结构空' : '';
+      const bCls = bDir === 'long' ? 'long' : bDir === 'short' ? 'short' : 'none';
       const quadTxt = { probe: '试单', main: '主仓', confirm: '确认', avoid: '不做', standby: '观望' }[dec.quadrant] || '';
       const parts = [];
-      if (ta.resonance) parts.push('共振');
+      // 轨道B无结构方向但为观望态时，chip2 显灰"观望"，避免首页只看到轨道A单边词误判
+      const bWord2 = bWord || (dec.quadrant === 'standby' ? '观望' : '');
       if (quadTxt && quadTxt !== '观望') parts.push(quadTxt);
       if (rg.er > 0.3) parts.push('趋势');
       if (dec.certainty_score > 0) parts.push(`确定${dec.certainty_score}`);
@@ -1147,7 +1162,7 @@
         <span style="color:var(--dim);font-size:11px;width:16px">${rank}</span>
         <span class="dot" style="background:${lamp}"></span>
         <span class="nm">${c.name}</span>
-        <span class="dir ${dirCls}">${DIR_TXT[ta.direction] || '--'}</span>
+        <span class="dir ${aCls}">${aWord}</span>${bWord2 ? `<span class="dir ${bCls}">${bWord2}</span>` : ''}
         <span class="meta">${parts.join(' · ')}</span>
       </div>`;
     }
@@ -1563,7 +1578,9 @@
   }
 
   const demoQ = new URLSearchParams(location.search).get('demo');   // mock 象限演示透传
+  const modalSym = document.getElementById('modal-sym');
   entryBtn.onclick = async () => {
+    modalSym.textContent = currentSymbol || '';
     modalStrength.textContent = '检查中…';
     modalStrength.className = 'strength';
     modalStage.textContent = '';
@@ -1578,7 +1595,9 @@
       modalStrength.textContent = QUAD_TXT[d.quadrant] || d.quadrant || '--';
       modalStrength.className = 'strength st-' + (d.quadrant || 'standby');
       const refTxt = REF_TXT[d.entry_point_ref] || '';
-      modalStage.textContent = (d.direction === 'long' ? '做多' : d.direction === 'short' ? '做空' : '方向不明') +
+      const dirTxt = d.direction === 'long' ? '做多' : d.direction === 'short' ? '做空' : '方向不明';
+      const dirColor = d.direction === 'long' ? '#da3633' : d.direction === 'short' ? '#2ea043' : 'var(--dim)';
+      modalStage.innerHTML = '<b style="color:' + dirColor + '">' + dirTxt + '</b>' +
         (refTxt ? ' · 参考入场点：' + refTxt : '');
       modalMode.textContent = d.mode_label ? '判定口径：' + d.mode_label : '';
       modalSumm.textContent = d.summary || '';
