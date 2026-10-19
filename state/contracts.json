@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "source": "tqsdk",
+  "fetched_at": "2026-10-19T11:49:21.468391+08:00",
+  "presets": [
+    {
+      "symbol": "SHFE.ag2612",
+      "name": "沪银2612",
+      "tick": 1.0,
+      "tick_value": 15.0,
+      "expire_datetime": 1797318000.0
+    },
+    {
+      "symbol": "SHFE.au2612",
+      "name": "沪金2612",
+      "tick": 0.02,
+      "tick_value": 20.0,
+      "expire_datetime": 1797318000.0
+    },
+    {
+      "symbol": "SHFE.rb2701",
+      "name": "螺纹钢2701",
+      "tick": 1.0,
+      "tick_value": 10.0,
+      "expire_datetime": 1799996400.0
+    },
+    {
+      "symbol": "CZCE.SA701",
+      "name": "纯碱701",
+      "tick": 1.0,
+      "tick_value": 20.0,
+      "expire_datetime": 1799910000.0
+    },
+    {
+      "symbol": "CZCE.FG701",
+      "name": "玻璃701",
+      "tick": 1.0,
+      "tick_value": 20.0,
+      "expire_datetime": 1799910000.0
+    },
+    {
+      "symbol": "SHFE.bu2611",
+      "name": "沥青2611",
+      "tick": 1.0,
+      "tick_value": 10.0,
+      "expire_datetime": 1794812400.0
+    },
+    {
+      "symbol": "CZCE.CF701",
+      "name": "棉花701",
+      "tick": 5.0,
+      "tick_value": 25.0,
+      "expire_datetime": 1799910000.0
+    },
+    {
+      "symbol": "SHFE.sp2701",
+      "name": "纸浆2701",
+      "tick": 2.0,
+      "tick_value": 20.0,
+      "expire_datetime": 1799996400.0
+    },
+    {
+      "symbol": "SHFE.ss2612",
+      "name": "不锈钢2612",
+      "tick": 5.0,
+      "tick_value": 25.0,
+      "expire_datetime": 1797318000.0
+    },
+    {
+      "symbol": "DCE.m2701",
+      "name": "豆粕2701",
+      "tick": 1.0,
+      "tick_value": 10.0,
+      "expire_datetime": 1799910000.0
+    },
+    {
+      "symbol": "DCE.jm2701",
+      "name": "焦煤2701",
+      "tick": 0.5,
+      "tick_value": 30.0,
+      "expire_datetime": 1799910000.0
+    },
+    {
+      "symbol": "CZCE.MA701",
+      "name": "甲醇701",
+      "tick": 1.0,
+      "tick_value": 10.0,
+      "expire_datetime": 1799910000.0
+    }
+  ]
+}

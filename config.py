@@ -9,14 +9,16 @@
 SYMBOL = "SHFE.ag2612"
 
 # ==== 三个周期(秒) ====
-# 15分=主战场定方向, 3分=过滤位置, 30秒=触发入场
-PERIOD_TREND = 15 * 60   # 900  主战场
+# 辅助共振默认30分/3分/1分；主交易计划固定30分结构/3分确认。
+PERIOD_TREND = 30 * 60   # 1800  主战场
 PERIOD_FILTER = 3 * 60   # 180  过滤
-PERIOD_TRIGGER = 30      # 30   触发
+PERIOD_TRIGGER = 60      # 60   执行观察
 
 # ==== 共振周期组合（面板上可直接切换，无需重启）====
 # 约束：趋势周期 > 过滤周期 > 触发周期（单位：秒）
 PERIOD_COMBOS = [
+    {"key": "intraday30", "name": "30分日内", "trend": 30 * 60, "filter": 3 * 60, "trigger": 60,
+     "trend_label": "30分", "filter_label": "3分", "trigger_label": "1分"},
     {"key": "scalp",    "name": "日内超短", "trend": 15 * 60, "filter": 3 * 60,  "trigger": 30,
      "trend_label": "15分", "filter_label": "3分",  "trigger_label": "30秒"},
     {"key": "swing",    "name": "短线波段", "trend": 60 * 60, "filter": 15 * 60, "trigger": 3 * 60,
@@ -24,7 +26,7 @@ PERIOD_COMBOS = [
     {"key": "position", "name": "波段",     "trend": 24 * 60 * 60, "filter": 60 * 60, "trigger": 15 * 60,
      "trend_label": "日线", "filter_label": "1小时", "trigger_label": "15分"},
 ]
-DEFAULT_COMBO = "scalp"
+DEFAULT_COMBO = "intraday30"
 
 
 def get_combo(key=None):
@@ -50,13 +52,13 @@ EXTRA_KLINE_SECONDS = [p for p, _ in EXTRA_KLINE_PERIODS]
 
 # ==== 全局监控层（全品种同时盯）====
 # 取舍说明：TqSdk 免费账号有订阅数上限，11 品种 × 全周期会爆。
-# 全局层每品种只挂 3 条K线：轨道A的趋势/过滤两腿 + 轨道B评分用 1h；
-# 30秒触发腿 和 7档多周期查看 只给"聚焦品种"订阅（见 app.py 懒加载）。
+# 全局层共用30分结构与3分确认两条K线，轨道B也使用30分；
+# 辅助触发腿和多周期查看只给聚焦品种订阅（见 app.py 懒加载）。
 # 全局层轨道A因此是"两腿雷达"（方向+位置过滤），完整三腿共振以聚焦面板为准。
-GLOBAL_TREND_PERIOD = 15 * 60    # 全局层轨道A 趋势腿
+GLOBAL_TREND_PERIOD = 30 * 60    # 全局层轨道A 趋势腿；主交易计划固定30分
 GLOBAL_FILTER_PERIOD = 3 * 60    # 全局层轨道A 过滤腿
-GLOBAL_TRACKB_PERIOD = 60 * 60   # 全局层轨道B 评分周期（1h）
-# 全局层 tick 级节流：每 N 轮刷新才重算一次轨道B评分（省CPU，K线未收盘时评分不变）
+GLOBAL_TRACKB_PERIOD = 30 * 60   # 结构评分与主战场使用同一30分数据
+# 兼容参数；当前轨道B以已完成K线内容变化为重算依据。
 GLOBAL_TRACKB_EVERY = 3
 
 # ==== 轨道B 双底评分引擎参数（double_bottom.py 使用）====
@@ -169,7 +171,7 @@ AX_CONFIRM_STOP_ATR = 1.0   # 确认仓宽止损：颈位外侧 N×ATR
 # 设计立场：双底结构在 1h 周期天然稀缺（250 天 × 11 品种 main 只触发 3 笔），
 # 增加一条独立通路：轨道A 三频共振 + 现价不极端 → 直接给 probe 仓。
 # 这是"提高开仓率"的核心松绑，止损用结构止损（L2/颈位/MIN_RR 反推）。
-DIRECT_PROBE_ENABLED = True      # 是否启用企稳直通道
+DIRECT_PROBE_ENABLED = False     # 提前试仓改为显式独立模式，禁止静默绕过等待状态
 DIRECT_PROBE_EXTEND_ATR = 1.5    # 现价距 MA20 ≤ N×ATR 才算"不极端"（避免追高/追低）
 DIRECT_PROBE_MIN_RR = 1.2        # 企稳直通道最低盈亏比（结构止损反推入场价）
 

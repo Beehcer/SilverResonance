@@ -34,6 +34,7 @@ import os
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import double_bottom
@@ -43,6 +44,76 @@ import symbols as symbols_mod
 WEIGHTS = {"main": 1.0, "confirm": 0.25, "probe": 0.25}   # confirm 0.5→0.25：随 AX_POS_CONFIRM 修复（回测变体 C）
 TRADE_QUADRANTS = ("main", "probe", "confirm")
 FREE_KLINE_CAP = 8900          # 免费账号单次拉取上限留余量
+ROUND_TRIP_COST_TICKS = 2.0
+EXECUTION_VERSION = "2026-10-19-integrity-v1"
+EXECUTION_LIMITATIONS = (
+    "往返成本暂按每手2跳统一压力假设，非实际手续费报价；同根双触先止损，"
+    "跳空止损按开盘不利价；主连未包含真实换月成交及换月费用。"
+    "修复前的报告含前视/退出记账问题，不能作为本版本业绩证据。"
+)
+
+
+def align_price(price, tick, upward):
+    """Align a price to the contract grid; never use decimal places as tick size."""
+    if tick <= 0:
+        raise ValueError("tick must be positive")
+    scaled = price / tick
+    steps = math.ceil(scaled - 1e-9) if upward else math.floor(scaled + 1e-9)
+    return round(steps * tick, 10)
+
+
+def aligned_levels(entry, stop, target, sgn, tick):
+    # Entry rounds against the trader; stop/target round outward from the entry.
+    return (align_price(entry, tick, sgn > 0),
+            align_price(stop, tick, sgn < 0),
+            align_price(target, tick, sgn > 0))
+
+
+def barrier_exit(bar, stop, target, sgn, tick):
+    """OHLC ambiguity: stop first; a gap cannot fill at a skipped stop price."""
+    hit_stop = bar["low"] <= stop if sgn > 0 else bar["high"] >= stop
+    if hit_stop:
+        price = min(stop, bar["open"]) if sgn > 0 else max(stop, bar["open"])
+        return align_price(price, tick, sgn < 0), "stop"
+    hit_target = bar["high"] >= target if sgn > 0 else bar["low"] <= target
+    if hit_target:
+        return target, "target"
+    return None, None
+
+
+def trading_day_labels(bars):
+    """Use supplied exchange trading_day, otherwise infer from observed day sessions.
+
+    Night sessions belong to the following available daytime session. This handles
+    weekends/holidays present in the data, but is not an exchange-calendar feed.
+    A trailing night without a following day is conservatively mapped to the next
+    weekday. Only timestamps, never future prices or scores, supply this calendar.
+    """
+    times = [datetime.fromisoformat(b["dt"]) for b in bars]
+    day_dates = sorted({t.date() for t in times if 8 <= t.hour < 18})
+    result = []
+    for b, t in zip(bars, times):
+        explicit = b.get("trading_day") or b.get("trading_date")
+        if explicit:
+            result.append(str(explicit)[:10])
+            continue
+        if 8 <= t.hour < 18:
+            result.append(t.date().isoformat())
+            continue
+        candidates = [d for d in day_dates if d > t.date() or (t.hour < 8 and d == t.date())]
+        day = candidates[0] if candidates else t.date() + timedelta(days=t.hour >= 18)
+        while day.weekday() >= 5:
+            day += timedelta(days=1)
+        result.append(day.isoformat())
+    return result
+
+
+def day_close_indices(bars, labels=None):
+    """Observed afternoon session ends. A truncated morning is not an EOD close."""
+    labels = labels or trading_day_labels(bars)
+    return {i for i, b in enumerate(bars)
+            if 14 <= datetime.fromisoformat(b["dt"]).hour < 18
+            and (i + 1 == len(bars) or labels[i + 1] != labels[i])}
 
 CSV_FIELDS = ["symbol", "name", "direction", "quadrant", "regime", "weight",
               "entry_time", "entry_price", "stop", "target",
@@ -105,7 +176,7 @@ def fetch_bars(api, preset, days, notes):
                              "volume": 0 if math.isnan(v) else int(v), "oi": oi})
             if len(bars) < 200:
                 raise ValueError(f"有效K线仅 {len(bars)} 根")
-            return bars, f"{kind} {sym}"
+            return bars[:-1], f"{kind} {sym}"  # final downloaded candle may still be forming
         except Exception as e:  # noqa: BLE001 单源失败尝试下一源
             notes.append(f"{preset['name']} {kind} {sym} 拉取失败：{type(e).__name__}: {e}")
             time.sleep(1.0)
@@ -124,7 +195,7 @@ def load_cache(out_dir, symbol, days):
         return None, None
     with open(path, "r", encoding="utf-8") as f:
         d = json.load(f)
-    return d["bars"], d["source"]
+    return d["bars"][:-1], d["source"]
 
 
 def save_cache(out_dir, symbol, days, bars, source):
@@ -169,7 +240,7 @@ def parse_variant(arg):
 
 # ---------------- 无前视重放 ----------------
 
-def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
+def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None, intraday=True):
     """单品种重放，返回逐笔交易列表。严格无前视：t 根收盘只用 bars[:t+1]。
     variant（confirm 敏感性）：只改 confirm 象限的放行/入场/权重，probe/main 逻辑不动。
     info：可选 dict，回传过滤计数（gate_drop / pullback_expired / pullback_filled）。"""
@@ -180,6 +251,8 @@ def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
     trend_only = variant.get("trend_only")
     confirm_w = variant.get("confirm_weight", WEIGHTS["confirm"])
     tick = preset["tick"]
+    days = trading_day_labels(bars)
+    closes = day_close_indices(bars, days)
     trades = []
     pos = None
     pending = None                    # pullback 模式下的待回踩 confirm 信号
@@ -188,17 +261,14 @@ def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
         if pos:
             sgn = pos["sgn"]
             exit_price = reason = None
-            hit_stop = bar["low"] <= pos["stop"] if sgn > 0 else bar["high"] >= pos["stop"]
-            hit_tgt = bar["high"] >= pos["target"] if sgn > 0 else bar["low"] <= pos["target"]
-            if hit_stop:                    # 同根双触 → 保守计止损
-                exit_price, reason = pos["stop"], "stop"
-            elif hit_tgt:
-                exit_price, reason = pos["target"], "target"
-            elif t - pos["entry_i"] >= timeout_bars:
+            exit_price, reason = barrier_exit(bar, pos["stop"], pos["target"], sgn, tick)
+            if reason is None and intraday and t in closes:
+                exit_price, reason = align_price(bar["close"], tick, sgn < 0), "day_close"
+            elif reason is None and t - pos["entry_i"] >= timeout_bars:
                 exit_price, reason = bar["close"], "timeout"
             if exit_price is None:
                 continue
-            pnl = (exit_price - pos["entry"]) * sgn - 2 * tick   # 成本 2 跳/来回
+            pnl = (exit_price - pos["entry"]) * sgn - ROUND_TRIP_COST_TICKS * tick
             r = pnl / pos["risk"]
             trades.append({**pos["meta"], "exit_time": bar["dt"], "exit_price": round(exit_price, 4),
                            "exit_reason": reason, "bars_held": t - pos["entry_i"] + 1,
@@ -215,17 +285,18 @@ def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
             else:
                 z = 0.5 * pending["atr"]
                 ref = pending["ref"]
-                if bar["low"] <= ref + z and bar["high"] >= ref - z and t + 1 < len(bars):
-                    entry = bars[t + 1]["open"]
+                if (bar["low"] <= ref + z and bar["high"] >= ref - z and t + 1 < len(bars)
+                        and (not intraday or days[t + 1] == days[t])):
                     sgn = pending["sgn"]
-                    risk = (entry - pending["stop"]) * sgn
-                    if risk > 0:            # 回踩后次根开盘仍未越过止损 → 入场
-                        pos = {"entry_i": t + 1, "entry": entry, "stop": pending["stop"],
-                               "target": pending["target"], "sgn": sgn, "risk": risk,
+                    entry, stop, target = aligned_levels(bars[t + 1]["open"], pending["stop"],
+                                                         pending["target"], sgn, tick)
+                    risk = (entry - stop) * sgn
+                    if risk > 0 and (target - entry) * sgn > 0:
+                        pos = {"entry_i": t + 1, "entry": entry, "stop": stop,
+                               "target": target, "sgn": sgn, "risk": risk,
                                "weight": pending["weight"],
                                "meta": {**pending["meta"], "entry_time": bars[t + 1]["dt"],
-                                        "entry_price": entry, "stop": pending["stop"],
-                                        "target": pending["target"]}}
+                                        "entry_price": entry, "stop": stop, "target": target}}
                         if info is not None:
                             info["pullback_filled"] = info.get("pullback_filled", 0) + 1
                     pending = None
@@ -270,15 +341,16 @@ def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
         if quadrant not in TRADE_QUADRANTS or d["direction"] not in ("long", "short") \
                 or not d["stop"] or t + 1 >= len(bars):
             continue
-        entry = bars[t + 1]["open"]
-        sgn = 1 if d["direction"] == "long" else -1
-        stop = d["stop"]["price"]
-        risk = (entry - stop) * sgn
-        if risk <= 0:                       # 次根开盘已越过止损，信号失效
+        if intraday and days[t + 1] != days[t]:
             continue
+        sgn = 1 if d["direction"] == "long" else -1
         weight = confirm_w if quadrant == "confirm" else WEIGHTS[quadrant]
         t1 = (ev.get("plan") or {}).get("target1") \
             or round(2 * p["neck"] - p["L1"]["price"], 2)   # 丈量目标：2×颈位−L1（双向通用）
+        entry, stop, t1 = aligned_levels(bars[t + 1]["open"], d["stop"]["price"], t1, sgn, tick)
+        risk = (entry - stop) * sgn
+        if risk <= 0 or (t1 - entry) * sgn <= 0:
+            continue
         pos = {"entry_i": t + 1, "entry": entry, "stop": stop, "target": t1,
                "sgn": sgn, "risk": risk, "weight": weight,
                "meta": {"symbol": preset["symbol"], "name": preset["name"],
@@ -288,7 +360,7 @@ def run_symbol(preset, bars, warmup, timeout_bars, variant=None, info=None):
                         "stop": stop, "target": t1}}
     if pos:                                 # 数据末尾强平
         bar = bars[-1]
-        pnl = (bar["close"] - pos["entry"]) * pos["sgn"] - 2 * tick
+        pnl = (bar["close"] - pos["entry"]) * pos["sgn"] - ROUND_TRIP_COST_TICKS * tick
         r = pnl / pos["risk"]
         trades.append({**pos["meta"], "exit_time": bar["dt"], "exit_price": bar["close"],
                        "exit_reason": "end", "bars_held": len(bars) - pos["entry_i"],
@@ -348,8 +420,10 @@ def build_report(all_trades, quality, args):
     L.append("# 双轴评分系统历史回测报告")
     L.append("")
     L.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
+    L.append(f"- 执行版本：{EXECUTION_VERSION}。{EXECUTION_LIMITATIONS}")
+    L.append("- 日内：观察到的下午收盘离场，禁止把当日末信号带到下一交易日开仓；夜盘交易日优先使用数据标签，否则由后续日盘日期推断。")
     L.append(f"- 区间：近 {args.days} 个交易日 1h K线｜warmup {args.warmup} 根｜超时 {args.timeout_bars} 根强平")
-    L.append("- 成本：每来回 2 跳（滑点+手续费）｜成交假设：次根开盘价入场，止损/目标按触及价成交，"
+    L.append("- 成本：每来回 2 跳（假设，非实收费用）｜成交假设：次根开盘价入场，跳空止损按开盘不利价，目标按目标价，"
              "同根双触保守计止损｜仓位权重：main 1.0 / confirm 0.25 / probe 0.25（只影响加权 R；"
              "confirm 已落地修复：震荡市降级 probe + 权重 0.5→0.25）")
     L.append("- 引擎：double_bottom.evaluate + entry_logic.detect_regime + entry_logic.decide（无前视重放）")
@@ -415,6 +489,8 @@ def main():
                     help="confirm 敏感性变体：base/A/B/C/D 或逗号 token（cert70,minconf2,pullback,w0.25,trendonly）")
     ap.add_argument("--variant-out", type=str, default="", help="变体交易明细输出 csv 路径")
     args = ap.parse_args()
+    if args.report_only or args.append:
+        ap.error("旧CSV没有执行版本指纹，禁止与修复后结果混合或重标为新版；请完整重跑生成新报告")
 
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.out)
     os.makedirs(out_dir, exist_ok=True)

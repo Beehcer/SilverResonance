@@ -6,7 +6,7 @@ PyInstaller 打包配置：白银三频共振面板 → 单个 exe
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [("templates", "templates")]
+datas = [("templates", "templates"), ("static", "static")]
 binaries = []
 hiddenimports = []
 

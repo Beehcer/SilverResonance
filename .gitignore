@@ -3,3 +3,6 @@ __pycache__/
 dist/
 build/build/
 backtest/
+
+# Personal market-data credentials stay on this machine.
+/user_config.json

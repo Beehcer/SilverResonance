@@ -9,8 +9,9 @@ panel_backtest.py — 面板建议功能历史回测（方案A: IC分析 + 方�
     B) 每天按评分选 Top3 品种，只交易这些品种的信号，对比全部交易的基准
 
 数据限制：缓存只有 1h K线，track_a 共振需要 15min/3min/30s 三周期。
-处理方案：从 1h K线降采样模拟（1h→15min×4→3min×20→30s×40），
-这不会完美精确，但保留方向性和相对排序，足以验证面板逻辑的有效性。
+处理方案：从 1h K线插值模拟（1h→15min×4→3min×20→30s×120），
+这种插值无法恢复真实价格路径，只能用于机制演示，不能验证胜率或面板有效性。
+修复前的历史报告包含同日选品前视和 C6 记账错误，不能作为可用业绩证据。
 
 性能优化：
   - 降采样结果预计算缓存（每品种只算一次）
@@ -35,6 +36,9 @@ import double_bottom
 import entry_logic
 import resonance
 import symbols as symbols_mod
+from backtest import (ROUND_TRIP_COST_TICKS, EXECUTION_VERSION, EXECUTION_LIMITATIONS,
+                      align_price, aligned_levels, barrier_exit,
+                      trading_day_labels, day_close_indices)
 
 # ---- 面板评分权重（与 renderAdvice JS 完全一致）----
 W_RESONANCE = 50
@@ -46,13 +50,13 @@ W_QUADRANT = 30
 # ---- 方案B参数 ----
 TOP_N = 3                    # 每天选 Top N
 MAX_HOLD_BARS = 60           # 最大持仓根数（与 backtest.py 一致）
-COST_TICKS = 2               # 每来回成本跳数
+COST_TICKS = ROUND_TRIP_COST_TICKS  # 明确假设，不是实际交易所/期货公司费用
 
 # ---- 方案U（用户实盘系统）参数 ----
 # 用户口径：共振亮+双底结构 → 量仓动能过滤 → 每手固定止盈100元/止损50元（各品种按
 # tick_value 换算成价格距离：dist_price = 金额 ÷ tick_value × tick），每信号一手。
 USER_TP_YUAN = 100           # 每手止盈金额（元）
-USER_SL_YUAN = 50            # 每手止损金额（元）→ 50元 = 1R（R = pnl_yuan / 50）
+USER_SL_YUAN = 50            # tick对齐前毛止损金额；R按对齐后实际初始风险归一
 USER_VOL_MA = 20             # 放量均量窗口（前 N 根，不含确认根）
 
 # ---- 方案A采样间隔（每 N 根 K线计算一次，默认5）----
@@ -66,7 +70,7 @@ SAMPLE_INTERVAL = 5
 #  2) 本文件评分权重常量 W_* 变化（指纹入文件名，改权重自动换缓存）；
 #  3) 手动改 ROWS_CACHE_VERSION（改了 precompute_rows/replay 入场门等 rows 逻辑时 +1）。
 ROWS_CACHE_DIR = "cache_rows"
-ROWS_CACHE_VERSION = 2
+ROWS_CACHE_VERSION = 3
 ROWS_SOURCE_FILES = ("entry_logic.py", "double_bottom.py",
                      "resonance.py", "config.py")
 _ROWS_W_SIG = f"{W_RESONANCE}-{W_CERTAINTY}-{W_ER}-{W_LOCATION}-{W_QUADRANT}"
@@ -120,13 +124,13 @@ def load_cache(out_dir, symbol, days=250):
         return None, None
     with open(path, "r", encoding="utf-8") as f:
         d = json.load(f)
-    return d["bars"], d["source"]
+    return d["bars"][:-1], d["source"]  # final downloaded candle may still be forming
 
 
 def downsample_bars(bars_1h, target_sec):
     """
     从 1h K线降采样到目标周期。
-    3600s → 900s(15min): ×4；3600s → 180s(3min): ×20；3600s → 30s: ×40
+    3600s → 900s(15min): ×4；3600s → 180s(3min): ×20；3600s → 30s: ×120
     方法：对每根 1h K线，线性插值生成子 K线（OHLCV 按时间均匀分布）。
     这不是真实的 tick 数据，但保留了 1h 内的价格路径方向。
     """
@@ -163,7 +167,7 @@ def precompute_downsampled(bars_1h):
     }
 
 
-def compute_panel_score_fast(bars_1h, bars_15m, bars_3m, bars_30s):
+def compute_panel_score_fast(bars_1h, bars_15m, bars_3m, bars_30s, tick=1.0):
     """
     快速计算面板评分（使用预计算的降采样数据）。
     bars_15m/3m/30s 必须与 bars_1h 对应同一时间点。
@@ -183,7 +187,7 @@ def compute_panel_score_fast(bars_1h, bars_15m, bars_3m, bars_30s):
     d = entry_logic.decide(ev, price, atr=atr, regime=rg)
 
     # --- track_a: 三频共振（使用预计算数据）---
-    res = resonance.evaluate(bars_15m, bars_3m, bars_30s)
+    res = resonance.evaluate(bars_15m, bars_3m, bars_30s, tick=tick)
 
     # --- 面板评分公式（与 renderAdvice JS 一致）---
     score = 0.0
@@ -231,7 +235,7 @@ def forward_return(bars, t, n_bars):
     return (c1 - c0) / c0
 
 
-def precompute_rows(bars, ds, warmup):
+def precompute_rows(bars, ds, warmup, tick=1.0):
     """
     单品种一次性预计算：对每根 bar t（t ≥ warmup）算面板评分/决策状态并**瘦身存表**。
     返回 {t: row}，row 仅含 replay_symbol 与 Top3 选择需要的字段：
@@ -262,7 +266,7 @@ def precompute_rows(bars, ds, warmup):
         a15 = tail(ds15, (t + 1) * 4)
         a3 = tail(ds3, (t + 1) * 20)
         a30 = tail(ds30, (t + 1) * 120)
-        ps = compute_panel_score_fast(kb, a15, a3, a30)
+        ps = compute_panel_score_fast(kb, a15, a3, a30, tick=tick)
         if not ps:
             continue
         d = ps.get("decide") or {}
@@ -292,8 +296,9 @@ def precompute_rows(bars, ds, warmup):
 def last_idx_by_date(bars, warmup):
     """返回 {date: idx}，date 为该日最后一根 1h bar 的索引（t ≥ warmup 才记录）。"""
     m = {}
+    days = trading_day_labels(bars)
     for i in range(warmup, len(bars)):
-        m[bars[i]["dt"][:10]] = i
+        m[days[i]] = i
     return m
 
 
@@ -332,9 +337,9 @@ def scheme_a(all_bars, presets, warmup=120, sample_interval=SAMPLE_INTERVAL):
             sub_1h = bars[:t + 1]
             sub_15m = ds["15m"][:(t + 1) * 4]  # 1h→15min ×4
             sub_3m = ds["3m"][:(t + 1) * 20]   # 1h→3min ×20
-            sub_30s = ds["30s"][:(t + 1) * 40] # 1h→30s ×40
+            sub_30s = ds["30s"][:(t + 1) * 120]
 
-            ps = compute_panel_score_fast(sub_1h, sub_15m, sub_3m, sub_30s)
+            ps = compute_panel_score_fast(sub_1h, sub_15m, sub_3m, sub_30s, tick=preset["tick"])
             if ps is None:
                 continue
             for h in horizons:
@@ -414,6 +419,8 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
     2. 次日只交易这 3 个品种的信号（probe/main/confirm）
     3. 对比"交易全部品种"的基准
     """
+    presets_map = {p["symbol"]: p for p in presets}
+    print("\n机制演示：插值小周期不得用于胜率/盈利能力验证；旧报告不可作为本版证据。")
     print("\n" + "=" * 60)
     print("方案 B: Top3 组合回测（面板过滤 vs 全品种基准）")
     print("=" * 60)
@@ -434,7 +441,7 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
         if rows is None:
             t0 = time.time()
             ds = precompute_downsampled(bars)          # 全量降采样只算一次
-            rows = precompute_rows(bars, ds, warmup)   # 每根 bar 一次评分/决策
+            rows = precompute_rows(bars, ds, warmup, tick=preset["tick"])
             tag = f"预计算 {time.time()-t0:.0f}s"
             if out_dir:
                 save_rows_cache(out_dir, sym, rows, warmup=warmup)
@@ -442,7 +449,7 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
             tag = "rows缓存命中"
         rows_all[sym] = rows
         last_all[sym] = last_idx_by_date(bars, warmup)
-        signals = replay_symbol(preset, bars, warmup, rows=rows)
+        signals = replay_symbol(preset, bars, warmup, rows=rows, lots=2)
         all_signals[sym] = signals
         print(f"  {name} ({sym}): {len(signals)} 个信号  [{tag}]")
 
@@ -456,7 +463,7 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
     all_dates = sorted(all_dates)
     print(f"  共 {len(all_dates)} 个交易日有信号")
 
-    # 对每个交易日，查当日最后 bar 的评分行选 Top3
+    # 当天交易只能使用前一个已结束交易日的评分。
     daily_top3 = {}  # date -> [(symbol, score), ...]
     for dt in all_dates:
         day_scores = []
@@ -465,13 +472,10 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
             rows = rows_all.get(sym)
             if not rows:
                 continue
-            idx = last_all[sym].get(dt)   # 精确到该交易日最后一根 1h
-            if idx is None:
-                # 该品种当日无数据：取 ≤ dt 的最近有数据日（与原实现一致）
-                prev = [d for d in sorted(last_all[sym]) if d <= dt]
-                if not prev:
-                    continue
-                idx = last_all[sym][prev[-1]]
+            prev = [d for d in sorted(last_all[sym]) if d < dt]
+            if not prev:
+                continue
+            idx = last_all[sym][prev[-1]]
             row = rows.get(idx)
             if row and row["group"] == "active":
                 day_scores.append((sym, row["score"]))
@@ -506,7 +510,7 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
         if not bars:
             continue
         c6_signals = replay_symbol(preset, bars, warmup, variant="c6_half",
-                                   rows=rows_all.get(sym))
+                                   rows=rows_all.get(sym), lots=2)
         for sig in c6_signals:
             dt = sig["entry_date"]
             top3 = daily_top3.get(dt, [])
@@ -546,6 +550,8 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
             print(f"  {dt}: (无 active 品种)")
 
     return {
+        "validation_status": "synthetic_demo_only",
+        "execution_version": EXECUTION_VERSION,
         "baseline": baseline_stats,
         "filtered": filtered_stats,
         "c6": c6_stats,
@@ -554,171 +560,104 @@ def scheme_b(all_bars, presets, warmup=120, out_dir=None):
     }
 
 
-def replay_symbol(preset, bars, warmup, variant=None, rows=None):
-    """
-    对单品种逐根重放，生成所有交易信号（含入场/出场/R 值）。
-    复用 backtest.py 的逻辑，但增加了面板评分记录。
+def replay_symbol(preset, bars, warmup, variant=None, rows=None, lots=1, intraday=True):
+    """Replay integer lots; one record per original position, including partial exits.
 
-    rows: 可选，precompute_rows() 的产物 {t: row}。传入后空仓决策直接查表
-          （quadrant/direction/stop/target 与旧版逐根 decide 完全一致——
-          入场只由 1h decide 驱动，resonance/score 不参与入场，仅记录），
-          不再重复 evaluate/decide/降采样，是提速的关键。
-          不传则走旧版逐根重算路径（逐根兼容，未删）。
-
-    variant:
-      None 或 'baseline' → 原规则
-      'c6_half'          → C6 半仓止盈：浮盈≥1R 平 50%，余下止损移到保本位
+    R is net P&L divided by original total stop risk. Each completed lot pays the
+    stated round-trip cost exactly once. Synthetic rows remain demonstration data.
     """
+    if isinstance(lots, bool) or not isinstance(lots, int) or lots < 1:
+        raise ValueError("lots must be a positive integer")
     tick = preset["tick"]
-    timeout_bars = MAX_HOLD_BARS
-    trades = []
-    pos = None
+    days = trading_day_labels(bars)
+    day_ends = day_close_indices(bars, days)
+    trades, pos = [], None
+    ds = precompute_downsampled(bars) if rows is None else None
 
-    # C6 状态
-    half_taken = False          # 是否已平掉 50%
-    orig_weight = 0.0           # 原始权重（用于拆成两笔）
-
-    # 面板评分用降采样：rows 模式用行内 score，无需重建（懒加载）
-    ds = None
-    if rows is None:
-        ds = precompute_downsampled(bars)
+    def close_lots(price, quantity, reason, t):
+        price = align_price(price, tick, pos["sgn"] < 0)
+        net = ((price - pos["entry"]) * pos["sgn"] - COST_TICKS * tick) * quantity
+        pos["net"] += net
+        pos["remaining"] -= quantity
+        pos["exits"].append({"time": bars[t]["dt"], "price": price,
+                             "lots": quantity, "reason": reason})
+        if pos["remaining"]:
+            return
+        r = pos["net"] / (pos["risk"] * lots)
+        trades.append({**pos["meta"], "exit_time": bars[t]["dt"],
+                       "exit_price": price, "exit_reason": reason,
+                       "bars_held": t - pos["entry_i"] + 1,
+                       "pnl_ticks": round(pos["net"] / tick, 6),
+                       "R": round(r, 6), "weighted_R": round(r * pos["weight"], 6),
+                       "panel_score": pos["panel_score"], "exits": list(pos["exits"]),
+                       "cost_ticks_per_lot": COST_TICKS})
 
     for t in range(warmup, len(bars)):
         bar = bars[t]
-
-        # 持仓中：检查出场
         if pos:
-            sgn = pos["sgn"]
-            exit_price = reason = None
-
-            # ---- C6 半仓止盈：浮盈首次 ≥1R → 平 50%，止损移保本 ----
-            if variant == "c6_half" and not half_taken:
-                unreal = (bar["close"] - pos["entry"]) * sgn
-                if unreal >= pos["risk"]:                    # 浮盈 ≥ 1R
-                    half_pnl = unreal * 0.5
-                    half_r = (half_pnl - COST_TICKS * tick * 0.5) / pos["risk"]
-                    trades.append({
-                        **pos["meta"],
-                        "exit_time": bar["dt"],
-                        "exit_price": round(bar["close"], 4),
-                        "exit_reason": "c6_half_profit",
-                        "bars_held": t - pos["entry_i"] + 1,
-                        "pnl_ticks": round(half_pnl / tick, 1),
-                        "R": round(half_r, 3),
-                        "weighted_R": round(half_r * pos["weight"] * 0.5, 3),
-                        "panel_score": pos.get("panel_score", 0),
-                    })
-                    half_taken = True
-                    pos["stop"] = pos["entry"]                # 余下 50% 止损移到保本
-                    pos["weight"] = pos["weight"] * 0.5        # 权重减半
-                    continue                                   # 本根不再判其他出场
-
-            hit_stop = bar["low"] <= pos["stop"] if sgn > 0 else bar["high"] >= pos["stop"]
-            hit_tgt = bar["high"] >= pos["target"] if sgn > 0 else bar["low"] <= pos["target"]
-            if hit_stop:
-                exit_price, reason = pos["stop"], "stop"
-            elif hit_tgt:
-                exit_price, reason = pos["target"], "target"
-            elif t - pos["entry_i"] >= timeout_bars:
-                exit_price, reason = bar["close"], "timeout"
-            if exit_price is None:
+            if t < pos["entry_i"]:
                 continue
-            pnl = (exit_price - pos["entry"]) * sgn - COST_TICKS * tick * (0.5 if half_taken else 1.0)
-            r = pnl / pos["risk"] if pos["risk"] > 0 else 0
-            trades.append({
-                **pos["meta"],
-                "exit_time": bar["dt"],
-                "exit_price": round(exit_price, 4),
-                "exit_reason": reason,
-                "bars_held": t - pos["entry_i"] + 1,
-                "pnl_ticks": round(pnl / tick, 1),
-                "R": round(r, 3),
-                "weighted_R": round(r * pos["weight"], 3),
-                "panel_score": pos.get("panel_score", 0),
-            })
-            pos = None
-            half_taken = False
+            price, reason = barrier_exit(bar, pos["stop"], pos["target"], pos["sgn"], tick)
+            if reason is None and intraday and t in day_ends:
+                price, reason = bar["close"], "day_close"
+            elif reason is None and t - pos["entry_i"] >= MAX_HOLD_BARS:
+                price, reason = bar["close"], "timeout"
+            if reason is not None:
+                close_lots(price, pos["remaining"], reason, t)
+                pos = None
+                continue
+            # A close-based partial exit cannot precede an intrabar stop/target.
+            unreal = (bar["close"] - pos["entry"]) * pos["sgn"]
+            if (variant == "c6_half" and not pos["exits"] and lots >= 2
+                    and unreal >= pos["risk"]):
+                close_lots(bar["close"], lots // 2, "c6_half_profit", t)
+                pos["stop"] = pos["entry"]
             continue
 
-        # ---- 空仓：生成决策（查表 rows 或 旧版逐根重算） ----
         if rows is not None:
             row = rows.get(t)
             if not row:
                 continue
-            quadrant = row["quadrant"]
-            direction = row["direction"]
-            stop = row["stop_price"]
-            regime = row["regime"]
-            panel_score = row["score"]
-            # target：plan.target1 或 2×颈位−L1 丈量（与旧版一致；有 stop 必有 pattern）
-            t1 = row["ev_plan_t1"]
-            if not t1 and row["neck"] is not None and row["l1"] is not None:
-                t1 = round(2 * row["neck"] - row["l1"], 2)
+            quadrant, direction = row["quadrant"], row["direction"]
+            stop, regime, score = row["stop_price"], row["regime"], row["score"]
+            target = row["ev_plan_t1"]
+            if not target and row["neck"] is not None and row["l1"] is not None:
+                target = 2 * row["neck"] - row["l1"]
         else:
             kb = bars[:t + 1]
             ev = double_bottom.evaluate(kb)
             rg = entry_logic.detect_regime(kb)
-            atr = double_bottom._atr(kb)
-            d = entry_logic.decide(ev, bar["close"], atr=atr, regime=rg)
-            quadrant = d["quadrant"]
-            regime = rg["regime"]
-            direction = d["direction"]
+            d = entry_logic.decide(ev, bar["close"], atr=double_bottom._atr(kb), regime=rg)
+            quadrant, direction, regime = d["quadrant"], d["direction"], rg["regime"]
             stop = (d.get("stop") or {}).get("price")
-            # 计算面板评分（使用预计算数据）
-            sub_15m = ds["15m"][:(t + 1) * 4]
-            sub_3m = ds["3m"][:(t + 1) * 20]
-            sub_30s = ds["30s"][:(t + 1) * 40]
-            ps = compute_panel_score_fast(kb, sub_15m, sub_3m, sub_30s)
-            panel_score = ps["score"] if ps else 0
-            t1 = None
-
-        if quadrant not in ("main", "probe", "confirm") or direction not in ("long", "short") \
-                or stop is None or t + 1 >= len(bars):
+            ps = compute_panel_score_fast(kb, ds["15m"][:(t+1)*4],
+                                         ds["3m"][:(t+1)*20], ds["30s"][:(t+1)*120], tick=tick)
+            score = ps["score"] if ps else 0
+            target = (ev.get("plan") or {}).get("target1")
+            pattern = ev.get("pattern") or {}
+            if target is None and pattern.get("neck") is not None and pattern.get("L1"):
+                target = 2 * pattern["neck"] - pattern["L1"]["price"]
+        if (quadrant not in ("main", "probe", "confirm") or direction not in ("long", "short")
+                or stop is None or target is None or t + 1 >= len(bars)):
             continue
-
-        entry = bars[t + 1]["open"]
+        if intraday and days[t + 1] != days[t]:
+            continue
         sgn = 1 if direction == "long" else -1
+        entry, stop, target = aligned_levels(bars[t + 1]["open"], stop, target, sgn, tick)
         risk = (entry - stop) * sgn
-        if risk <= 0:
+        if risk <= 0 or (target - entry) * sgn <= 0:
             continue
-
-        weight = {"main": 1.0, "confirm": 0.25, "probe": 0.25}.get(quadrant, 0.25)
-        orig_weight = weight                                   # C6 记录原始权重
-        if t1 is None and rows is None:
-            # 旧版逐根路径：plan.target1 或 2×颈位−L1 丈量（进入此处必有 stop→pattern）
-            t1 = (ev.get("plan") or {}).get("target1") \
-                or round(2 * ev["pattern"]["neck"] - ev["pattern"]["L1"]["price"], 2)
-
-        pos = {
-            "entry_i": t + 1, "entry": entry, "stop": stop, "target": t1,
-            "sgn": sgn, "risk": risk, "weight": weight,
-            "panel_score": panel_score,
-            "meta": {
-                "symbol": preset["symbol"], "name": preset["name"],
-                "direction": direction, "quadrant": quadrant,
-                "regime": regime, "weight": weight,
-                "entry_time": bars[t + 1]["dt"],
-                "entry_date": bars[t + 1]["dt"][:10],
-                "entry_price": entry, "stop": stop, "target": t1,
-            },
-        }
-        half_taken = False                                     # C6 重置
-
-    # 末尾强平
+        weight = {"main": 1.0, "confirm": 0.25, "probe": 0.25}[quadrant]
+        pos = {"entry_i": t + 1, "entry": entry, "stop": stop, "target": target,
+               "sgn": sgn, "risk": risk, "weight": weight, "remaining": lots,
+               "net": 0.0, "exits": [], "panel_score": score,
+               "meta": {"symbol": preset["symbol"], "name": preset["name"],
+                        "direction": direction, "quadrant": quadrant, "regime": regime,
+                        "weight": weight, "lots": lots, "entry_time": bars[t + 1]["dt"],
+                        "entry_date": days[t + 1], "entry_price": entry,
+                        "stop": stop, "target": target}}
     if pos:
-        bar = bars[-1]
-        cost_factor = 0.5 if half_taken else 1.0
-        pnl = (bar["close"] - pos["entry"]) * pos["sgn"] - COST_TICKS * tick * cost_factor
-        r = pnl / pos["risk"] if pos["risk"] > 0 else 0
-        trades.append({
-            **pos["meta"],
-            "exit_time": bar["dt"], "exit_price": bar["close"],
-            "exit_reason": "end", "bars_held": len(bars) - pos["entry_i"],
-            "pnl_ticks": round(pnl / tick, 1),
-            "R": round(r, 3),
-            "weighted_R": round(r * pos["weight"], 3),
-            "panel_score": pos.get("panel_score", 0),
-        })
+        close_lots(bars[-1]["close"], pos["remaining"], "end", len(bars) - 1)
     return trades
 
 
@@ -813,38 +752,38 @@ def compute_trade_stats(trades):
 #      + 收线方向同向），t+2 open 入场（贴实盘：看量仓配合才进）
 #   - 出场：固定金额止盈/止损 → 每手止盈距离 = 100/tick_value×tick（点数），
 #     止损距离 = 50/tick_value×tick；同根先触止损保守；timeout MAX_HOLD_BARS
-#   - R：止损金额50元=1R → R = pnl_yuan / 50；weight=1（一手）
-# 注意：入场那一根不判出场（与方案B一致，open进不扫本根）。
+#   - R：按tick对齐后的实际初始毛止损金额归一；weight=1（一手）。
+# 入场棒从open之后检查止损/目标；确认棒早于实际入场，不能判出场。
 
 def replay_user_symbol(preset, bars, warmup, rows, need_conf=False,
-                       vol_ma=USER_VOL_MA):
-    """用户系统单品种重放。返回 trades（R 以 50 元止损为 1R，weighted_R=R）。"""
+                       vol_ma=USER_VOL_MA, intraday=True):
+    """旧规则机制演示；价格向外对齐tick，R以实际初始风险归一。"""
     tick = preset["tick"]
     tv = preset.get("tick_value") or (tick * 10)          # 每跳金额(元/手)
     mult = tv / tick                                       # 合约乘数（点数→元）
     tp_dist = USER_TP_YUAN / tv * tick                     # 止盈价格距离
     sl_dist = USER_SL_YUAN / tv * tick                     # 止损价格距离
     trades, pos = [], None
+    days = trading_day_labels(bars)
+    day_ends = day_close_indices(bars, days)
 
     for t in range(warmup, len(bars)):
         # ---------- 持仓：判出场 ----------
         if pos:
+            if t < pos["entry_i"]:
+                continue
             bar = bars[t]
             sgn = pos["sgn"]
             sl, tp = pos["sl"], pos["tp"]
-            hit_sl = bar["low"] <= sl if sgn > 0 else bar["high"] >= sl
-            hit_tp = bar["high"] >= tp if sgn > 0 else bar["low"] <= tp
-            exit_price = reason = None
-            if hit_sl:
-                exit_price, reason = sl, "stop"            # 同根先止损（保守）
-            elif hit_tp:
-                exit_price, reason = tp, "target"
-            elif t - pos["entry_i"] >= MAX_HOLD_BARS:
+            exit_price, reason = barrier_exit(bar, sl, tp, sgn, tick)
+            if reason is None and intraday and t in day_ends:
+                exit_price, reason = align_price(bar["close"], tick, sgn < 0), "day_close"
+            elif reason is None and t - pos["entry_i"] >= MAX_HOLD_BARS:
                 exit_price, reason = bar["close"], "timeout"
             if exit_price is None:
                 continue
             pnl_yuan = (exit_price - pos["entry"]) * sgn * mult - COST_TICKS * tv
-            r = pnl_yuan / USER_SL_YUAN
+            r = pnl_yuan / pos["risk_yuan"]
             trades.append({
                 **pos["meta"],
                 "exit_time": bar["dt"], "exit_price": round(exit_price, 4),
@@ -890,21 +829,24 @@ def replay_user_symbol(preset, bars, warmup, rows, need_conf=False,
         else:
             entry_i = t + 1
 
-        if entry_i >= len(bars):
+        if entry_i >= len(bars) or (intraday and days[entry_i] != days[t]):
             continue
-        entry = bars[entry_i]["open"]
         sgn = 1 if direction == "long" else -1
-        sl = entry - sgn * sl_dist
-        tp = entry + sgn * tp_dist
+        raw_entry = bars[entry_i]["open"]
+        entry, sl, tp = aligned_levels(raw_entry, raw_entry - sgn * sl_dist,
+                                       raw_entry + sgn * tp_dist, sgn, tick)
         pos = {
             "entry_i": entry_i, "entry": entry, "sgn": sgn, "sl": sl, "tp": tp,
+            "risk_yuan": abs(entry - sl) * mult,
             "meta": {
                 "symbol": preset["symbol"], "name": preset["name"],
                 "direction": direction, "quadrant": quadrant,
                 "regime": row.get("regime", "range"), "weight": 1.0,
                 "entry_time": bars[entry_i]["dt"],
-                "entry_date": bars[entry_i]["dt"][:10],
-                "entry_price": entry, "tp_yuan": USER_TP_YUAN, "sl_yuan": USER_SL_YUAN,
+                "entry_date": days[entry_i],
+                "entry_price": entry, "tp_yuan": abs(tp - entry) * mult,
+                "sl_yuan": abs(entry - sl) * mult,
+                "requested_tp_yuan": USER_TP_YUAN, "requested_sl_yuan": USER_SL_YUAN,
             },
         }
 
@@ -912,7 +854,7 @@ def replay_user_symbol(preset, bars, warmup, rows, need_conf=False,
     if pos:
         bar = bars[-1]
         pnl_yuan = (bar["close"] - pos["entry"]) * pos["sgn"] * mult - COST_TICKS * tv
-        r = pnl_yuan / USER_SL_YUAN
+        r = pnl_yuan / pos["risk_yuan"]
         trades.append({
             **pos["meta"],
             "exit_time": bar["dt"], "exit_price": bar["close"],
@@ -958,11 +900,11 @@ def scheme_user(all_bars, presets, warmup=120, out_dir=None):
     输出两档对比：
       v0   ：共振+双底信号直接 t+1 入场（纯信号，看灯就做的理论值）
       user ：信号后次根量仓配合才入场（放量+增仓+收线同向）——贴实盘做法
-    每品种金额(元)分开给，因为 tick_value 不同；R 口径：50元=1R。
+    每品种金额(元)分开给；R分母为tick对齐后的实际初始风险。
     """
     print("\n" + "=" * 60)
     print("方案 U: 用户实盘系统（共振+双底 → 量仓动能 → 止盈100元/止损50元 一手）")
-    print(f"止损距离 = 50/tick_value×tick 价格点数；止盈 = 100/…；R = 盈亏/50元")
+    print("机制演示；100/50元为tick对齐前设定，R=净盈亏/对齐后实际初始风险")
     print("=" * 60)
 
     # ---- 预计算/加载 rows（与方案B共用 v2 磁盘缓存）----
@@ -978,7 +920,7 @@ def scheme_user(all_bars, presets, warmup=120, out_dir=None):
         if rows is None:
             t0 = time.time()
             ds = precompute_downsampled(bars)
-            rows = precompute_rows(bars, ds, warmup)
+            rows = precompute_rows(bars, ds, warmup, tick=preset["tick"])
             tag = f"预计算 {time.time()-t0:.0f}s"
             if out_dir:
                 save_rows_cache(out_dir, sym, rows, warmup=warmup)
@@ -1000,7 +942,7 @@ def scheme_user(all_bars, presets, warmup=120, out_dir=None):
         u_trades += replay_user_symbol(preset, bars, warmup, rows, need_conf=True)
 
     # ---- 每品种金额明细 ----
-    print("\n--- 每品种（一手，金额=元；R 口径 50元=1R）---")
+    print("\n--- 每品种（一手，金额=元；R以实际初始风险归一）---")
     hdr = (f"{'品种':<8}{'v0笔数':>6}{'v0胜率':>8}{'v0累计':>10}"
            f"{'v0盈亏比':>8}  |  {'u笔数':>6}{'u胜率':>8}{'u累计':>10}{'u盈亏比':>8}")
     print(hdr)
@@ -1036,7 +978,7 @@ def scheme_user(all_bars, presets, warmup=120, out_dir=None):
         print(f"  {reason:<8} {cnt:>4}")
 
     # ---- 总体统计 + 日内金额 ----
-    print("\n--- 总体（汇总全部品种，R=50元1R）---")
+    print("\n--- 总体机制演示（R以实际初始风险归一）---")
     for label, ts in (("v0 纯信号(t+1入场)", t0_trades), ("user 量仓确认(t+2入场)", u_trades)):
         if not ts:
             print(f"  {label}: 0 笔")
@@ -1051,7 +993,8 @@ def scheme_user(all_bars, presets, warmup=120, out_dir=None):
             print(d)
             print()
 
-    return {"v0": t0_trades, "user": u_trades}
+    return {"v0": t0_trades, "user": u_trades, "validation_status": "synthetic_demo_only",
+            "execution_version": EXECUTION_VERSION}
 
 
 
@@ -1065,7 +1008,13 @@ def main():
     ap.add_argument("--out", type=str, default="backtest", help="输出目录")
     ap.add_argument("--sample", type=int, default=SAMPLE_INTERVAL, help="方案A采样间隔（默认5）")
     ap.add_argument("--no-cache", action="store_true", help="禁用 rows 磁盘缓存（强制全量预计算）")
+    ap.add_argument("--allow-synthetic-demo", action="store_true",
+                    help="明确仅运行插值机制演示；输出不得用来验证胜率或盈利能力")
     args = ap.parse_args()
+    if not args.allow_synthetic_demo:
+        ap.error("本脚本含插值小周期，不能提供有效业绩证据；机制演示须显式传 --allow-synthetic-demo")
+    print(EXECUTION_LIMITATIONS)
+    print("仅机制演示：插值结果不支持胜率、过滤有效或盈利能力结论。")
 
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.out)
 
@@ -1122,8 +1071,7 @@ def main():
     print("=" * 60)
     if "A" in results:
         print("\n方案 A（IC 分析）：")
-        print("  IC > 0.03 = 评分有预测力；IC < 0.03 = 评分无预测力")
-        print("  分组收益差异大 = 面板分组有效")
+        print("  插值机制演示：IC 和分组收益不用于判断实际预测力。")
     if "B" in results:
         b = results["B"]
         print("\n方案 B（Top3 组合回测）：")
@@ -1132,10 +1080,7 @@ def main():
             print(f"  基准累计R: {b['baseline']['cumR']:+.2f} ({b['baseline']['n']} 笔)")
             print(f"  面板Top3:  {b['filtered']['cumR']:+.2f} ({b['filtered']['n']} 笔)")
             print(f"  差值:      {diff:+.2f}")
-            if diff > 0:
-                print("  → 面板过滤有效，Top3 优于全品种")
-            else:
-                print("  → 面板过滤无效或样本不足")
+            print("  → 仅为本次机制演示差值，不构成面板过滤有效性证据。")
             if b.get("c6"):
                 c6 = b["c6"]
                 diff_c6 = c6["cumR"] - b["filtered"]["cumR"]

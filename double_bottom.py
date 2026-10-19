@@ -13,6 +13,7 @@
 双顶为双底的完全镜像，同一套函数用 kind 参数化。
 """
 
+import math
 import config
 
 
@@ -60,11 +61,16 @@ def _rsi_list(closes, period=None):
         losses.append(max(-ch, 0.0))
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
+    def value():
+        if avg_loss == 0:
+            return 100.0 if avg_gain else 50.0
+        return round(100 - 100 / (1 + avg_gain / avg_loss), 2)
+
+    out[period] = value()
     for i in range(period, len(gains)):
-        if i > period:
-            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-        out[i + 1] = 100.0 if avg_loss == 0 else round(100 - 100 / (1 + avg_gain / avg_loss), 2)
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        out[i + 1] = value()
     return out
 
 
@@ -395,29 +401,30 @@ def _volume_oi(klines):
     vols = [k.get("volume", 0) or 0 for k in klines]
     ois = [k.get("oi", 0) or 0 for k in klines]
     p_up = closes[-1] > closes[-6]
+    p_down = closes[-1] < closes[-6]
     v_up = sum(vols[-5:]) > sum(vols[-10:-5])
     if any(x != 0 for x in ois):
         o_up = sum(ois[-5:]) > 0
         if p_up and v_up and o_up:
-            return {"quadrant": "价升量增仓增·健康多头", "healthy": True}
+            return {"quadrant": "价升量增仓增·健康多头", "healthy": True, "direction": "long"}
         if p_up and not v_up and not o_up:
             return {"quadrant": "价升量缩仓减·空头回补不可持续", "healthy": False}
-        if not p_up and v_up and o_up:
-            return {"quadrant": "价跌量增仓增·空头增仓", "healthy": False}
-        if not p_up and not v_up and not o_up:
-            return {"quadrant": "价跌量缩仓减·多头离场近尾声", "healthy": True}
-        name = f"价{'升' if p_up else '跌'}量{'增' if v_up else '缩'}仓{'增' if o_up else '减'}"
+        if p_down and v_up and o_up:
+            return {"quadrant": "价跌量增仓增·空头增仓", "healthy": False, "direction": "short"}
+        if p_down and not v_up and not o_up:
+            return {"quadrant": "价跌量缩仓减·多头离场（尚未确认反转）", "healthy": False, "direction": "none"}
+        name = f"价{'升' if p_up else ('跌' if p_down else '平')}量{'增' if v_up else '缩'}仓{'增' if o_up else '减'}"
         return {"quadrant": name + "·方向不明", "healthy": False}
     obv = _obv(klines)
     look = min(30, len(obv))
     inflow = obv[-1] >= max(obv[-look:]) and closes[-1] < max(closes[-look:])
     return {"quadrant": "无持仓数据·OBV" + ("资金进场" if inflow else "资金平淡"),
-            "healthy": inflow}
+            "healthy": inflow, "direction": "long" if inflow else "none"}
 
 
 # ================= E. 综合评分 =================
 
-def _build_candidate(klines, pattern, kind, confs, rsi_div):
+def _build_candidate(klines, pattern, kind, confs, rsi_div, tick=None):
     """对一个合法结构算总分并组装完整输出。"""
     price = klines[-1]["close"]
     levels = _levels(klines, pattern)
@@ -433,10 +440,8 @@ def _build_candidate(klines, pattern, kind, confs, rsi_div):
     s_mom = round(momentum["resonance_count"] / 3 * 25)
     # 仓量分 0-20：按方向解释四象限
     q = vol_oi["quadrant"]
-    if kind == "bottom":
-        s_vol = 20 if vol_oi["healthy"] else (12 if ("尾声" in q or "资金进场" in q) else 4)
-    else:
-        s_vol = 20 if "空头增仓" in q else (12 if "空头回补" in q else 4)
+    target_direction = "long" if kind == "bottom" else "short"
+    s_vol = 20 if vol_oi.get("direction") == target_direction else 4
 
     score = s_struct + s_level + s_mom + s_vol
     direction = "wait"
@@ -446,6 +451,13 @@ def _build_candidate(klines, pattern, kind, confs, rsi_div):
     # 交易计划（仅评分达标时给出）
     plan = None
     if direction != "wait":
+        tick = config.PRICE_TICK if tick is None else tick
+        if not isinstance(tick, (int, float)) or isinstance(tick, bool) or not math.isfinite(tick) or tick <= 0:
+            raise ValueError("tick 必须为有限正数")
+
+        def align(value, up=False):
+            return round((math.ceil(value / tick - 1e-10) if up else math.floor(value / tick + 1e-10)) * tick, 8)
+
         atr = _atr(klines) or price * 0.01
         if kind == "bottom":
             stop = round(pattern["L2"]["price"] - config.DB_STOP_ATR * atr, 2)
@@ -459,7 +471,16 @@ def _build_candidate(klines, pattern, kind, confs, rsi_div):
             strong = [l for l in levels["support"]
                       if l["score"] >= config.DB_LEVEL_STRONG and l["price"] < price]
             t2 = round(max(strong, key=lambda l: l["price"])["price"], 2) if strong else None
-        plan = {"entry": round(price, 2), "stop": stop, "target1": t1, "target2": t2}
+        is_short = kind == "top"
+        sgn = -1 if is_short else 1
+        entry, stop, t1 = align(price, up=not is_short), align(stop, up=is_short), align(t1, up=is_short)
+        t2 = align(t2, up=is_short) if t2 is not None else None
+        if (stop <= 0 or (entry - stop) * sgn <= 0 or (t1 - entry) * sgn <= 0
+                or (price - pattern["L2"]["price"]) * sgn <= -tick):
+            direction = "wait"
+        else:
+            plan = {"entry": entry, "stop": stop, "target1": t1,
+                    "target2": t2 if t2 is not None and (t2 - entry) * sgn > 0 else None}
 
     # 人话理由（给面板/推送用）
     cn = "双底" if kind == "bottom" else "双顶"
@@ -468,7 +489,7 @@ def _build_candidate(klines, pattern, kind, confs, rsi_div):
         "确认信号：" + "、".join(confs) + (f"（共{len(confs)}项）" if confs else ""),
     ]
     if rsi_div:
-        reasons.append("RSI" + ("底" if kind == "bottom" else "顶") + "背离（最强确认，单独加权）")
+        reasons.append("RSI" + ("底" if kind == "bottom" else "顶") + "背离（规则证据，单独加权）")
     if side:
         reasons.append(f"方向侧最强关键位 {side[0]['price']} 强度{side[0]['score']}/100（{side[0]['label']}位）")
     reasons.append(f"动能共振 {momentum['resonance_count']}/3（MACD{'✓' if momentum['macd'] else '✗'}"
@@ -496,7 +517,7 @@ def _build_candidate(klines, pattern, kind, confs, rsi_div):
     }
 
 
-def evaluate(klines):
+def evaluate(klines, tick=None):
     """
     轨道B 综合评分入口。
     klines: K线 dict 列表（open/high/low/close/volume[/oi]），只用截至最后一根的数据。
@@ -525,7 +546,7 @@ def evaluate(klines):
         confs, rsi_div = _confirmations(klines, pattern, kind, rsi_list)
         if len(confs) < 2:
             continue  # 确认信号须 ≥2 才算有效结构
-        cand = _build_candidate(klines, pattern, kind, confs, rsi_div)
+        cand = _build_candidate(klines, pattern, kind, confs, rsi_div, tick=tick)
         if best is None or cand["score"] > best["score"]:
             best = cand
 

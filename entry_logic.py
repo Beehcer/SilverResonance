@@ -5,7 +5,7 @@
 设计立场：位置优先 vs 确定性优先是两种入场逻辑（取舍立场），
 2B/回踩/点3 只是光谱上的三个入场点采样（坐标参考，不驱动决策）。
 位置分与确定性分各自独立量化，入场方案由两个分数驱动；
-唯一的"不做"区是双低象限（avoid），消灭"永远无法开仓"。
+评分是规则证据分，不是胜率；结构/价格方向无效时硬性拒绝，小周期未确认不能主仓。
 
 输入：轨道B double_bottom.evaluate() 的输出 dict + 现价
      + 可选 ATR（调用方用 double_bottom._atr 算好传入；缺省按价格 0.5% 估算）
@@ -14,8 +14,24 @@
 输出契约：见 decide() 返回 dict。
 """
 
+import math
 import config
 import double_bottom   # 只读复用 _ma_list（不改其判定语义）
+
+
+def _tick(tick):
+    value = config.PRICE_TICK if tick is None else tick
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        raise ValueError("tick 必须为有限正数")
+    return float(value)
+
+
+def _snap(price, tick, up=False):
+    return round((math.ceil(price / tick - 1e-10) if up else math.floor(price / tick + 1e-10)) * tick, 8)
+
+
+def _valid_price(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
 # ================= 市场状态判定（趋势/震荡） =================
@@ -77,7 +93,7 @@ def _location_base(dist_atr, neck_atr):
     return max(0.0, 30.0 - 10.0 * (over - config.AX_EXTEND_ATR))
 
 
-def _location_score(ev, kind, price, atr, sgn):
+def _location_score(ev, kind, price, atr, sgn, tick=None):
     """
     位置分 = (1−AX_RR_WEIGHT)×位置基础分 + AX_RR_WEIGHT×盈亏比分。
     返回 (score, detail_items, stop_dict, entry_ref_anchor)；无结构时 score=None。
@@ -112,11 +128,14 @@ def _location_score(ev, kind, price, atr, sgn):
         items.append({"item": f"贴近强位 {near[0]['price']}（强度{near[0]['score']}）", "value": 92})
 
     # 隐含盈亏比：结构止损 = L2 外侧 DB_STOP_ATR×ATR；目标1 = 轨道B计划，缺则丈量目标
-    stop_price = round(L2 - sgn * config.DB_STOP_ATR * atr, 2)
+    tick = _tick(tick)
+    stop_price = _snap(L2 - sgn * config.DB_STOP_ATR * atr, tick, up=sgn < 0)
     plan = ev.get("plan") or {}
     t1 = plan.get("target1") or round(2 * neck - L1, 2)   # 丈量目标：2×颈位−L1（双向通用）
-    risk = abs(price - stop_price)
-    rr = abs(t1 - price) / risk if risk else 0.0
+    t1 = _snap(t1, tick, up=sgn < 0)
+    risk = (price - stop_price) * sgn
+    reward = (t1 - price) * sgn
+    rr = reward / risk if risk > 0 and reward > 0 else 0.0
     rr_score = min(100.0, 50.0 * rr)                       # RR≥2 满分；RR=1 得 50；<1 大幅减分
     items.append({"item": f"隐含盈亏比 RR {rr:.1f}（止损 {stop_price} → 目标 {t1}）",
                   "value": round(rr_score)})
@@ -158,12 +177,17 @@ def _certainty_score(ev, target_dir, price, small_tf_ok, regime=None):
         add(f"确认信号 {len(plain)} 项（{'、'.join(plain)}）",
             min(len(plain) * config.AX_CERT_CONFIRM, config.AX_CERT_CONFIRM_CAP))
     if p.get("rsi_divergence"):
-        add("RSI背离（最强确认）", config.AX_CERT_RSI_DIV)
+        add("RSI背离（规则证据）", config.AX_CERT_RSI_DIV)
     mc = (ev.get("momentum") or {}).get("resonance_count", 0)
     if mc:
         add(f"动能三指标共振 {mc}/3", min(mc * config.AX_CERT_MOMENTUM, config.AX_CERT_MOMENTUM_CAP))
-    if (ev.get("volume_oi") or {}).get("healthy"):
-        add("仓量象限健康", config.AX_CERT_VOL_OI)
+    vol_oi = ev.get("volume_oi") or {}
+    vol_direction = vol_oi.get("direction")
+    if vol_direction is None:  # 兼容旧摘要；不得将多头健康证据奖励给空头。
+        q = vol_oi.get("quadrant", "")
+        vol_direction = "short" if "空头增仓" in q else ("long" if vol_oi.get("healthy") else "none")
+    if target_dir in ("long", "short") and vol_direction == target_dir:
+        add("仓量方向与结构一致", config.AX_CERT_VOL_OI)
     dir_disc = config.REGIME_RANGE_DIR_DISCOUNT if is_range else 1.0
     ev_score, ev_dir = ev.get("score", 0), ev.get("direction", "wait")
     if ev_score >= config.DB_SCORE_GO and ev_dir == target_dir:
@@ -186,11 +210,11 @@ def _certainty_score(ev, target_dir, price, small_tf_ok, regime=None):
 
 # ================= 企稳直通道（resonance 三频共振 → 直接 probe） =================
 
-def direct_probe(price, atr, resonance, klines=None):
+def direct_probe(price, atr, resonance, klines=None, tick=None):
     """
     企稳直通道：轨道A 三频共振 + 现价不极端 → 直接给 probe 仓（不等双底结构）。
     设计立场：双底结构在 1h 周期天然稀缺（250 天 × 11 品种 main 只触发 3 笔），
-    增加一条独立通路提高开仓率。止损用结构止损反推（MIN_RR 保证盈亏比）。
+    必须存在盈利侧的已确认历史摆动障碍；不按风险倍数凭空制造目标。
 
     输入：
       price: 现价
@@ -206,6 +230,9 @@ def direct_probe(price, atr, resonance, klines=None):
     direction = resonance.get("direction")  # long / short
     if direction not in ("long", "short"):
         return None
+    tick = _tick(tick)
+    if not _valid_price(price) or not _valid_price(atr) or not klines or len(klines) < 20:
+        return None
 
     sgn = 1 if direction == "long" else -1
 
@@ -213,7 +240,7 @@ def direct_probe(price, atr, resonance, klines=None):
     if klines and len(klines) >= 20:
         closes = [k["close"] for k in klines]
         ma20 = sum(closes[-20:]) / 20
-        dist_ma20 = (price - ma20) * sgn / atr
+        dist_ma20 = abs(price - ma20) / atr
         if dist_ma20 > config.DIRECT_PROBE_EXTEND_ATR:
             return None  # 已过度延伸，放弃
     else:
@@ -226,20 +253,24 @@ def direct_probe(price, atr, resonance, klines=None):
         look = min(20, len(klines))
         if direction == "long":
             swing = min(k["low"] for k in klines[-look:])
-            stop_price = round(swing - 0.3 * atr, 2)  # 摆动低点下方 0.3×ATR
+            stop_price = _snap(swing - 0.3 * atr, tick)  # 摆动低点下方 0.3×ATR
         else:
             swing = max(k["high"] for k in klines[-look:])
-            stop_price = round(swing + 0.3 * atr, 2)  # 摆动高点上方 0.3×ATR
-        risk = abs(price - stop_price)
-        # 盈亏比检查：目标 = 入场 + MIN_RR × 风险
-        target = round(price + sgn * config.DIRECT_PROBE_MIN_RR * risk, 2)
+            stop_price = _snap(swing + 0.3 * atr, tick, up=True)  # 摆动高点上方 0.3×ATR
         stop = {"price": stop_price,
                 "basis": f"结构止损：近{look}根摆动{'低' if direction == 'long' else '高'}点{'下方' if direction == 'long' else '上方'}0.3×ATR"}
-    else:
-        # 无 K 线数据时用固定 ATR 止损
-        stop_price = round(price - sgn * config.DB_STOP_ATR * atr, 2)
-        target = round(price + sgn * config.DIRECT_PROBE_MIN_RR * config.DB_STOP_ATR * atr, 2)
-        stop = {"price": stop_price, "basis": f"固定止损：{config.DB_STOP_ATR}×ATR"}
+    risk = (price - stop_price) * sgn
+    if not _valid_price(stop_price) or risk <= 0:
+        return None
+    side = "high" if direction == "long" else "low"
+    targets = [_snap(klines[i][side], tick, up=sgn < 0)
+               for i in double_bottom._pivots(klines, config.DB_PIVOT_M, side)]
+    targets = [p for p in targets if (p - price) * sgn > 0]
+    if not targets:
+        return None
+    target = min(targets, key=lambda p: abs(p - price))
+    if (target - price) * sgn / risk < config.DIRECT_PROBE_MIN_RR:
+        return None
 
     d_txt = "做多" if direction == "long" else "做空"
     legs = resonance.get("legs") or {}
@@ -259,6 +290,8 @@ def direct_probe(price, atr, resonance, klines=None):
         "direction": direction,
         "position_pct": config.AX_POS_PROBE,
         "stop": stop,
+        "target": target,
+        "target_basis": "已确认历史摆动障碍",
         "entry_point_ref": "direct",
         "regime": None,
         "scores_detail": {
@@ -276,14 +309,15 @@ _QUADRANT_NAME = {"main": "主仓", "probe": "试单", "confirm": "确认仓",
                   "avoid": "不做", "standby": "观望"}
 
 
-def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
+def decide(ev, price, atr=None, small_tf_ok=None, regime=None, tick=None):
     """
     双轴评分 → 象限决策主入口。
     ev: double_bottom.evaluate() 输出；price: 现价；
     atr: ATR(14)（缺省按 price×0.005 估算）；small_tf_ok: 小周期验证（True/False/None=缺数据）；
     regime: detect_regime() 输出（缺省 None = 不做市况调整）。
     """
-    if atr is None or atr <= 0:
+    tick = _tick(tick)
+    if atr is None or not _valid_price(atr):
         atr = (price or 1.0) * 0.005
     p = ev.get("pattern") or {}
     found = bool(p.get("found"))
@@ -291,10 +325,31 @@ def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
     sgn = 1 if kind == "bottom" else -1
     target_dir = {"bottom": "long", "top": "short"}.get(kind, "none")
 
+    def reject(reason):
+        return {"location_score": 0, "certainty_score": 0, "quadrant": "avoid",
+                "quadrant_name": _QUADRANT_NAME["avoid"], "direction": target_dir,
+                "position_pct": 0, "stop": None, "entry_point_ref": "none", "regime": regime,
+                "scores_detail": {"location": [], "certainty": []}, "wait_for": reason,
+                "summary": "价格/结构校验未通过：" + reason}
+
+    if not _valid_price(price):
+        return reject("等待有效现价")
+    if found:
+        L1, L2, neck = (p.get("L1") or {}).get("price"), (p.get("L2") or {}).get("price"), p.get("neck")
+        if kind is None or not all(_valid_price(v) for v in (L1, L2, neck)) or (neck - L2) * sgn <= 0:
+            return reject("结构价位无效，等待新的完整结构")
+        if (price - L2) * sgn <= -tick:
+            return reject("现价已越过右侧结构低点/高点，原结构失效")
+        target = (ev.get("plan") or {}).get("target1") or (2 * neck - L1)
+        if not _valid_price(target) or (_snap(target, tick, up=sgn < 0) - price) * sgn <= 0:
+            return reject("历史目标不在现价盈利侧，等待新的有效空间")
+
     # ---- 双分 ----
     location_score, loc_items, stop = None, [], None
     if found and price:
-        location_score, loc_items, stop = _location_score(ev, kind, price, atr, sgn)
+        location_score, loc_items, stop = _location_score(ev, kind, price, atr, sgn, tick=tick)
+        if not _valid_price(stop["price"]) or (price - stop["price"]) * sgn <= 0:
+            return reject("止损不在现价亏损侧，不能形成有效计划")
     else:
         loc_items.append({"item": "无结构，位置无法评估", "value": None})
     certainty_score, cer_items = _certainty_score(ev, target_dir, price, small_tf_ok, regime)
@@ -314,21 +369,16 @@ def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
     # ---- 象限 ----
     wait_for = None
     if location_score is None:
-        # 位置分 None：降级为仅确定性分（结构/确认分天然拿不到，用降级阈值）
-        if certainty_score >= config.AX_CERT_DEGRADED:
-            quadrant, pct = "probe", config.AX_POS_PROBE
-            summary = (f"无结构可评估位置，但证据较足（确定性 {certainty_score}）："
-                       f"仅可 {pct}% 试单仓，须自设止损、破位即走。")
-        else:
-            quadrant, pct = "standby", 0
-            wait_for = "等双底/双顶结构形成（左底/左顶枢轴 + 颈位出现）后再评估位置"
-            summary = f"无结构且证据不足（确定性 {certainty_score}）：{wait_for}。"
+        # 分数不能补齐方向、止损及目标。无结构时不生成裸露的试单建议。
+        quadrant, pct = "standby", 0
+        wait_for = "等双底/双顶结构及有效止损、目标形成后再评估"
+        summary = f"无有效结构计划（规则证据分 {certainty_score}）：{wait_for}。"
     else:
         L2, neck = p["L2"]["price"], p["neck"]
         loc_hi = location_score >= config.AX_LOCATION_HIGH
         cer_hi = certainty_score >= config.AX_CERTAINTY_HIGH
         d_txt = "做多" if target_dir == "long" else "做空"
-        if loc_hi and cer_hi:
+        if loc_hi and cer_hi and small_tf_ok is True:
             depth = min((location_score - config.AX_LOCATION_HIGH) / (100 - config.AX_LOCATION_HIGH),
                         (certainty_score - config.AX_CERTAINTY_HIGH) / (100 - config.AX_CERTAINTY_HIGH))
             pct = round(config.AX_POS_MAIN_MIN
@@ -343,8 +393,10 @@ def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
                        f"等确认信号补齐再加仓。")
         elif cer_hi:
             quadrant, pct = "confirm", config.AX_POS_CONFIRM
-            stop = {"price": round(neck - sgn * config.AX_CONFIRM_STOP_ATR * atr, 2),
+            stop = {"price": _snap(neck - sgn * config.AX_CONFIRM_STOP_ATR * atr, tick, up=sgn < 0),
                     "basis": f"结构宽止损：颈位{'下方' if sgn > 0 else '上方'}{config.AX_CONFIRM_STOP_ATR}×ATR"}
+            if not _valid_price(stop["price"]) or (price - stop["price"]) * sgn <= 0:
+                return reject("确认仓止损不在现价亏损侧，等待有效入场位置")
             summary = (f"证据足但位置偏差（位置 {location_score} / 确定性 {certainty_score}）："
                        f"{d_txt}确认仓 {pct}%，{stop['basis']}（{stop['price']}），不追满。")
             if (regime or {}).get("regime") == "range":
@@ -359,7 +411,7 @@ def decide(ev, price, atr=None, small_tf_ok=None, regime=None):
             stop = None
             wait_for = (f"等回落至 L2 {L2} 区域（±{config.AX_L2_ZONE_ATR}×ATR）改善位置，"
                         f"或确认信号补齐（当前 {len(p.get('confirmations') or [])} 项）提高确定性")
-            summary = (f"双低象限（位置 {location_score} / 确定性 {certainty_score}）：唯一不做区。{wait_for}。")
+            summary = (f"双低象限（位置 {location_score} / 确定性 {certainty_score}）：暂不形成计划。{wait_for}。")
 
     return {
         "location_score": location_score,

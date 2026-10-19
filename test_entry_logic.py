@@ -1,7 +1,7 @@
 """
 entry_logic.py 自测：双轴评分引擎（位置分 × 确定性分 → 象限决策）。
 合成 evaluate() 输出 dict（不依赖 K 线生成），覆盖：
-四象限各一例 + 无结构降级（standby / 降级 probe）+ 假突破扣分 + 位置分 None 路径。
+四象限各一例 + 无结构待机 + 假突破扣分 + 结构/方向/小周期确认硬门禁。
 运行：python test_entry_logic.py
 """
 
@@ -27,7 +27,8 @@ def _ev(found=True, ptype="double_bottom", L1=6800.0, L2=6820.0, neck=7000.0,
                      "resonance_count": mom},
         "volume_oi": {"quadrant": "价升量增仓增·健康多头" if healthy else "价跌量增仓增·空头增仓",
                       "healthy": healthy},
-        "plan": {"entry": L2, "stop": L2 - 30, "target1": plan_t1, "target2": None}
+        "plan": {"entry": L2, "stop": L2 + (30 if ptype == "double_top" else -30),
+                 "target1": plan_t1, "target2": None}
         if (found and direction != "wait") else None,
         "reasons": [],
     }
@@ -80,16 +81,16 @@ check("3 位置分<65", d["location_score"] < 65, d["location_score"])
 check("3 结构宽止损=颈位下方1×ATR", d["stop"] and d["stop"]["price"] == 6980.0, d["stop"])
 check("3 入场点参考=point3", d["entry_point_ref"] == "point3", d["entry_point_ref"])
 
-print("== 4. 双低象限 → avoid（中间位 + 证据薄弱，唯一不做区）==")
+print("== 4. 双低象限 → avoid（突破后位置偏离 + 证据薄弱）==")
 d = el.decide(_ev(confs=("L2反转K线",), rsi_div=False, mom=0, healthy=False,
-                  score=40, direction="wait"), price=6970.0, atr=ATR, small_tf_ok=None)
+                  score=40, direction="wait"), price=7040.0, atr=ATR, small_tf_ok=None)
 show("avoid", d)
 check("4 quadrant=avoid", d["quadrant"] == "avoid", d["quadrant"])
 check("4 仓位=0", d["position_pct"] == 0)
 check("4 wait_for 含具体价位", d["wait_for"] and "6820" in d["wait_for"], d["wait_for"])
 check("4 无止损（不交易）", d["stop"] is None)
 
-print("== 5. 无结构降级：位置分 None，仅确定性分驱动 ==")
+print("== 5. 无结构待机：动量与小周期证据不能凭空产生方向和止损 ==")
 d = el.decide(_ev(found=False, mom=0, healthy=False, score=0, direction="wait"),
               price=6900.0, atr=ATR, small_tf_ok=None)
 show("standby", d)
@@ -98,10 +99,12 @@ check("5a quadrant=standby", d["quadrant"] == "standby", d["quadrant"])
 check("5a wait_for 非空", bool(d["wait_for"]))
 d = el.decide(_ev(found=False, mom=3, healthy=True, score=60, direction="wait"),
               price=6900.0, atr=ATR, small_tf_ok=True)
-show("degraded-probe", d)
-check("5b 降级 probe（确定性 48≥45）", d["quadrant"] == "probe", d["quadrant"])
-check("5b 仓位=25", d["position_pct"] == 25)
+show("no-structure-standby", d)
+check("5b 有动量也必须 standby", d["quadrant"] == "standby", d["quadrant"])
+check("5b 仓位=0", d["position_pct"] == 0)
 check("5b 位置分 None", d["location_score"] is None)
+check("5b 不制造止损或交易方向", d["stop"] is None and d["direction"] == "none", d["direction"])
+check("5b 等待结构说明非空", bool(d["wait_for"]))
 
 print("== 6. 假突破扣分：价破颈位但无放量确认 → -15 ==")
 d = el.decide(_ev(confs=("L2反转K线",), rsi_div=True, mom=2, healthy=True,
@@ -113,7 +116,8 @@ check("6 确定性分=48（63-15）", d["certainty_score"] == 48, d["certainty_s
 
 print("== 7. 做空镜像：双顶结构方向与止损侧 ==")
 d = el.decide(_ev(ptype="double_top", L1=7200.0, L2=7180.0, neck=7000.0,
-                  confs=("L2反转K线", "RSI顶背离"), direction="short"),
+                  confs=("L2反转K线", "RSI顶背离"), direction="short", healthy=False,
+                  plan_t1=6800.0),
               price=7175.0, atr=ATR, small_tf_ok=True)
 show("short-mirror", d)
 check("7 direction=short", d["direction"] == "short", d["direction"])
@@ -186,6 +190,23 @@ check("12 降级后仓位=25（AX_POS_PROBE）", d_ra["position_pct"] == 25, d_r
 check("12 降级 summary 注明", "震荡市确认仓降级为试单" in d_ra["summary"], d_ra["summary"])
 check("12 降级仍带颈位宽止损", d_ra["stop"] and d_ra["stop"]["price"] == 6980.0, d_ra["stop"])
 check("12 降级 wait_for 为空", d_ra["wait_for"] is None)
+
+print("== 13. 硬门禁：目标在亏损侧 / 结构破坏，即使满分也禁止 ==")
+bad_short = _ev(ptype="double_top", L1=7200.0, L2=7180.0, neck=7000.0,
+                direction="short", healthy=False, score=100, plan_t1=7200.0)
+for name, ev, px in (("做空目标高于入场", bad_short, 7175.0),
+                     ("多头结构已跌破L2", _ev(score=100), 6810.0)):
+    d = el.decide(ev, price=px, atr=ATR, small_tf_ok=True, tick=1.0)
+    check(name + "必须avoid", d["quadrant"] == "avoid", d["quadrant"])
+    check(name + "不输出仓位和止损", d["position_pct"] == 0 and d["stop"] is None)
+    check(name + "明确等待原因", bool(d["wait_for"]))
+
+print("== 14. 硬门禁：小周期未确认不能main ==")
+for small_ok in (False, None):
+    d = el.decide(_ev(confs=("L2反转K线", "回踩不破颈位", "RSI底背离")),
+                  price=6825.0, atr=ATR, small_tf_ok=small_ok)
+    check(f"小周期{small_ok}不能main", d["quadrant"] == "probe", d["quadrant"])
+    check(f"小周期{small_ok}仅试探且带止损", d["position_pct"] == 25 and d["stop"] is not None)
 
 print()
 if FAILS:

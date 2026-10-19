@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>多品种期货信号监控 · {{ symbol }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='structure-board.css') }}?v=20261019-2">
+<link rel="stylesheet" href="{{ url_for('static', filename='market-structure-chart.css') }}?v=20261019-6">
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --line: #30363d;
@@ -42,6 +44,150 @@
   .layout { display: flex; gap: 12px; align-items: flex-start; }
   .col-left { width: 260px; flex-shrink: 0; }
   .col-right { flex: 1; min-width: 0; }
+
+  /* 短期走势：历史蜡烛与条件路径分区，文字解释留在图外。 */
+  .outlook-card { margin-bottom: 14px; padding: 16px; background: #0a0e14;
+    border: 1px solid #36404d; border-radius: 12px; overflow: hidden; }
+  .outlook-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .outlook-title { margin: 0; font-size: 17px; font-weight: 700; color: #edf2f7; }
+  .outlook-state { font-size: 11px; padding: 3px 8px; border: 1px solid #5e5125;
+    border-radius: 5px; color: #e7c460; background: #211d11; }
+  .outlook-periods { display: flex; gap: 4px; margin-left: auto; }
+  .outlook-period { padding: 5px 9px; background: #121923; border: 1px solid #303c4d;
+    border-radius: 5px; color: #8b99aa; cursor: pointer; font-size: 12px; }
+  .outlook-period.active { background: #263145; color: #f0f5fb; border-color: #7891b5; }
+  .outlook-meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    color: #77879b; font-size: 11px; margin-top: 10px; }
+  .outlook-summary { margin: 10px 0 0; font-size: 13px; line-height: 1.7; color: #ced7e3; }
+  .outlook-notice { margin-top: 9px; font-size: 12px; color: #dfbd68; line-height: 1.6; }
+  .outlook-notice:empty { display: none; }
+  .outlook-plot { position: relative; margin-top: 6px; min-height: 390px; }
+  #outlook-chart { display: block; width: 100%; height: 390px; }
+  .outlook-empty { min-height: 390px; display: flex; align-items: center; justify-content: center;
+    text-align: center; color: #7d8da2; font-size: 13px; line-height: 1.8; padding: 24px; }
+  .outlook-legend { display: flex; gap: 8px 18px; flex-wrap: wrap; color: #8795a8;
+    font-size: 11px; padding-top: 8px; border-top: 1px solid #222c38; }
+  .outlook-legend i { display: inline-block; width: 15px; height: 0; border-top: 2px solid;
+    margin-right: 5px; vertical-align: middle; }
+  .outlook-legend .dash { border-top-style: dashed; }
+  .outlook-events { display: flex; gap: 5px 16px; flex-wrap: wrap; margin-top: 9px;
+    color: #b4becb; font-size: 11px; line-height: 1.7; }
+  .outlook-events:empty { display: none; }
+  .outlook-events b { color: #e2c26a; font-weight: 500; margin-right: 4px; }
+  .outlook-lifecycle { margin-top: 10px; border: 1px solid #293644; border-radius: 7px; background: #101720; }
+  .outlook-life-current { display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px 16px; padding: 10px 12px; }
+  .outlook-life-current .life-title { font-size: 12px; color: #e3ca80; line-height: 1.6; }
+  .outlook-life-current .life-detail { margin-top: 3px; font-size: 11px; color: #8d9db0; line-height: 1.6; overflow-wrap: anywhere; }
+  .outlook-life-current .life-candidate { color: #75bbc7; }
+  .outlook-life-change { padding: 0 12px 9px; font-size: 11px; color: #a4b3c5; line-height: 1.6; }
+  .outlook-life-history { border-top: 1px solid #25313f; padding: 8px 12px; }
+  .outlook-life-history > summary { cursor: pointer; font-size: 11px; color: #8d9db0; }
+  .outlook-timeline { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 6px; scroll-snap-type: x proximity; }
+  .outlook-timeline-item { flex: 0 0 200px; scroll-snap-align: start; border-left: 2px solid #6b7d92;
+    padding: 5px 9px; background: #131d29; font-size: 11px; line-height: 1.6; color: #aebdce; }
+  .outlook-timeline-item time { display: block; color: #6f839b; font-size: 10px; }
+  .outlook-timeline-item b { display: block; color: #d6deea; font-weight: 500; margin: 3px 0; }
+  .outlook-previous { margin: 5px 0 0; padding-left: 16px; font-size: 11px; line-height: 1.8; color: #77899e; }
+  .outlook-scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 8px; margin-top: 13px; }
+  .outlook-scenario { padding: 11px 12px; border: 1px solid #283340; border-radius: 7px;
+    border-top: 2px solid var(--scenario-color); background: #111821; }
+  .outlook-scenario h3 { margin: 0 0 8px; font-size: 12px; color: var(--scenario-color); }
+  .outlook-scenario .scenario-status { font-size: 10px; color: #8093a9; margin: -3px 0 7px; }
+  .outlook-scenario p { margin: 5px 0 0; color: #b5c0ce; font-size: 11px; line-height: 1.65;
+    overflow-wrap: anywhere; }
+  .outlook-scenario strong { color: #798aa0; font-weight: 400; margin-right: 6px; }
+  .outlook-rules { margin-top: 10px; color: #718198; font-size: 10px; line-height: 1.7; }
+  .layout { flex-direction: column; }
+  .col-right { width: 100%; order: 0; }
+  .col-left { width: 100%; order: 1; }
+  .legacy-signals { border: 1px solid var(--line); border-radius: 9px; padding: 12px; margin-top: 12px; }
+  .legacy-signals > summary, .trade-settings > summary, .trade-positions > summary,
+  .trade-alerts > summary { cursor: pointer; color: #91a4bb; font-size: 12px; }
+  .legacy-signals .beacon { height: 100px; margin-top: 12px; }
+  .legacy-signals .beacon .word { font-size: 22px; }
+  .trade-workspace { background: #101923; border: 1px solid #435d78; border-radius: 12px;
+    margin-bottom: 14px; padding: 18px; scroll-margin-top: 12px; }
+  .trade-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .trade-head h2 { margin:0; font-size:19px; color:#edf3fa; }
+  .trade-head .trade-context { color:#9db0c8; font-size:12px; }
+  .trade-mode { margin-left:auto; display:flex; gap:5px; }
+  .trade-mode button, .trade-button { border:1px solid #3d526a; border-radius:6px; padding:7px 11px;
+    background:#172535; color:#bfd0e3; font:inherit; font-size:12px; cursor:pointer; }
+  .trade-mode button.active { color:#eef5ff; border-color:#8badcf; background:#30465e; }
+  .trade-mode button[data-mode="early"].active { background:#3c2c16; border-color:#c99b53; color:#f4cc86; }
+  .trade-button.primary { background:#31597c; color:#f3f7fc; border-color:#6688a7; }
+  .trade-button.danger { color:#f0b7b9; border-color:#765052; }
+  .trade-button:disabled { opacity:.45; cursor:not-allowed; }
+  .trade-mode-note { font-size:12px; color:#dcb36b; margin-top:9px; line-height:1.6; }
+  .trade-status-row { display:flex; align-items:flex-start; flex-wrap:wrap; gap:9px 14px; margin:16px 0 11px; }
+  .trade-badge { display:inline-block; font-size:15px; font-weight:700; color:#b5c7db; }
+  .trade-badge[data-state="ready"] { color:#9ac8f0; }
+  .trade-badge[data-state="invalid"], .trade-badge[data-state="risk_blocked"] { color:#f09399; }
+  .trade-badge[data-state="waiting"], .trade-badge[data-state="candidate"] { color:#dfbd78; }
+  .trade-summary { flex:1; min-width:200px; color:#b5c4d5; font-size:12px; line-height:1.7; }
+  .trade-times { font-size:10px; color:#7f91a8; margin-top:7px; line-height:1.6; }
+  .trade-questions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
+  .trade-question { min-height:94px; border:1px solid #293b4e; background:#0d151e; border-radius:8px; padding:11px 12px; }
+  .trade-question h3 { margin:0 0 7px; color:#8599b2; font-size:11px; font-weight:500; }
+  .trade-question p { margin:0; font-size:13px; line-height:1.6; color:#d7e1ec; overflow-wrap:anywhere; }
+  .trade-question .minor { margin-top:5px; font-size:11px; color:#8c9db2; }
+  .trade-risk-row { display:flex; gap:10px; align-items:baseline; justify-content:space-between; line-height:1.6; font-size:12px; margin-top:4px; }
+  .trade-risk-row.blocked { color:#ec999e; }
+  .trade-risk-row.allowed { color:#a7c7e6; }
+  .trade-risk-bottom { color:#9cadc0; font-size:11px; line-height:1.7; margin-top:9px; }
+  .trade-risk-bottom strong { color:#d7e2ee; font-weight:500; }
+  .trade-warning { background:#2b2117; border:1px solid #6e5230; color:#e0bd82; border-radius:6px; padding:8px 10px;
+    font-size:12px; line-height:1.6; margin-top:9px; }
+  .trade-warning:empty, .trade-error:empty { display:none; }
+  .trade-warning.critical { background:#301a20; border-color:#854a54; color:#f0a8af; }
+  .trade-error { font-size:12px; color:#efa5aa; line-height:1.6; margin-top:8px; }
+  .trade-conditions { display:flex; gap:5px 14px; flex-wrap:wrap; font-size:11px; color:#92a4ba; margin-top:10px; }
+  .trade-conditions .met { color:#a8d0c3; }
+  .trade-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:13px; }
+  .trade-actions .hint { color:#8093aa; font-size:11px; line-height:1.5; }
+  .trade-settings, .trade-positions, .trade-alerts { border-top:1px solid #2b3b4d; margin-top:13px; padding-top:12px; }
+  .trade-form { margin-top:12px; }
+  .trade-fields { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
+  .trade-fields label { display:flex; flex-direction:column; gap:5px; color:#99adc4; font-size:11px; }
+  .trade-fields input, .trade-fields select { width:100%; min-width:0; border:1px solid #354960; border-radius:5px;
+    background:#0b131c; padding:8px; color:#dbe7f4; font:inherit; font-size:12px; }
+  .trade-fields input:focus, .trade-fields select:focus { outline:1px solid #87a7c9; }
+  .trade-positions .trade-empty { color:#8597ad; font-size:12px; padding:14px 0 2px; }
+  .trade-position { margin-top:10px; padding:11px 12px; background:#0c141e; border:1px solid #2b3d51; border-radius:8px; }
+  .trade-position-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; color:#d4dfeb; font-size:13px; }
+  .trade-position-stats { color:#98aac0; font-size:11px; line-height:1.8; margin-top:7px; }
+  .trade-position details { margin-top:8px; font-size:11px; color:#96abc3; }
+  .trade-position summary { cursor:pointer; }
+  .trade-alert-list { margin:9px 0 0; padding:0; list-style:none; }
+  .trade-alert-list li { color:#93a5ba; font-size:11px; line-height:1.65; padding:5px 0; border-top:1px solid #223145; }
+  .trade-alert-list li[data-level="risk"] { color:#e7a2a7; }
+  .trade-alert-list time { color:#667d98; margin-right:8px; }
+  .trade-history { overflow-x:auto; margin-top:10px; }
+  .trade-history table { width:100%; border-collapse:collapse; font-size:11px; text-align:left; }
+  .trade-history th,.trade-history td { padding:7px; border-bottom:1px solid #26394d; white-space:nowrap; }
+  .trade-history th { color:#93a9c2; font-weight:400; }
+  .legacy-risk { display:none !important; }
+  .outlook-tracking-details > summary { cursor:pointer; color:#95a9be; font-size:11px; padding:3px 0; }
+  .outlook-tracking-details[open] > summary { margin-bottom:10px; }
+  @media(max-width:900px) { .trade-questions { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media(max-width:600px) {
+    .trade-workspace { padding:13px 10px; }
+    .trade-questions { grid-template-columns:1fr; }
+    .trade-question { min-height:0; }
+    .trade-mode { margin-left:0; width:100%; }
+    .trade-mode button { flex:1; }
+    .trade-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  }
+  @media (max-width: 680px) {
+    .outlook-card { padding: 12px 10px; }
+    .outlook-periods { margin-left: 0; width: 100%; }
+    .outlook-period { flex: 1; }
+    .outlook-scenarios { grid-template-columns: 1fr; }
+    .outlook-life-current { grid-template-columns: 1fr; }
+    .outlook-plot, .outlook-empty { min-height: 350px; }
+    #outlook-chart { height: 350px; }
+  }
 
   /* 中央灯（做多=红 做空=绿，符合国内涨红跌绿）*/
   .beacon {
@@ -311,7 +457,7 @@
   .adv-group { margin-bottom: 10px; }
   .adv-group:last-child { margin-bottom: 0; }
   .adv-label { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
-  .adv-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  .adv-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; flex-wrap: wrap;
     border-radius: 6px; cursor: pointer; font-size: 12px; }
   .adv-item:hover { background: var(--bg); }
   .adv-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -357,7 +503,7 @@
   <div id="overview-view">
     <div class="ov-head">
       <span class="ov-title">多品种期货信号监控</span>
-      <span class="ov-sub">轨道A · 三频共振（灯色）＋ 轨道B · 双底结构（评分）· 点击卡片进入品种详情</span>
+      <span class="ov-sub">先看30分钟结构与阶段，再核对想做的波段、掩体和风险 · 点击品种进入结构工作台</span>
     </div>
     <div class="ov-grid" id="ov-grid">
       <div style="color:var(--dim);font-size:13px;">数据加载中…</div>
@@ -379,15 +525,16 @@
       <option value="{{ symbol }}" selected>{{ symbol }}（自定义）</option>
       {% endif %}
     </select>
-    <span class="sym"><span id="combo-desc">15分定方向 / 3分过滤 / 30秒触发</span></span>
-    <span class="combo-switch" id="combo-switch" title="切换共振周期组合，无需重启"></span>
+    <span class="sym">辅助共振：<span id="combo-desc">15分定方向 / 3分过滤 / 30秒触发</span></span>
+    <span class="combo-switch" id="combo-switch" title="切换辅助共振周期，不改变30分钟交易计划"></span>
     <span class="price">现价 <b id="price">--</b></span>
     <span class="status" id="status">连接中…</span>
   </div>
 
   <div class="layout">
     <!-- 左：控制列 -->
-    <div class="col-left">
+    <details class="col-left legacy-signals">
+      <summary>辅助信号与背离 · 独立周期观察，不改变30分钟交易计划</summary>
       <div class="proximity" id="proximity"></div>
 
       <div class="beacon none" id="beacon">
@@ -433,12 +580,146 @@
         <b>⚠️ 亮灯 ≠ 可进场。</b>只判断三频方向是否对齐。盈亏比、结构止损位仍须你确认。
         支撑压力为算法辅助，非精确挂单价。风险自负。
       </div>
-      <button class="entry-btn" id="entry-btn">我要开仓!!!</button>
-      <button class="mute-btn" id="mute">🔔 声音提醒：开</button>
-    </div>
+      <button class="entry-btn" id="entry-btn">核对交易计划</button>
+      <button class="mute-btn" id="mute">风险声音：关</button>
+    </details>
 
     <!-- 右：图表 -->
     <div class="col-right">
+      <section id="structure-board" aria-label="结构与阶段工作台"></section>
+      <section class="outlook-card" aria-labelledby="outlook-title">
+        <div class="outlook-head">
+          <h2 class="outlook-title" id="outlook-title">30分钟结构证据与条件路径</h2>
+          <span class="outlook-state" id="outlook-state">等待数据</span>
+          <div class="outlook-periods" aria-label="推演周期">
+            <button type="button" class="outlook-period" data-period="180" aria-pressed="false">3分</button>
+            <button type="button" class="outlook-period" data-period="900" aria-pressed="false">15分</button>
+            <button type="button" class="outlook-period active" data-period="1800" aria-pressed="true">30分</button>
+            <button type="button" class="outlook-period" data-period="3600" aria-pressed="false">1小时</button>
+          </div>
+        </div>
+        <div class="market-chart-tools">
+          <label><input type="checkbox" id="outlook-follow" checked>跟随最新K线</label>
+          <button type="button" id="outlook-refresh">立即刷新</button>
+          <label for="outlook-window">观察范围 <select id="outlook-window"><option value="60" selected>最近60根</option><option value="120">最近120根</option></select></label>
+          <label for="outlook-path-mode">路径显示 <select id="outlook-path-mode"><option value="all" selected>多分支对照</option><option value="single">仅看选中</option></select></label>
+          <span class="market-follow-state" id="outlook-follow-state">每5秒获取 · 图表跟随最新</span>
+        </div>
+        <div class="outlook-meta"><span id="outlook-symbol">--</span><span id="outlook-received">上次收到：--</span><span id="outlook-lastbar">末根K线：--</span><span id="outlook-completed">最近完成：--</span><span id="outlook-updated">计算更新：--</span><span id="outlook-realtime" style="color:#dfbd68"></span></div>
+        <p class="outlook-summary" id="outlook-summary">依据当前结构阶段，观察下一步触发与失效条件。</p>
+        <div class="outlook-notice" id="outlook-notice" role="status" aria-live="polite"></div>
+        <div class="market-evidence" id="outlook-market-evidence"></div>
+        <div class="market-live-watch" id="outlook-live-watch" role="status" hidden></div>
+        <div class="market-selection" id="outlook-selection">多分支同屏；点击条件卡突出该分支及后续层级，其他分支仍保留。</div>
+        <div class="outlook-lifecycle" id="outlook-lifecycle" hidden>
+          <details class="outlook-tracking-details">
+          <summary>参考范围、结构更替与历史</summary>
+          <div class="outlook-life-current">
+            <div><div class="life-title" id="outlook-active-structure"></div><div class="life-detail" id="outlook-active-detail"></div></div>
+            <div><div class="life-title life-candidate" id="outlook-candidate"></div><div class="life-detail" id="outlook-candidate-detail"></div></div>
+          </div>
+          <div class="outlook-life-change" id="outlook-structure-change"></div>
+          <details class="outlook-life-history" id="outlook-structure-history">
+            <summary id="outlook-history-summary">结构事件与旧参考范围</summary>
+            <div class="outlook-timeline" id="outlook-timeline" tabindex="0" aria-label="结构事件时间轴，可横向滚动"></div>
+            <ul class="outlook-previous" id="outlook-previous"></ul>
+            <div class="outlook-rules" id="outlook-update-rule"></div>
+          </details>
+          </details>
+        </div>
+        <section class="market-rhythm" id="outlook-rhythm" aria-label="条件节奏示意"></section>
+        <div class="market-price-heading">价格位置 · 再核对空间 <span>历史与路径共用价格轴；横向仅表示条件顺序</span></div>
+        <div class="outlook-plot">
+          <canvas id="outlook-chart" role="img" aria-label="历史K线和条件走势路径" style="display:none;"></canvas>
+          <div class="outlook-empty" id="outlook-empty">正在加载该品种的短期走势…</div>
+        </div>
+        <div class="outlook-legend">
+          <span><i style="color:#e7c460"></i>关键边界 · 已确认拐点</span>
+          <span><i class="dash" style="color:#647184"></i>旧参考范围</span>
+          <span><i class="dash" style="color:#75bbc7"></i>候选平台 · 未确认</span>
+          <span><i style="color:#bc9af2"></i>双锚点趋势线 · A/B为锚点</span>
+          <span><i style="color:#b68e54"></i>观察区域 · 非进场许可</span>
+          <span><i class="dash" style="color:#ef6268"></i>向上条件</span>
+          <span><i class="dash" style="color:#48be8b"></i>向下条件</span>
+          <span><i class="dash" style="color:#cfa752"></i>整理条件</span>
+          <span>图中“事1 / 事2”为事件序号，不是结构点位编号</span>
+        </div>
+        <div class="outlook-events" id="outlook-events"></div>
+        <div class="outlook-scenarios" id="outlook-scenarios"></div>
+        <div class="outlook-rules" id="outlook-rules">虚线路径为条件示意，不代表未来K线、发生概率或到达时间。</div>
+      </section>
+      <section class="trade-workspace" id="trade-workspace" aria-labelledby="trade-title">
+        <div class="trade-head">
+          <h2 id="trade-title">执行核对 · 风险与持仓</h2>
+          <span class="trade-context" id="trade-context">计划30m · 确认3m</span>
+          <div class="trade-mode" aria-label="交易计划模式">
+            <button type="button" data-mode="confirmed" class="active" aria-pressed="true">等待确认</button>
+            <button type="button" data-mode="early" aria-pressed="false">提前试仓 · 未确认</button>
+          </div>
+        </div>
+        <div class="trade-mode-note" id="trade-mode-note">以完成K线核对条件；查看其他图表周期不改变本计划。</div>
+        <div class="trade-status-row">
+          <span class="trade-badge" id="trade-status" data-state="waiting">等待数据</span>
+          <div class="trade-summary" id="trade-summary">正在核对结构、确认条件和1手/2手风险。</div>
+        </div>
+        <div class="trade-questions">
+          <div class="trade-question"><h3>01 · 当前结构</h3><p id="trade-structure">—</p><p class="minor" id="trade-structure-detail"></p></div>
+          <div class="trade-question"><h3>02 · 正在等什么</h3><p id="trade-wait">—</p></div>
+          <div class="trade-question"><h3>03 · 如何触发</h3><p id="trade-trigger">—</p><p class="minor" id="trade-entry"></p></div>
+          <div class="trade-question"><h3>04 · 什么情况失效</h3><p id="trade-invalidation">—</p><p class="minor" id="trade-stop"></p></div>
+          <div class="trade-question"><h3>05 · 近端目标</h3><p id="trade-target">—</p><p class="minor" id="trade-target-basis"></p></div>
+          <div class="trade-question"><h3>06 · 1手 / 2手风险</h3><div id="trade-risk-rows">等待核算</div><p class="minor" id="trade-net-rr"></p></div>
+        </div>
+        <div class="trade-conditions" id="trade-conditions"></div>
+        <div class="trade-risk-bottom" id="trade-budget">本金50,000元 · 单计划亏损上限1,000元（2%）；同一计划的试仓、加仓与重试合计。</div>
+        <div class="trade-warning" id="trade-risk-warning"></div>
+        <div class="trade-times" id="trade-times">计算更新：— · 决策完成K线：—</div>
+        <div class="trade-actions">
+          <button type="button" class="trade-button primary" id="trade-check">核对交易计划</button>
+          <button type="button" class="trade-button" id="trade-new-idea" disabled>开始新计划</button>
+          <span class="hint">新计划仅在该品种空仓时开始；保留历史，重置该计划风险累计。</span>
+        </div>
+        <div class="trade-error" id="trade-error" role="status" aria-live="polite"></div>
+        <details class="trade-settings" id="trade-settings">
+          <summary>风险设置 · 本金、亏损上限与该品种手续费</summary>
+          <form class="trade-form" id="trade-settings-form">
+            <div class="trade-fields">
+              <label>账户本金（元）<input id="risk-equity" type="number" min="1" step="0.01" value="50000" required></label>
+              <label>单计划最大亏损（元）<input id="risk-budget" type="number" min="0.01" step="0.01" value="1000" required></label>
+              <label>滑点预留（跳）<input id="risk-slippage" type="number" min="0" step="1" value="2" required></label>
+              <label>该品种每手往返手续费（元）<input id="risk-fee" type="number" min="0" step="0.01" placeholder="请填真实费用，可明确填0" required></label>
+            </div>
+            <div class="trade-actions"><button class="trade-button trade-submit" type="submit">保存风险设置</button><span class="hint">未填真实手续费时只显示风险估算下限，不视为风险已通过。</span></div>
+          </form>
+        </details>
+        <details class="trade-positions" id="trade-positions" open>
+          <summary>持仓管理 · <span id="position-count">加载中</span> · 仅本地记录，不发送交易指令</summary>
+          <div id="position-list" class="trade-empty">正在读取该品种记录…</div>
+          <details id="position-register" style="margin-top:12px;">
+            <summary style="font-size:12px;color:#9aafc8;cursor:pointer;">登记已真实成交的持仓</summary>
+            <form class="trade-form" id="position-form">
+              <div class="trade-fields">
+                <label>成交方向<select id="position-direction"><option value="long">做多</option><option value="short">做空</option></select></label>
+                <label>成交手数<select id="position-lots"><option value="1">1手</option><option value="2">2手</option></select></label>
+                <label>这笔实际成交所属模式<select id="position-mode"><option value="confirmed">确认计划</option><option value="early">提前试仓 · 未确认</option></select></label>
+                <label>实际成交均价<input id="position-entry" type="number" min="0.0001" step="any" required></label>
+                <label>计划止损价<input id="position-stop" type="number" min="0.0001" step="any" required></label>
+                <label>参考目标价<input id="position-target" type="number" min="0.0001" step="any" placeholder="可选"></label>
+                <label>本次实际开仓手续费（元）<input id="position-entry-fee" type="number" min="0" step="0.01" placeholder="未填=费用未录"></label>
+              </div>
+              <div class="trade-actions"><button class="trade-button trade-submit" type="submit">记录已成交持仓</button><span class="hint">只登记事实。超风险实仓仍记录并警示；此操作不下单，不设置券商止损。</span></div>
+            </form>
+          </details>
+          <details style="margin-top:12px;"><summary style="font-size:11px;color:#8299b4;cursor:pointer;">历史与已实现结果</summary><div class="trade-history" id="position-history">暂无记录</div></details>
+          <div class="trade-error" id="position-error" role="status"></div>
+        </details>
+        <details class="trade-alerts">
+          <summary>最近提醒 · <span id="trade-alert-count">0条</span></summary>
+          <div class="trade-actions"><button type="button" class="trade-button" id="trade-sound">开启风险声音</button><button type="button" class="trade-button" id="trade-test-sound">测试声音</button><span class="hint" id="trade-sound-hint">条件确认只记录文字；风险变化才提示声音。</span></div>
+          <ol class="trade-alert-list" id="trade-alert-list"><li>暂无提醒</li></ol>
+        </details>
+      </section>
+      <div class="track-label">辅助K线与指标 · 仅用于观察，不改变30m计划 / 3m确认口径</div>
       <div class="tabs">
         <div class="tab active" data-tf="trend" id="tab-trend">15分</div>
         <div class="tab" data-tf="filter" id="tab-filter">3分</div>
@@ -456,7 +737,7 @@
           <span class="ma5">— MA5</span> &nbsp;
           <span class="ma20">— MA20</span> &nbsp;
           <span class="ma60">— MA60</span> &nbsp;
-          <span style="color:#20c9c9">— VWAP</span> &nbsp;
+          <span style="color:#20c9c9">— 窗口成交均价</span> &nbsp;
           <span style="color:#e8b923">┈ 现价</span> &nbsp;
           <span class="sr-res">┈ 压力</span> <span class="sr-sup">┈ 支撑</span> &nbsp;
           <span style="color:#8b949e">▽△ 高低点</span> &nbsp; 涨红跌绿
@@ -502,9 +783,9 @@
           <div class="fund-head" id="fund-head">
             <span class="fund-title">基本面 · 库存/基差/席位</span>
             <span class="fund-sum" id="fund-sum">加载中…</span>
-            <span class="fund-toggle" id="fund-toggle">收起 ▾</span>
+            <span class="fund-toggle" id="fund-toggle">展开 ▸</span>
           </div>
-          <div class="fund-body" id="fund-body">
+          <div class="fund-body hide" id="fund-body">
             <div class="fund-item" id="fund-inv"><div class="fi-t">库存（交易所周度）</div><div class="fi-none">加载中…</div></div>
             <div class="fund-item" id="fund-basis"><div class="fi-t">基差（现货 − 期货）</div><div class="fi-none">加载中…</div></div>
             <div class="fund-item" id="fund-broker"><div class="fi-t">关注席位动向（日度）</div><div class="fi-none">加载中…</div></div>
@@ -529,8 +810,8 @@
         <canvas id="quad" class="ec-quad" width="300" height="300"></canvas>
         <canvas id="ladder" class="ec-ladder" width="150" height="300"></canvas>
         <div class="ec-info">
-          <div class="pos-line">建议仓位 <b id="modal-pct">--</b></div>
-          <div class="frac-bar"><div class="frac-fill" id="modal-frac"></div></div>
+          <div class="pos-line legacy-risk">历史规则比例 <b id="modal-pct">--</b></div>
+          <div class="frac-bar legacy-risk"><div class="frac-fill" id="modal-frac"></div></div>
           <div class="targets" id="modal-stop"></div>
           <div class="detail-sec" id="modal-detail-loc"></div>
           <div class="detail-sec" id="modal-detail-cer"></div>
@@ -551,8 +832,8 @@
         MA 均线是"历史价格的平均"，价格先动、均线才慢慢跟，天生滞后。<br>
         下面这些看的是"推动价格的力量"，力量先弱、价格才转向，所以能走在均线之前。
       </div>
-      <div class="help-block"><b style="color:#20c9c9">VWAP 成交量加权均价</b><br>
-        日内资金的真实平均成本线，比 MA 更贴合多空分界。价格在 VWAP 上=日内多方占优；离得太远=过度延伸，追单盈亏比差。</div>
+      <div class="help-block"><b style="color:#20c9c9">窗口成交均价</b><br>
+        自当前加载历史起，以每根K线典型价（高＋低＋收）÷3按成交量加权累计。仅辅助观察当前历史窗口内的价格位置；不是按交易日重置的 VWAP，也不代表真实持仓成本。</div>
       <div class="help-block"><b style="color:#8b949e">▽△ 高低点结构</b> / <b class="hl-amber">高点递减</b><br>
         自动标出摆动高点▽、低点△。当高点一个比一个低（如 95→90→85），琥珀色▽示警——这叫"高点递减"，说明上涨力量一波波变弱，是趋势熄火最早的信号。别再等它回本。</div>
       <div class="help-block"><b class="hl-amber">量价背离</b><br>
@@ -566,9 +847,12 @@
     </div>
   </div>
 
+<script src="{{ url_for('static', filename='structure-model.js') }}?v=20261019-3"></script>
+<script src="{{ url_for('static', filename='structure-board.js') }}?v=20261019-2"></script>
+<script src="{{ url_for('static', filename='market-structure-chart.js') }}?v=20261019-5"></script>
 <script>
   const POLL_MS = {{ poll_ms }};
-  let soundOn = true;
+  let soundOn = false;
   let lastResonance = false;
 
   const beacon = document.getElementById('beacon');
@@ -759,7 +1043,7 @@
     drawMa('ma20', '#58a6ff');
     drawMa('ma60', '#bc8cff');
 
-    // VWAP（成交量加权均价，日内资金成本线）— 青色实线
+    // 窗口成交均价：自加载历史起累计典型价×成交量，不是交易日 VWAP / 真实持仓成本 — 青色实线
     (function drawVwap() {
       ctx.strokeStyle = '#20c9c9'; ctx.lineWidth = 1.6; ctx.beginPath();
       let started = false;
@@ -889,7 +1173,7 @@
     }
   }
 
-  window.addEventListener('resize', () => { drawChart(); drawMultiResize(); });
+  window.addEventListener('resize', () => { drawChart(); drawMultiResize(); drawOutlook(); });
 
   // ===== 共振周期组合切换（后端换订阅重算，无需重启） =====
   const comboSwitch = document.getElementById('combo-switch');
@@ -938,8 +1222,15 @@
   const symbolSwitch = document.getElementById('symbol-switch');
   let currentSymbol = '{{ symbol }}';
   let ovTimer = null;
+  let pendingFocusSymbol = null;
+  let pendingFocusAt = 0;
+  let focusRequestId = 0;
+  let stateRequestSequence = 0, stateController = null;
 
   function showOverview() {
+    stopOutlook();
+    stopTrading();
+    stopMulti();
     detailView.style.display = 'none';
     overviewView.style.display = 'block';
     loadOverview();
@@ -950,24 +1241,651 @@
     overviewView.style.display = 'none';
     detailView.style.display = 'block';
     if (ovTimer) { clearInterval(ovTimer); ovTimer = null; }
-    drawChart(); drawMultiResize();   // 隐藏时 canvas 尺寸为0，切回需重画
+    if (overviewController) overviewController.abort();
+    overviewSequence++;
+    drawChart();
+    if (multiPeriod) loadMulti();
+    startOutlook();
+    startTrading();
   }
   document.getElementById('btn-overview').onclick = showOverview;
 
   function setCurrentSymbol(sym) {
+    if (sym !== currentSymbol) {
+      resetOutlook();
+      resetTrading();
+      clearFocusCharts();
+    }
     currentSymbol = sym;
     if (symbolSwitch.value !== sym) symbolSwitch.value = sym;
     document.title = '多品种期货信号监控 · ' + sym;
     loadFund();
+    if (detailView.style.display !== 'none') startOutlook();
+    if (detailView.style.display !== 'none') startTrading();
+  }
+
+  function clearFocusCharts() {
+    stopMulti();
+    if (fundController) fundController.abort();
+    fundSequence++;
+    ['fund-sum', 'fund-inv', 'fund-basis', 'fund-broker'].forEach(id => document.getElementById(id).textContent = '等待该品种数据…');
+    latestKlines = latestSr = latestSignals = latestPrice = null;
+    multiBarsCache = null;
+    lastResonance = false;
+    priceEl.textContent = '--';
+    beacon.className = 'beacon none';
+    beaconWord.textContent = '等待行情';
+    beaconDir.textContent = '正在切换品种';
+    srListEl.textContent = '等待该品种数据…';
+    sigSummary.textContent = '等待该品种数据…';
+    proximityEl.classList.remove('show');
+    document.getElementById('db-card').style.display = 'none';
+    ['chart', 'sub-oi', 'sub-vol', 'sub-rsi', 'multichart'].forEach(id => {
+      const c = document.getElementById(id);
+      c.getContext('2d').clearRect(0, 0, c.width, c.height);
+    });
+  }
+
+  // ===== 短期走势推演：按品种隔离请求，只在详情可见时刷新 =====
+  const outlookCanvas = document.getElementById('outlook-chart');
+  const outlookEmpty = document.getElementById('outlook-empty');
+  const outlookState = document.getElementById('outlook-state');
+  const outlookNotice = document.getElementById('outlook-notice');
+  const outlookScenarios = document.getElementById('outlook-scenarios');
+  const outlookEvents = document.getElementById('outlook-events');
+  const outlookColors = { up: '#ef6268', down: '#48be8b', range: '#cfa752' };
+  const outlookPeriods = { 180: '3分钟', 900: '15分钟', 1800: '30分钟', 3600: '1小时' };
+  let outlookPeriod = 1800;
+  let outlookData = null;
+  let outlookTimer = null;
+  let outlookController = null;
+  let outlookSequence = 0;
+  let outlookLatest = null, outlookReceivedAt = 0;
+  let outlookFollow = true;
+  let outlookWindow = 60, outlookSelectedKey = null, outlookSelectionIdentity = '', outlookSelectionPinned = false, outlookViewMode = 'all';
+  const outlookRefreshButton = document.getElementById('outlook-refresh');
+
+  function outlookFollowLabel() {
+    document.getElementById('outlook-follow-state').textContent = outlookFollow
+      ? '每5秒获取 · 图表跟随最新'
+      : '图表跟随已暂停 · 新快照继续接收，风险核对照常运行';
+  }
+
+  function stopOutlook() {
+    if (outlookTimer) clearInterval(outlookTimer);
+    outlookTimer = null;
+    outlookSequence++;
+    if (outlookController) outlookController.abort();
+    outlookController = null;
+    outlookRefreshButton.disabled = false;
+  }
+
+  function outlookUnavailable(message, state) {
+    outlookData = null;
+    outlookLatest = null;
+    document.getElementById('outlook-realtime').textContent = '';
+    document.getElementById('outlook-lifecycle').hidden = true;
+    document.getElementById('outlook-timeline').replaceChildren();
+    document.getElementById('outlook-previous').replaceChildren();
+    document.getElementById('outlook-structure-history').open = false;
+    outlookCanvas.style.display = 'none';
+    outlookCanvas.getContext('2d').clearRect(0, 0, outlookCanvas.width, outlookCanvas.height);
+    outlookEmpty.style.display = 'flex';
+    outlookEmpty.textContent = message;
+    outlookState.textContent = state;
+    outlookScenarios.replaceChildren();
+    document.getElementById('outlook-rhythm').replaceChildren();
+    outlookEvents.replaceChildren();
+    document.getElementById('outlook-selection').textContent = '多分支同屏；点击条件卡突出该分支及后续层级，其他分支仍保留。';
+    document.getElementById('outlook-market-evidence').replaceChildren();
+    document.getElementById('outlook-live-watch').hidden = true;
+    document.getElementById('outlook-live-watch').textContent = '';
+    document.getElementById('outlook-summary').textContent = '等待有效行情后生成结构与条件路径。';
+    document.getElementById('outlook-rules').textContent = '虚线路径为条件示意，不代表未来K线、发生概率或到达时间。';
+  }
+
+  function resetOutlook() {
+    stopOutlook();
+    outlookNotice.textContent = '';
+    document.getElementById('outlook-updated').textContent = '计算更新：--';
+    document.getElementById('outlook-lastbar').textContent = '末根K线：--';
+    document.getElementById('outlook-completed').textContent = '最近完成：--';
+    document.getElementById('outlook-received').textContent = '上次收到：--';
+    outlookReceivedAt = 0;
+    outlookSelectedKey = null; outlookSelectionIdentity = ''; outlookSelectionPinned = false;
+    outlookUnavailable('正在加载该品种的短期走势…', '等待数据');
+  }
+
+  function startOutlook() {
+    resetOutlook();
+    document.getElementById('outlook-symbol').textContent = currentSymbol + ' · ' + outlookPeriods[outlookPeriod];
+    if (detailView.style.display === 'none') return;
+    loadOutlook();
+    outlookTimer = setInterval(() => {
+      if (document.hidden) return;
+      if (outlookData && Date.now() - outlookReceivedAt > 20000) {
+        outlookUnavailable('超过20秒未收到有效快照，条件路径已暂停。', '刷新中断');
+        outlookNotice.textContent = '已移除旧路径，正在重新获取计算快照。';
+      }
+      loadOutlook();
+    }, 5000);
+  }
+
+  document.querySelectorAll('.outlook-period').forEach(button => {
+    button.onclick = () => {
+      const period = Number(button.dataset.period);
+      if (period === outlookPeriod) return;
+      outlookPeriod = period;
+      document.querySelectorAll('.outlook-period').forEach(item => {
+        const active = Number(item.dataset.period) === period;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-pressed', String(active));
+      });
+      startOutlook();
+    };
+  });
+
+  document.getElementById('outlook-follow').addEventListener('change', event => {
+    outlookFollow = event.target.checked; outlookFollowLabel();
+    if (outlookFollow && outlookLatest && Date.now() - outlookReceivedAt <= 20000) applyOutlook(outlookLatest);
+    else if (outlookFollow) loadOutlook(true);
+    else if (outlookData) applyOutlook(outlookData);
+  });
+  outlookRefreshButton.addEventListener('click', () => loadOutlook(true, true));
+  document.getElementById('outlook-window').addEventListener('change', event => {
+    outlookWindow = Number(event.target.value) === 120 ? 120 : 60; drawOutlook();
+  });
+  document.getElementById('outlook-path-mode').addEventListener('change', event => {
+    outlookViewMode = event.target.value === 'single' ? 'single' : 'all'; markOutlookSelection(); drawOutlook();
+  });
+  outlookScenarios.addEventListener('click', event => {
+    const card = event.target.closest('.outlook-scenario');
+    if (!card || !outlookData) return;
+    outlookSelectedKey = card.dataset.scenarioKey;
+    outlookSelectionPinned = true;
+    markOutlookSelection(); drawOutlook();
+  });
+  document.getElementById('outlook-rhythm').addEventListener('click', event => {
+    const button = event.target.closest('button[data-scenario-key]');
+    if (!button || !outlookData) return;
+    outlookSelectedKey = button.dataset.scenarioKey;
+    outlookSelectionPinned = true;
+    markOutlookSelection(); drawOutlook();
+  });
+
+  async function loadOutlook(force = false, updateFrozen = false) {
+    if (detailView.style.display === 'none' || document.hidden) return;
+    if (outlookController) {
+      if (!force) return;
+      outlookController.abort();
+    }
+    const requestedSymbol = currentSymbol, requestedPeriod = outlookPeriod;
+    const sequence = ++outlookSequence;
+    const controller = new AbortController();
+    outlookController = controller;
+    outlookRefreshButton.disabled = true;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
+    try {
+      const response = await fetch('/api/outlook?symbol=' + encodeURIComponent(requestedSymbol) +
+        '&period=' + requestedPeriod + (force ? '&refresh=1' : ''), { signal: controller.signal, cache: 'no-store' });
+      const data = await response.json();
+      if (sequence !== outlookSequence || currentSymbol !== requestedSymbol || outlookPeriod !== requestedPeriod ||
+          detailView.style.display === 'none') return;
+      if (data.symbol !== requestedSymbol || Number(data.period) !== requestedPeriod) {
+        throw new Error('返回的品种或周期不匹配');
+      }
+      const updated = Number(data.updated);
+      document.getElementById('outlook-received').textContent = '上次收到：' + outlookTime(Date.now());
+      if (data.status !== 'ok') {
+        const state = data.stale ? '刷新中断' : data.status === 'loading' ? '加载中' :
+          data.status === 'insufficient' ? '结构数据不足' : '获取失败';
+        outlookUnavailable(data.message || (data.analysis && data.analysis.message) ||
+          (data.analysis && data.analysis.state && data.analysis.state.summary) ||
+          (data.status === 'insufficient' ? '已确认K线不足，暂不生成条件推演。' : '等待行情更新…'), state);
+        outlookNotice.textContent = data.stale ? '已暂停并移除旧路径；行情恢复后自动刷新。' : '';
+        return;
+      }
+      if (data.freshness && ['stale', 'disconnected'].includes(data.freshness.status)) {
+        outlookUnavailable(data.freshness.label || '行情连接或缓存刷新中断，旧路径已撤下。', '刷新中断');
+        outlookNotice.textContent = '历史数据无法代表当前行情；连接恢复后重新核对。';
+        return;
+      }
+      if (!response.ok || !data.analysis || !Array.isArray(data.bars) || !data.bars.length ||
+          !data.bars.every(b => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(b[key])))) {
+        throw new Error('行情数据不完整');
+      }
+      const checked = data.freshness && Number(data.freshness.checked_at) || updated;
+      if (!Number.isFinite(checked) || checked <= 0 || Date.now() - checked * 1000 > 20000 || checked * 1000 - Date.now() > 60000) {
+        outlookUnavailable('计算快照已失效，等待刷新后继续推演。', '刷新中断');
+        outlookNotice.textContent = '已移除旧路径，5秒后重新检查。';
+        return;
+      }
+      outlookLatest = data; outlookReceivedAt = Date.now();
+      if (outlookFollow || !outlookData || updateFrozen) applyOutlook(data);
+      else {
+        document.getElementById('outlook-realtime').textContent = (data.freshness && data.freshness.label || '') +
+          (data.realtime === false ? ' · 实时触发暂停' : '');
+      }
+    } catch (error) {
+      if (sequence !== outlookSequence) return;
+      outlookUnavailable(timedOut ? '行情请求超时，正在重试。' : '无法获取当前推演，正在重试。', '获取失败');
+      outlookNotice.textContent = '已移除旧路径，5秒后自动重试。';
+    } finally {
+      clearTimeout(timeout);
+      if (sequence === outlookSequence) { outlookController = null; outlookRefreshButton.disabled = false; }
+    }
+  }
+
+  function applyOutlook(data) {
+    outlookData = data;
+    const analysis = data.analysis, freshness = data.freshness || {}, market = analysis.market_structure;
+    const marketValid = market && market.status === 'ok';
+    document.getElementById('outlook-title').textContent = outlookPeriods[outlookPeriod] + '结构证据与条件路径';
+    document.getElementById('outlook-updated').textContent = '图表计算：' + outlookTime(data.updated);
+    const stateLabel = ({ forming: '形成中', awaiting_next: '等待下一根', unknown: '状态未确认' })[freshness.last_bar_state] || '状态未确认';
+    const lastTime = freshness.last_bar_time || data.bars[data.bars.length - 1].dt;
+    const completedTime = freshness.last_completed_time || (marketValid && market.decision_bar_time);
+    document.getElementById('outlook-lastbar').textContent = '图中末根（' + stateLabel + '）：' + outlookTime(lastTime);
+    document.getElementById('outlook-completed').textContent = '图中最近完成：' + (completedTime ? outlookTime(completedTime) : '待核验');
+    document.getElementById('outlook-realtime').textContent = freshness.status === 'latest_available'
+      ? '最新可用' + (data.realtime === false ? ' · 实时触发暂停' : '')
+      : [freshness.label, data.realtime === false ? '历史快照 · 实时触发暂停' : ''].filter(Boolean).join(' · ');
+    outlookNotice.textContent = [!outlookFollow ? '当前图表已暂停跟随；点击立即刷新可更新一次，勾选跟随后持续更新。' : '',
+      data.realtime === false ? '显示最新可用历史结构；未满足实时触发时效，条件路径仅供观察。' : ''].filter(Boolean).join(' ');
+    outlookFollowLabel(); outlookEmpty.style.display = 'none'; outlookCanvas.style.display = 'block';
+    const activeStructure = (analysis.structure_tracking || {}).active;
+    const outerPhase = marketValid && market.hierarchy && market.hierarchy.label || activeStructure && activeStructure.phase_label || (analysis.state || {}).label || '结构观察';
+    outlookState.textContent = '外层 · ' + outerPhase;
+    renderOutlookLifecycle(analysis);
+    document.getElementById('outlook-summary').textContent = marketValid && market.phase
+      ? '外层结构：' + outerPhase + '。局部线索：' + market.phase.label + '；' + (market.phase.summary || '')
+      : (analysis.state || {}).summary || '观察区间上下沿的确认情况。';
+    const evidence = document.getElementById('outlook-market-evidence'); evidence.replaceChildren();
+    if (window.MarketStructureChart) window.MarketStructureChart.summary(market).forEach(item => {
+      const line = document.createElement('span'), label = document.createElement('b');
+      label.textContent = item.label; label.style.color = item.color;
+      line.append(label, document.createTextNode(item.detail)); evidence.appendChild(line);
+    });
+    if (marketValid && market.candidate) {
+      const line = document.createElement('span'); line.textContent = market.candidate.label + ' · ' + (market.candidate.reason || '待后续完成K线确认'); evidence.appendChild(line);
+    }
+    const liveWatch = document.getElementById('outlook-live-watch'), watch = marketValid && market.live_watch && market.live_watch.active !== false ? market.live_watch : null;
+    liveWatch.hidden = !watch;
+    liveWatch.textContent = watch ? '末根未确认观察 · ' + (watch.label || '') + (watch.detail ? '：' + watch.detail : '') + ' · 不作为完成K线确认或进场条件。' : '';
+    outlookCanvas.setAttribute('aria-label', currentSymbol + ' ' + outlookPeriods[outlookPeriod] + '历史K线。' +
+      document.getElementById('outlook-summary').textContent + '右侧为条件演化路径，编号对应下方卡片，不代表概率或未来时间。');
+    renderOutlookScenarios(analysis); drawOutlook();
+  }
+
+  function outlookPrice(value) {
+    return Number.isFinite(value) ? Number(value.toFixed(4)).toLocaleString('en-US', { maximumFractionDigits: 4 }) : '—';
+  }
+
+  function escapeOutlookText(value) {
+    return String(value).replace(/[&<>"']/g, character =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+  }
+
+  function outlookDirection(scenario) {
+    return ['up', 'down', 'range'].includes(scenario.direction) ? scenario.direction :
+      ['up', 'down', 'range'].includes(scenario.key) ? scenario.key : 'range';
+  }
+  function outlookTimestamp(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value > 1e16 ? value / 1e6 : value > 1e11 ? value : value * 1000;
+    if (typeof value !== 'string' || !value.trim()) return NaN;
+    const text = value.trim().replace(' ', 'T');
+    return Date.parse(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text) && !/(Z|[+-]\d{2}:?\d{2})$/.test(text) ? text + '+08:00' : text);
+  }
+  function outlookTime(value) {
+    const stamp = outlookTimestamp(value);
+    return Number.isFinite(stamp) ? new Date(stamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '时间未提供';
+  }
+  function renderOutlookLifecycle(analysis) {
+    const root = document.getElementById('outlook-lifecycle'), tracking = analysis.structure_tracking;
+    root.hidden = !tracking;
+    if (!tracking) return;
+    const active = tracking.active, candidate = tracking.candidate;
+    const text = (id, value) => document.getElementById(id).textContent = value;
+    text('outlook-active-structure', active ? '当前：' + active.label + ' · ' + (active.phase_label || '结构观察') : '当前：暂无已确认结构');
+    text('outlook-active-detail', active ? outlookPrice(active.low) + ' — ' + outlookPrice(active.high) +
+      ' · ' + (active.confirmed_at ? '确认于 ' + outlookTime(active.confirmed_at) : '起于 ' + outlookTime(active.start_time)) +
+      (active.reason ? ' · ' + active.reason : '') : '等待有效结构形成。');
+    text('outlook-candidate', candidate ? '候选平台 · 尚未确认' : '候选平台：暂无');
+    text('outlook-candidate-detail', candidate ? outlookPrice(candidate.low) + ' — ' + outlookPrice(candidate.high) +
+      ' · 完成K线 ' + (candidate.bars ?? '—') + '/' + (candidate.required_bars ?? '—') +
+      (candidate.reason ? ' · ' + candidate.reason : '') : '后续满足结构确认规则后才替换当前参考。');
+    text('outlook-structure-change', (tracking.changed_at ? '最近变化 ' + outlookTime(tracking.changed_at) + ' · ' : '') +
+      (tracking.change_reason || '当前结构延续中，尚无切换记录。'));
+    const events = (tracking.events || []).slice(-12), previous = (tracking.previous || []).slice(-4);
+    text('outlook-history-summary', '结构事件 ' + events.length + ' · 旧参考 ' + previous.length + ' 代（展开查看）');
+    text('outlook-update-rule', [tracking.update_rule, '触及参考位仅记录价格事实，不代表盈利或预测命中。'].filter(Boolean).join(' · '));
+    const timeline = document.getElementById('outlook-timeline');
+    const wasAtEnd = timeline.scrollWidth - timeline.clientWidth - timeline.scrollLeft < 24, previousScroll = timeline.scrollLeft;
+    timeline.replaceChildren();
+    events.forEach(event => {
+      const item = document.createElement('article'), time = document.createElement('time'), label = document.createElement('b'), detail = document.createElement('div');
+      item.className = 'outlook-timeline-item'; time.textContent = outlookTime(event.at); label.textContent = event.label || '结构事件';
+      detail.textContent = [event.detail, Number.isFinite(event.price) ? '记录价 ' + outlookPrice(event.price) : ''].filter(Boolean).join(' · ');
+      item.append(time, label, detail); timeline.appendChild(item);
+    });
+    if (!events.length) timeline.textContent = '暂无结构生命周期事件。';
+    timeline.scrollLeft = wasAtEnd ? timeline.scrollWidth : previousScroll;
+    const history = document.getElementById('outlook-previous'); history.replaceChildren();
+    previous.slice().reverse().forEach(item => {
+      const line = document.createElement('li');
+      line.textContent = (item.label || '旧结构') + ' ' + outlookPrice(item.low) + ' — ' + outlookPrice(item.high) +
+        ' · ' + outlookTime(item.start_time) + ' → ' + outlookTime(item.end_time) + ' · ' + (item.end_reason || item.status || '已结束');
+      history.appendChild(line);
+    });
+  }
+  function renderOutlookScenarios(analysis) {
+    const focusedKey = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.scenarioKey;
+    outlookScenarios.replaceChildren();
+    const scenarios = window.MarketStructureChart ? window.MarketStructureChart.scenarios(analysis) : (analysis.scenarios || []).slice(0, 3);
+    const market = analysis.market_structure, tracking = analysis.structure_tracking || {};
+    const selectionIdentity = currentSymbol + ':' + outlookPeriod + ':' + ((tracking.active || {}).id || (analysis.range || {}).start_time || 'pending');
+    if (selectionIdentity !== outlookSelectionIdentity) {
+      outlookSelectedKey = null; outlookSelectionIdentity = selectionIdentity; outlookSelectionPinned = false;
+    }
+    if (outlookSelectionPinned && !scenarios.some(item => item.key === outlookSelectedKey)) outlookSelectionPinned = false;
+    const currentPrice = outlookData && outlookData.bars[outlookData.bars.length - 1].close;
+    const previousSelection = outlookSelectionPinned ? outlookSelectedKey : null;
+    outlookSelectedKey = window.MarketStructureChart ? window.MarketStructureChart.selectedKey(market, scenarios, previousSelection, currentPrice) :
+      (scenarios.find(item => item.key === previousSelection) || scenarios[0] || {}).key;
+    scenarios.forEach((scenario, index) => {
+      const direction = outlookDirection(scenario);
+      const card = document.createElement('article');
+      card.className = 'outlook-scenario';
+      card.dataset.scenarioKey = scenario.key;
+      card.style.setProperty('--scenario-color', outlookColors[direction]);
+      const title = document.createElement('h3');
+      const badge = document.createElement('span'); badge.className = 'market-path-number'; badge.textContent = String(index + 1);
+      const select = document.createElement('button'); select.type = 'button'; select.className = 'market-scenario-select';
+      select.dataset.scenarioKey = scenario.key; select.append(badge, document.createTextNode(scenario.label || scenario.short_label || '条件观察'));
+      title.appendChild(select);
+      card.appendChild(title);
+      const status = document.createElement('div'); status.className = 'scenario-status';
+      if (['invalid', 'target_passed', 'no_target'].includes(scenario.status)) status.classList.add('market-scenario-inactive');
+      const role = ({ retest: '回测条件', direct: '直接延续 · 不追', reclaim: '局部收回 · 回原区间观察', consolidation: '整理条件', breakout: '边界突破条件' })[scenario.role];
+      status.textContent = [role, scenario.status_label || ({ waiting: '等待条件', observing: '仅观察线索', invalid: '分支已失效', target_passed: '参考目标已越过', no_target: '缺少有效参考目标' })[scenario.status] || '条件演化'].filter(Boolean).join(' · '); card.appendChild(status);
+      const targetSource = scenario.target_source;
+      const target = targetSource && Number.isFinite(targetSource.price)
+        ? (targetSource.tier === 'outer' ? '外层 · ' : '局部 · ') + (targetSource.label || '参考位') + ' ' + outlookPrice(targetSource.price)
+        : Array.isArray(scenario.target) ? scenario.target.map(outlookPrice).join(' — ') :
+          typeof scenario.target === 'number' ? outlookPrice(scenario.target) : '尚无方向一致的有效参考位';
+      if (Array.isArray(scenario.conditions) && scenario.conditions.length) {
+        const conditions = document.createElement('ul'); conditions.className = 'market-conditions';
+        scenario.conditions.forEach(condition => {
+          const item = document.createElement('li'), state = document.createElement('span');
+          state.textContent = condition.met === false ? (condition.source === 'live' ? '盘中不满足' : '未满足') :
+            condition.met === true ? (condition.source === 'live' ? '盘中符合（未收盘）' : '已见') :
+            condition.source === 'live' ? '待判断' : '待后续';
+          state.className = condition.met === true && condition.source === 'completed' ? 'met' : '';
+          item.append(state, document.createTextNode(condition.label || '等待证据')); conditions.appendChild(item);
+        }); card.appendChild(conditions);
+      }
+      [['等待条件', scenario.condition], ['不追/放弃', scenario.no_chase], ['失效', scenario.invalidation], ['参考位', target], ['依据', scenario.target_basis]].forEach(([label, content]) => {
+        if (label === '等待条件' && Array.isArray(scenario.conditions) && scenario.conditions.length) return;
+        if (label === '不追/放弃' && !content) return;
+        if (label === '依据' && !content) return;
+        const line = document.createElement('p'), name = document.createElement('strong');
+        if (label === '不追/放弃') line.className = 'market-no-chase';
+        name.textContent = label;
+        line.append(name, document.createTextNode(content || '等待结构确认'));
+        card.appendChild(line);
+      });
+      const later = window.MarketStructureChart.continuationSteps(scenario, currentPrice, market);
+      if (later.length) {
+        const steps = document.createElement('div'); steps.className = 'market-next-levels';
+        const heading = document.createElement('strong'); heading.textContent = '再满足条件，才看下一层'; steps.appendChild(heading);
+        later.forEach(step => { const line = document.createElement('p'); line.textContent = step.condition; steps.appendChild(line); });
+        card.appendChild(steps);
+      }
+      if (scenario.at_reference && scenario.drawable) {
+        const hold = document.createElement('p'); hold.className = 'market-reference-response'; hold.textContent = scenario.at_reference; card.appendChild(hold);
+      }
+      outlookScenarios.appendChild(card);
+    });
+    markOutlookSelection();
+    if (focusedKey) outlookScenarios.querySelectorAll('button[data-scenario-key]').forEach(button => {
+      if (button.dataset.scenarioKey === focusedKey) button.focus({ preventScroll: true });
+    });
+    const rules = analysis.market_structure && analysis.market_structure.status === 'ok' ? analysis.market_structure.rules || {} : analysis.rules || {};
+    document.getElementById('outlook-rules').textContent = [rules.basis, rules.trend_line || rules.confirmation,
+      '历史与全部条件路径共用价格轴。加粗为当前观察，细点线和空心节点须再次确认才成立；点击卡片只改变突出分支，不代表概率排序。节点表示条件顺序，不代表未来K线或到达时间。'].filter(Boolean).join(' · ');
+  }
+
+  function markOutlookSelection() {
+    outlookScenarios.querySelectorAll('button[data-scenario-key]').forEach(button => {
+      const selected = button.dataset.scenarioKey === outlookSelectedKey;
+      button.setAttribute('aria-pressed', String(selected));
+      button.closest('.outlook-scenario').classList.toggle('selected', selected);
+    });
+    if (!outlookData || !window.MarketStructureChart) return;
+    const market = outlookData.analysis.market_structure, scenarios = window.MarketStructureChart.scenarios(outlookData.analysis);
+    const selected = scenarios.find(item => item.key === outlookSelectedKey), currentPrice = outlookData.bars[outlookData.bars.length - 1].close;
+    const rhythm = document.getElementById('outlook-rhythm');
+    const markup = window.MarketStructureChart.rhythmMarkup(scenarios, { market, currentPrice, selectedKey: outlookSelectedKey, viewMode: outlookViewMode });
+    if (rhythm.innerHTML !== markup) {
+      const focus = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.scenarioKey;
+      const within = document.activeElement && document.activeElement.className && String(document.activeElement.className).includes('market-rhythm-card');
+      rhythm.innerHTML = markup;
+      if (within && focus) rhythm.querySelectorAll('button[data-scenario-key]').forEach(button => {
+        if (button.dataset.scenarioKey === focus) button.focus({ preventScroll: true });
+      });
+    }
+    const drawn = window.MarketStructureChart.drawablePath(selected, currentPrice, market).length > 0;
+    const count = scenarios.filter(item => window.MarketStructureChart.drawablePath(item, currentPrice, market).length).length;
+    const prefix = outlookViewMode === 'all' ? '同屏 ' + count + ' 条有效条件路径 · ' : '单分支查看 · ';
+    document.getElementById('outlook-selection').textContent = prefix + (selected
+      ? (drawn ? '重点观察：' : '当前仅文字观察：') + selected.label + (selected.status_label ? ' · ' + selected.status_label : '')
+      : '等待新的有效条件') + ' · 细点线须再确认；点击条件卡突出对应路径，不是概率排序。';
+  }
+
+  function drawOutlook() {
+    if (!outlookData || detailView.style.display === 'none') return;
+    const box = outlookCanvas.getBoundingClientRect();
+    if (box.width < 40) return;
+    const W = box.width, H = box.height, dpr = window.devicePixelRatio || 1;
+    outlookCanvas.width = Math.round(W * dpr);
+    outlookCanvas.height = Math.round(H * dpr);
+    const ctx = outlookCanvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, W, H);
+    const analysis = outlookData.analysis, allBars = outlookData.bars;
+    const narrow = W < 600, left = narrow ? 50 : 62, right = W - 8;
+    const split = left + (right - left) * (narrow ? 0.50 : 0.51);
+    const top = 84, bottom = H - 34;
+    const count = Math.min(allBars.length, outlookWindow);
+    const first = allBars.length - count, bars = allBars.slice(first);
+    const slot = (split - left - 15) / count;
+    const x = index => left + (index - first + 0.5) * slot;
+    const levels = analysis.levels || {}, range = analysis.range || {}, tracking = analysis.structure_tracking || {};
+    const market = analysis.market_structure, marketValid = market && market.status === 'ok';
+    const scenarios = window.MarketStructureChart ? window.MarketStructureChart.scenarios(analysis) : (analysis.scenarios || []).slice(0, 3);
+    const stampAt = index => outlookTimestamp(allBars[index] && allBars[index].dt);
+    function chartIndex(at, fallback, isEnd = false) {
+      const stamp = outlookTimestamp(at);
+      if (Number.isFinite(stamp)) {
+        const index = allBars.findIndex(bar => outlookTimestamp(bar.dt) >= stamp);
+        if (index < 0) return allBars.length - 1;
+        return isEnd && stampAt(index) > stamp ? index - 1 : index;
+      }
+      return Number.isFinite(fallback) ? fallback : first;
+    }
+    const values = bars.flatMap(b => [b.low, b.high]);
+    [analysis.price, range.low, range.high, ...(marketValid ? [] : Object.values(levels))].forEach(v => { if (Number.isFinite(v)) values.push(v); });
+    // 历史、外层边界与所有有效分支共享同一真实价格轴，切换分支不改变比例。
+    if (window.MarketStructureChart) values.push(...window.MarketStructureChart.values(market, first, allBars.length - 1));
+    if (!marketValid && tracking.candidate) [tracking.candidate.low, tracking.candidate.high].forEach(v => { if (Number.isFinite(v)) values.push(v); });
+    let low = Math.min(...values), high = Math.max(...values);
+    const pad = Math.max((high - low) * 0.08, Math.abs(high) * 0.001, 0.01);
+    low -= pad; high += pad;
+    const y = value => top + (high - value) / (high - low) * (bottom - top);
+    const currentPrice = allBars[allBars.length - 1].close;
+    const geometry = { x, y, first, last: allBars.length - 1, left, right, split, top, bottom, slot, narrow, indexAt: chartIndex,
+      currentPrice, selectedKey: outlookSelectedKey, viewMode: outlookViewMode, market };
+    ctx.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#0f1620'; ctx.fillRect(split, 8, right - split, H - 16);
+    ctx.fillStyle = '#728199'; ctx.textAlign = 'left';
+    ctx.fillText('历史K线 · 最近' + count + '根', left + 2, 20);
+    ctx.fillStyle = '#a4b2c5'; ctx.fillText(outlookViewMode === 'all' ? '多分支条件对照 · 与历史同一价轴' : '所选条件路径 · 与历史同一价轴', split + 10, 20);
+    ctx.fillStyle = '#5f7189'; ctx.font = '10px sans-serif';
+    ctx.fillText(narrow ? '同一价格轴 · 非时间轴' : '现价同高起步 · 节点只表示条件顺序', split + 10, 36);
+    ctx.strokeStyle = '#334052'; ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.moveTo(split, 44); ctx.lineTo(split, bottom + 8); ctx.stroke(); ctx.setLineDash([]);
+    for (let i = 0; i <= 4; i++) {
+      const value = high - (high - low) * i / 4, yy = y(value);
+      ctx.strokeStyle = '#1d2632'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(right, yy); ctx.stroke();
+      ctx.fillStyle = '#75859a'; ctx.textAlign = 'right';
+      ctx.fillText(outlookPrice(value), left - 5, yy + 3);
+    }
+    // 旧参考仅作淡灰辅助线，不用其远端价位扩大当前图的价格轴。
+    (tracking.previous || []).slice(-2).forEach(previous => {
+      const start = Math.max(first, chartIndex(previous.start_time, first));
+      ctx.strokeStyle = '#536173'; ctx.lineWidth = 1; ctx.setLineDash([3, 6]);
+      [previous.low, previous.high].filter(Number.isFinite).forEach(value => {
+        if (value < low || value > high) return;
+        ctx.beginPath(); ctx.moveTo(Math.max(left, x(start) - slot / 2), y(value)); ctx.lineTo(split - 12, y(value)); ctx.stroke();
+      });
+      ctx.setLineDash([]);
+    });
+    const rangeLow = Number.isFinite(range.low) ? range.low : levels.support;
+    const rangeHigh = Number.isFinite(range.high) ? range.high : levels.resistance;
+    if (Number.isFinite(rangeLow) && Number.isFinite(rangeHigh)) {
+      const rangeStart = Math.max(left, x(Math.max(first, chartIndex(range.start_time, range.start_index))) - slot / 2);
+      const rangeEndIndex = chartIndex(range.end_time, Number.isFinite(range.end_index) ? range.end_index : allBars.length - 1, true);
+      const rangeEnd = Math.min(split - 12, x(rangeEndIndex) + slot / 2);
+      ctx.fillStyle = 'rgba(222,185,70,.055)';
+      if (rangeEnd > rangeStart) ctx.fillRect(rangeStart, y(rangeHigh), rangeEnd - rangeStart, y(rangeLow) - y(rangeHigh));
+      ctx.strokeStyle = '#e7c460'; ctx.lineWidth = 1.2;
+      [rangeLow, rangeHigh].forEach(value => {
+        ctx.beginPath(); ctx.moveTo(rangeStart, y(value)); ctx.lineTo(split - 12, y(value)); ctx.stroke();
+      });
+    }
+    const candidate = marketValid ? null : tracking.candidate;
+    if (candidate && Number.isFinite(candidate.low) && Number.isFinite(candidate.high)) {
+      const candidateStart = Math.max(left, x(Math.max(first, chartIndex(candidate.start_time, first))) - slot / 2);
+      ctx.fillStyle = 'rgba(117,187,199,.045)';
+      ctx.fillRect(candidateStart, y(candidate.high), Math.max(0, split - 12 - candidateStart), y(candidate.low) - y(candidate.high));
+    }
+    if (window.MarketStructureChart) window.MarketStructureChart.drawHistory(ctx, market, geometry, 'under');
+    bars.forEach((bar, index) => {
+      const xx = x(first + index), up = bar.close >= bar.open;
+      ctx.strokeStyle = ctx.fillStyle = up ? '#e85963' : '#3bb580'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(xx, y(bar.high)); ctx.lineTo(xx, y(bar.low)); ctx.stroke();
+      const width = Math.max(1, slot * 0.6);
+      ctx.fillRect(xx - width / 2, Math.min(y(bar.open), y(bar.close)), width, Math.max(1.2, Math.abs(y(bar.close) - y(bar.open))));
+    });
+    if (window.MarketStructureChart) window.MarketStructureChart.drawHistory(ctx, market, geometry, 'over');
+    (analysis.pivots || []).filter(p => p.index >= first && p.index < allBars.length && Number.isFinite(p.price)).forEach(p => {
+      const xx = x(p.index), yy = y(p.price), above = /high|top/.test(p.kind);
+      ctx.fillStyle = '#e7c460'; ctx.beginPath();
+      ctx.moveTo(xx, yy + (above ? -4 : 4));
+      ctx.lineTo(xx - 3, yy + (above ? -9 : 9)); ctx.lineTo(xx + 3, yy + (above ? -9 : 9));
+      ctx.closePath(); ctx.fill();
+    });
+    function tag(text, xx, yy, color, align) {
+      ctx.font = '10px "Microsoft YaHei", sans-serif'; ctx.textAlign = align || 'left';
+      const width = ctx.measureText(text).width;
+      ctx.fillStyle = '#0a0e14'; ctx.fillRect(align === 'right' ? xx - width - 3 : xx - 3, yy - 10, width + 6, 14);
+      ctx.fillStyle = color; ctx.fillText(text, xx, yy);
+      return { left: align === 'right' ? xx - width - 3 : xx - 3,
+        right: align === 'right' ? xx + 3 : xx + width + 3, top: yy - 10, bottom: yy + 4 };
+    }
+    const boundaryWord = range.kind === 'reference' ? '参考' : '区间';
+    const boundaryLabels = [];
+    if (Number.isFinite(rangeHigh)) boundaryLabels.push(tag((narrow ? '上沿 ' : boundaryWord + '上沿 ') + outlookPrice(rangeHigh), split - 14, y(rangeHigh) - 6, '#e7c460', 'right'));
+    if (Number.isFinite(rangeLow)) boundaryLabels.push(tag((narrow ? '下沿 ' : boundaryWord + '下沿 ') + outlookPrice(rangeLow), split - 14, y(rangeLow) + 14, '#e7c460', 'right'));
+    if (candidate && Number.isFinite(candidate.low) && Number.isFinite(candidate.high)) {
+      const start = Math.max(left, x(Math.max(first, chartIndex(candidate.start_time, first))) - slot / 2);
+      ctx.strokeStyle = '#75bbc7'; ctx.lineWidth = 1.4; ctx.setLineDash([2, 4]);
+      [candidate.low, candidate.high].forEach(value => {
+        ctx.beginPath(); ctx.moveTo(start, y(value)); ctx.lineTo(split - 12, y(value)); ctx.stroke();
+      });
+      ctx.setLineDash([]);
+      [[candidate.high, '上沿', -6], [candidate.low, '下沿', 14]].forEach(([value, side, offset]) => {
+        const text = (narrow ? '待确认 ' : '待确认' + side + ' ') + outlookPrice(value);
+        ctx.font = '10px "Microsoft YaHei", sans-serif';
+        const width = ctx.measureText(text).width;
+        const xx = Math.min(split - 14, Math.max(left + width + 4, start - 6));
+        const desired = Math.max(top + 12, Math.min(bottom - 4, y(value) + offset));
+        const options = [desired, desired - 17, desired + 17, desired - 34, desired + 34];
+        for (let yy = top + 12; yy <= bottom - 4; yy += 17) options.push(yy);
+        const yy = options.find(pos => pos >= top + 12 && pos <= bottom - 4 && !boundaryLabels.some(box =>
+          xx + 3 >= box.left && xx - width - 3 <= box.right && pos + 5 >= box.top && pos - 11 <= box.bottom)) ?? desired;
+        ctx.strokeStyle = '#75bbc7'; ctx.lineWidth = .8;
+        ctx.beginPath(); ctx.moveTo(xx + 4, yy - 4); ctx.lineTo(start, y(value)); ctx.stroke();
+        boundaryLabels.push(tag(text, xx, yy, '#8bd0da', 'right'));
+      });
+    }
+    function arrow(points, color, dashed) {
+      if (points.length < 2) return;
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = dashed ? 1.8 : 1;
+      ctx.setLineDash(dashed ? [6, 5] : []); ctx.beginPath();
+      points.forEach(([xx, yy], i) => i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy)); ctx.stroke(); ctx.setLineDash([]);
+      const end = points[points.length - 1], prev = points[points.length - 2];
+      const angle = Math.atan2(end[1] - prev[1], end[0] - prev[0]);
+      ctx.beginPath(); ctx.moveTo(...end);
+      ctx.lineTo(end[0] - 6 * Math.cos(angle - .45), end[1] - 6 * Math.sin(angle - .45));
+      ctx.lineTo(end[0] - 6 * Math.cos(angle + .45), end[1] - 6 * Math.sin(angle + .45)); ctx.closePath(); ctx.fill();
+    }
+    const eventSource = marketValid && ((market.events || []).length || (market.clues || []).length) ?
+      [...(market.events || []), ...(market.clues || [])].filter(event => event.confirmed !== false).map(event => ({ ...event,
+        index: Number.isFinite(event.index) ? event.index : chartIndex(event.time, -1), text: event.label || event.detail || '结构观察'
+      })).sort((a, b) => a.index - b.index).filter((event, index, list) => !list.slice(0, index).some(old => old.index === event.index && old.text === event.text)) :
+      tracking.events && tracking.events.length ? tracking.events.map(event => ({
+      ...event, index: chartIndex(event.at, -1), text: event.label || event.detail || '结构事件'
+    })).filter(event => !Number.isFinite(outlookTimestamp(event.at)) || outlookTimestamp(event.at) >= stampAt(first) && outlookTimestamp(event.at) <= stampAt(allBars.length - 1)) : analysis.events || [];
+    const events = eventSource.filter(e => e.index >= first && e.index < allBars.length && Number.isFinite(e.price)).slice(-3);
+    outlookEvents.replaceChildren();
+    events.forEach((event, i) => {
+      const short = String(event.text || '').slice(0, narrow ? 7 : 12);
+      const text = '事' + (i + 1) + ' ' + short + (String(event.text || '').length > short.length ? '…' : '');
+      ctx.font = '10px "Microsoft YaHei", sans-serif';
+      const textWidth = ctx.measureText(text).width;
+      const xx = Math.min(Math.max(x(event.index) - textWidth / 2, left + 3), split - textWidth - 16), yy = 35 + i * 16;
+      arrow([[xx + textWidth / 2, yy + 4], [x(event.index), y(event.price) - 8]], '#9a8754', false);
+      tag(text, xx, yy, '#dbc679');
+      const line = document.createElement('span'), number = document.createElement('b');
+      number.textContent = '事件' + (i + 1) + '：'; line.append(number, document.createTextNode((event.text || '结构事件') + (event.detail ? ' · ' + event.detail : ''))); outlookEvents.appendChild(line);
+    });
+    const price = currentPrice;
+    ctx.strokeStyle = '#6c7c91'; ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x(allBars.length - 1), y(price)); ctx.lineTo(right - 6, y(price)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#dde4ec'; ctx.beginPath(); ctx.arc(split + 13, y(price), 2.5, 0, Math.PI * 2); ctx.fill();
+    if (window.MarketStructureChart) window.MarketStructureChart.drawPaths(ctx, scenarios, geometry);
+    function barTime(value) {
+      if (value == null) return '';
+      if (typeof value === 'string') return value.slice(5, 16).replace('T', ' ');
+      const ms = value > 1e16 ? value / 1e6 : value > 1e11 ? value : value * 1000;
+      const date = new Date(ms);
+      return Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+    }
+    ctx.font = '10px sans-serif'; ctx.fillStyle = '#677a92'; ctx.textAlign = 'left';
+    ctx.fillText(barTime(bars[0].dt), left, H - 10);
+    ctx.textAlign = 'right'; ctx.fillText(barTime(bars[bars.length - 1].dt), split - 10, H - 10);
+    ctx.textAlign = 'center'; ctx.fillText(narrow ? '条件示意' : '满足条件后观察 · 非时间轴', (split + right) / 2, H - 10);
   }
 
   // ===== 基本面三卡（库存/基差/席位，akshare 日频缓存） =====
-  let fundTimer = null;
+  let fundTimer = null, fundController = null, fundSequence = 0;
   async function loadFund() {
+    const symbol = currentSymbol, sequence = ++fundSequence;
+    if (fundController) fundController.abort();
+    const controller = new AbortController(); fundController = controller;
     try {
-      const d = await (await fetch('/api/fundamentals?symbol=' + encodeURIComponent(currentSymbol))).json();
+      const response = await fetch('/api/fundamentals?symbol=' + encodeURIComponent(symbol), { signal: controller.signal });
+      const d = await response.json();
+      if (sequence !== fundSequence || symbol !== currentSymbol || d.symbol !== symbol) return;
+      if (!response.ok) throw new Error('基本面读取失败');
       renderFund(d);
-    } catch (e) { /* 下轮再试 */ }
+    } catch (e) {
+      if (e.name !== 'AbortError' && sequence === fundSequence && symbol === currentSymbol)
+        document.getElementById('fund-sum').textContent = '基本面读取失败，等待重试';
+    }
   }
   function renderFund(d) {
     const refreshing = d.meta && d.meta.refreshing;
@@ -1039,7 +1957,13 @@
 
   async function focusSymbol(sym) {
     if (!sym) return;
-    if (sym !== currentSymbol) {
+    const requestId = ++focusRequestId;
+    if (sym !== currentSymbol || pendingFocusSymbol) {
+      pendingFocusSymbol = sym;
+      pendingFocusAt = Date.now();
+      resetOutlook();
+      resetTrading();
+      clearFocusCharts();
       modalMask.classList.remove('show');   // 切品种先收起"我要开仓"弹窗，避免残留上一品种的决策内容
       try {
         const r = await fetch('/api/symbol', {
@@ -1047,146 +1971,145 @@
           body: JSON.stringify({ symbol: sym }),
         });
         const d = await r.json();
-        if (d.ok) {
-          setCurrentSymbol(sym);
-          statusEl.innerHTML = '<span class="mock">● 正在切换品种…</span>';
-        }
-      } catch (e) { /* 忽略，状态由 poll 同步 */ }
+        if (requestId !== focusRequestId) return;
+        if (!r.ok || !d.ok) throw new Error('切换未成功');
+        setCurrentSymbol(sym);
+        statusEl.innerHTML = '<span class="mock">● 正在切换品种…</span>';
+      } catch (e) {
+        if (requestId !== focusRequestId) return;
+        pendingFocusSymbol = null;
+        symbolSwitch.value = currentSymbol;
+        statusEl.textContent = '切换品种失败，请重试。';
+      }
     }
     showDetail();
   }
   symbolSwitch.onchange = () => focusSymbol(symbolSwitch.value);
 
   // ===== 总览页：全品种信号卡片 =====
+  let overviewController = null, overviewSequence = 0, overviewLastSuccess = 0;
   async function loadOverview() {
+    if (overviewLastSuccess && Date.now() - overviewLastSuccess > 20000 && overviewView.style.display !== 'none') {
+      document.getElementById('ov-grid').textContent = '总览超过20秒未成功刷新，旧结构与候选已撤下。正在重新连接…';
+      document.getElementById('ov-advice').textContent = '等待新的行情快照后再核对计划。';
+    }
+    const sequence = ++overviewSequence;
+    if (overviewController) overviewController.abort();
+    const controller = new AbortController(); overviewController = controller;
     try {
-      const d = await (await fetch('/api/overview')).json();
+      const response = await fetch('/api/overview', { signal: controller.signal });
+      const d = await response.json();
+      if (sequence !== overviewSequence || overviewView.style.display === 'none') return;
+      if (!response.ok) throw new Error('总览读取失败');
+      overviewLastSuccess = Date.now();
       renderOverview(d);
-    } catch (e) { /* 后端未就绪，下轮再试 */ }
+    } catch (e) {
+      if (e.name !== 'AbortError' && sequence === overviewSequence && overviewView.style.display !== 'none') {
+        document.getElementById('ov-grid').textContent = '总览读取失败，等待重新连接。旧候选已撤下。';
+        document.getElementById('ov-advice').textContent = '数据未更新，暂不显示候选。';
+      }
+    }
+  }
+  function overviewObservation(card, connected = true) {
+    const available = connected !== false && (card.display_available === true ||
+      (card.display_available === undefined && !card.stale));
+    const realtime = available && (card.realtime === true || (card.realtime === undefined && !card.stale));
+    const preparation = available && !realtime;
+    const freshness = card.freshness || {}, prep = (card.outlook || {}).preparation || {};
+    const zone = prep.observation_zone || {}, reference = prep.reference || {};
+    const keyLevels = prep.key_levels || {}, levels = [];
+    if (Number.isFinite(zone.low) && Number.isFinite(zone.high)) levels.push('观察区 ' + outlookPrice(zone.low) + '–' + outlookPrice(zone.high));
+    else if (Number.isFinite(reference.low) && Number.isFinite(reference.high)) levels.push('参考带 ' + outlookPrice(reference.low) + '–' + outlookPrice(reference.high));
+    if (keyLevels.current_support && Number.isFinite(keyLevels.current_support.price)) levels.push('下方参考 ' + outlookPrice(keyLevels.current_support.price));
+    if (keyLevels.current_resistance && Number.isFinite(keyLevels.current_resistance.price)) levels.push('上方参考 ' + outlookPrice(keyLevels.current_resistance.price));
+    return { available, realtime, preparation, levels: levels.join(' · '),
+      label: preparation ? '预案观察 · 最新可用' : realtime ? '行情更新中' : freshness.label || '数据收集中',
+      time: available && (card.price_bar_time || freshness.last_bar_time) ? '30m末根起始 ' + outlookTime(card.price_bar_time || freshness.last_bar_time) : '',
+      note: preparation ? '可查看结构与条件推演；实时触发暂停，开盘后重新核对。' : '' };
   }
   function renderOverview(d) {
     const grid = document.getElementById('ov-grid');
-    grid.innerHTML = d.symbols.map(c => {
-      const ta = c.track_a || {};
-      const tb = c.track_b || {};
-      const lampColor = { red: '#da3633', green: '#2ea043', gray: '#484f58' }[c.lamp] || '#484f58';
-      const lampTxt = c.lamp === 'red' ? '共振多' : c.lamp === 'green' ? '共振空' :
-        ({ long: '偏多', short: '偏空', none: '无方向' }[ta.direction] || '--');
-      const score = tb.score;
-      let sc = '#484f58';
-      if (score != null) {
-        if (score >= 75 && tb.direction !== 'wait') sc = tb.direction === 'long' ? '#da3633' : '#2ea043';
-        else if (score >= 55) sc = '#d29922';
-      }
-      // 轨道B 决策结构方向（双轨同显：与"我要开仓"弹窗同口径，避免只看首页灯误判方向）
-      const decDir = (c.decision || {}).direction;
-      const decWord = decDir === 'long' ? '结构多' : decDir === 'short' ? '结构空' : '';
-      const decColor = decDir === 'long' ? '#da3633' : decDir === 'short' ? '#2ea043' : '#8b949e';
-      const decWord2 = decWord || ((c.decision || {}).quadrant === 'standby' ? '观望' : '');
-      // 市场状态小标签（趋势市·多=红 / 趋势市·空=绿 / 震荡市=琥珀，涨红跌绿约定）
-      const RG_COLOR = { trend_up: '#da3633', trend_down: '#2ea043', range: '#d29922' };
-      const rg = c.regime;
-      const rgTag = rg ? `<span style="font-size:11px;color:${RG_COLOR[rg.regime] || '#8b949e'}">${rg.label} ER${rg.er}</span>` : '';
-      return `<div class="ov-card${c.symbol === d.current ? ' focus' : ''}" data-symbol="${c.symbol}">
+    grid.innerHTML = (d.symbols || []).map(c => {
+      const ta = c.track_a || {}, tb = c.track_b || {}, dec = c.decision || {};
+      const view = overviewObservation(c, d.connected), stale = !view.available;
+      const lampColor = !view.realtime ? '#484f58' : ({ red: '#da3633', green: '#2ea043', gray: '#484f58' }[c.lamp] || '#484f58');
+      const lampTxt = stale ? '待刷新' : view.preparation ? '实时过滤暂停' : c.lamp === 'red' ? '两周期同向多' : c.lamp === 'green' ? '两周期同向空' :
+        ({ long: '方向偏多', short: '方向偏空', none: '方向未对齐' }[ta.direction] || '等待过滤');
+      const score = !view.realtime ? null : tb.score;
+      const sc = score != null && score >= 55 ? '#d29922' : '#8b949e';
+      const ready = view.realtime && dec.plan_status === 'ready' && dec.mode !== 'early' && !['avoid', 'invalid'].includes(dec.quadrant);
+      const planColor = ready ? '#8db8ff' : ['invalid', 'risk_blocked'].includes(dec.plan_status) ? '#e6ad63' : '#9ba9bc';
+      const planLabel = stale ? view.label : view.preparation ? '预案可查看 · 实时确认暂停' : dec.label || '等待30m计划';
+      const planReason = stale ? '等待有效快照；当前不沿用旧信号。' : view.preparation ? view.note : dec.wait_for || dec.summary || '等待结构与风险核算';
+      const marketPhase = c.outlook && c.outlook.market_phase;
+      const marketLabel = marketPhase && typeof marketPhase === 'object' ? marketPhase.label : marketPhase;
+      const marketSummary = c.outlook && (c.outlook.market_summary || marketPhase && marketPhase.summary);
+      const shortTerm = '<div class="ov-row" style="margin:8px 0 4px"><span>30m结构阶段</span><b style="color:#e0c57f">' +
+        (!stale && c.outlook && Number(c.outlook.period) === 1800 ? escapeOutlookText(marketLabel || c.outlook.state || '等待结构') : '等待快照') +
+        '</b></div><div class="ov-reason">' + (!stale && c.outlook ? escapeOutlookText(marketSummary || c.outlook.summary || '') : '数据恢复后重新定位阶段') +
+        '</div><div style="font-size:10px;color:#8195ac;margin:5px 0 9px">结构编号需核对 · 查看想做的段与关键位置 →</div>';
+      return `<div class="ov-card${c.symbol === d.current ? ' focus' : ''}" role="button" tabindex="0" aria-label="查看${escapeOutlookText(c.name)}的结构与阶段" data-symbol="${escapeOutlookText(c.symbol)}">
         <div class="ov-row1">
-          <span><span class="ov-name">${c.name}</span> <span class="ov-sym">${c.symbol}</span></span>
-          <span class="ov-lamp" style="background:${lampColor};box-shadow:0 0 8px ${lampColor}"></span>
+          <span><span class="ov-name">${escapeOutlookText(c.name)}</span> <span class="ov-sym">${escapeOutlookText(c.symbol)}</span></span>
+          <span class="ov-lamp" title="辅助两周期方向过滤，非开仓信号" style="background:${lampColor};box-shadow:0 0 8px ${lampColor}"></span>
         </div>
-        <div class="ov-price">${c.price != null ? c.price : '--'}</div>
-        <div class="ov-row"><span>轨道A</span><b style="color:${lampColor}">${lampTxt}</b>
-          <span style="margin-left:auto">轨道B</span><b style="color:${sc};font-size:15px">${score != null ? score : '--'}</b>${decWord2 ? `<b style="color:${decColor};font-size:11px;margin-left:4px">${decWord2}</b>` : ''}</div>
-        <div class="ov-reason">${(c.reasons && c.reasons[0]) || ''} ${rgTag}</div>
-        ${c.fundamentals && c.fundamentals.summary ? `<div class="ov-row" style="margin-top:4px;font-size:11px"><span>基本面</span><b style="font-weight:400;color:#c9d1d9">${c.fundamentals.summary}${c.fundamentals.stale ? '（旧）' : ''}</b></div>` : ''}
+        <div class="ov-data-state ${view.preparation ? 'preparation' : ''}">${escapeOutlookText(view.label)}</div>
+        <div class="ov-price">${!stale && Number.isFinite(c.price) ? c.price : '—'}${view.preparation ? '<span class="ov-price-note">参考价 · 非实时</span>' : stale ? '<span class="ov-price-note">等待有效快照</span>' : ''}</div>
+        <div class="ov-data-time">${escapeOutlookText(view.time)}</div>
+        ${shortTerm}
+        ${!stale && view.levels ? '<div class="ov-prep-levels">' + escapeOutlookText(view.levels) + '</div>' : ''}
+        <div class="ov-row"><span>30m确认计划</span><b style="color:${planColor}">${escapeOutlookText(planLabel)}</b></div>
+        <div class="ov-reason">${escapeOutlookText(planReason)}</div>
+        <div class="ov-row" style="margin-top:5px"><span>方向过滤</span><b style="color:${lampColor};font-size:11px">${lampTxt}</b>
+          <span style="margin-left:auto">辅助规则证据</span><b style="color:${sc};font-size:12px">${score != null ? score + '分' : '—'}</b></div>
+        ${c.fundamentals && c.fundamentals.summary ? `<div class="ov-row" style="margin-top:4px;font-size:11px"><span>基本面</span><b style="font-weight:400;color:#c9d1d9">${escapeOutlookText(c.fundamentals.summary)}${c.fundamentals.stale ? '（旧）' : ''}</b></div>` : ''}
       </div>`;
     }).join('');
     grid.querySelectorAll('.ov-card').forEach(el => {
       el.onclick = () => focusSymbol(el.dataset.symbol);
+      el.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusSymbol(el.dataset.symbol); } };
     });
-    renderAdvice(d.symbols);
+    renderAdvice(d.symbols || [], d.connected !== false);
   }
 
-  // ===== 底部建议：最清晰品种 + 可重点关注（日内超短~3天偏好） =====
-  function renderAdvice(symbols) {
+  // 总览仅列30m确认计划；辅助方向灯/评分不得替代计划 ready 状态。
+  function renderAdvice(symbols, connected = true) {
     const el = document.getElementById('ov-advice');
     if (!el) return;
-
-    // 打分：共振触发(50) + 确定性分(0-100) + ER趋势强度(0-20) + 位置分(0-30)
-    // 日内超短偏好：ER高（趋势市）优先，共振触发优先
-    const scored = symbols.map(c => {
-      const ta = c.track_a || {};
-      const tb = c.track_b || {};
-      const dec = c.decision || {};
-      const rg = c.regime || {};
-      let s = 0;
-      if (ta.resonance) s += 50;
-      s += (dec.certainty_score || 0) * 0.5;
-      s += (rg.er || 0) * 20;
-      if (dec.location_score != null) s += dec.location_score * 0.3;
-      if (dec.quadrant === 'probe' || dec.quadrant === 'main') s += 30;
-      return { ...c, _score: s };
+    const ready = [], waiting = [], preparation = [], unavailable = [];
+    symbols.forEach(c => {
+      const d = c.decision || {};
+      const view = overviewObservation(c, connected);
+      if (view.preparation) preparation.push(c);
+      else if (!view.available || ['avoid', 'invalid'].includes(d.quadrant) ||
+          ['invalid', 'insufficient', 'risk_blocked', 'error'].includes(d.plan_status)) unavailable.push(c);
+      else if (view.realtime && d.plan_status === 'ready' && d.mode !== 'early') ready.push(c);
+      else waiting.push(c);
     });
-
-    // 最清晰：有共振 或 quadrant != standby，按分数排序，不设上限
-    const active = scored.filter(c => c.track_a && c.track_a.resonance || (c.decision && c.decision.quadrant !== 'standby'));
-    active.sort((a, b) => b._score - a._score);
-    const top = active;
-
-    // 可关注：无共振但趋势市（ER>0.3）或确定性分>30，按分数排序，不设上限
-    const watch = scored.filter(c => !active.includes(c) && ((c.regime && c.regime.er > 0.3) || (c.decision && c.decision.certainty_score > 30)));
-    watch.sort((a, b) => b._score - a._score);
-    const watchTop = watch;
-
-    const LAMP_COLOR = { red: '#da3633', green: '#2ea043', gray: '#484f58' };
-
-    function itemHtml(c, rank) {
-      const ta = c.track_a || {};
-      const dec = c.decision || {};
-      const rg = c.regime || {};
-      const lamp = LAMP_COLOR[c.lamp] || '#484f58';
-      // —— 双轨方向同显：chip1=轨道A（共振多/共振空 或 偏多/偏空/无方向），chip2=轨道B决策结构方向（结构多/结构空）——
-      const aDir = ta.direction;
-      const aCls = aDir === 'long' ? 'long' : aDir === 'short' ? 'short' : 'none';
-      const aWord = ta.resonance ? (aDir === 'long' ? '共振多' : aDir === 'short' ? '共振空' : '共振')
-        : (aDir === 'long' ? '偏多' : aDir === 'short' ? '偏空' : '无方向');
-      const bDir = dec.direction;
-      const bWord = bDir === 'long' ? '结构多' : bDir === 'short' ? '结构空' : '';
-      const bCls = bDir === 'long' ? 'long' : bDir === 'short' ? 'short' : 'none';
-      const quadTxt = { probe: '试单', main: '主仓', confirm: '确认', avoid: '不做', standby: '观望' }[dec.quadrant] || '';
-      const parts = [];
-      // 轨道B无结构方向但为观望态时，chip2 显灰"观望"，避免首页只看到轨道A单边词误判
-      const bWord2 = bWord || (dec.quadrant === 'standby' ? '观望' : '');
-      if (quadTxt && quadTxt !== '观望') parts.push(quadTxt);
-      if (rg.er > 0.3) parts.push('趋势');
-      if (dec.certainty_score > 0) parts.push(`确定${dec.certainty_score}`);
-      return `<div class="adv-item" data-symbol="${c.symbol}">
-        <span style="color:var(--dim);font-size:11px;width:16px">${rank}</span>
-        <span class="dot" style="background:${lamp}"></span>
-        <span class="nm">${c.name}</span>
-        <span class="dir ${aCls}">${aWord}</span>${bWord2 ? `<span class="dir ${bCls}">${bWord2}</span>` : ''}
-        <span class="meta">${parts.join(' · ')}</span>
+    function itemHtml(c, isReady) {
+      const d = c.decision || {}, view = overviewObservation(c, connected), stale = !view.available;
+      const direction = view.preparation ? '预案观察' : d.direction === 'long' ? '计划多' : d.direction === 'short' ? '计划空' : '方向待定';
+      const cls = view.realtime && ['long', 'short'].includes(d.direction) ? d.direction : 'none';
+      const label = stale ? view.label : view.preparation ? (c.outlook || {}).market_phase || (c.outlook || {}).state || '结构待核对' : d.label || '等待计划';
+      const reason = stale ? '等待有效快照' : view.preparation ? [view.time, view.levels, '进入详情准备各分支与失效条件'].filter(Boolean).join(' · ') : d.wait_for || d.summary || '等待30m结构与3m确认';
+      const capacity = isReady ? ` · 风险额度最多${Math.min(2, Number(d.max_lots) || 0)}手` : '';
+      return `<div class="adv-item" data-symbol="${escapeOutlookText(c.symbol)}">
+        <span class="nm">${escapeOutlookText(c.name)}</span>
+        <span class="dir ${cls}">${direction}</span>
+        <span style="font-size:11px">${escapeOutlookText(label + capacity)}</span>
+        <span class="meta" style="flex-basis:100%;margin-left:0">${escapeOutlookText(reason)}</span>
       </div>`;
     }
-
-    let html = '<div class="adv-title">📋 今日关注建议 <span style="font-weight:400;font-size:11px;color:var(--dim)">（日内超短 ~ 最多3天）</span></div>';
-
-    if (top.length) {
-      html += '<div class="adv-group"><div class="adv-label">🔥 当下最清晰（可直接关注）</div>';
-      top.forEach((c, i) => { html += itemHtml(c, i + 1); });
-      html += '</div>';
-    } else {
-      html += '<div class="adv-group"><div class="adv-label">🔥 当下最清晰</div><div class="adv-empty">暂无共振或有效信号品种</div></div>';
+    function group(title, cards, isReady, empty) {
+      return '<div class="adv-group"><div class="adv-label">' + title + '</div>' +
+        (cards.length ? cards.map(c => itemHtml(c, isReady)).join('') : '<div class="adv-empty">' + empty + '</div>') + '</div>';
     }
-
-    if (watchTop.length) {
-      html += '<div class="adv-group"><div class="adv-label">👀 可重点关注（等信号确认）</div>';
-      watchTop.forEach((c, i) => { html += itemHtml(c, i + 1); });
-      html += '</div>';
-    }
-
-    html += '<div style="font-size:10px;color:var(--dim);margin-top:6px">仅为技术排序，不构成投资建议。点击品种可进入详情。</div>';
-    el.innerHTML = html;
-
-    // 点击跳转
+    el.innerHTML = '<div class="adv-title">30m观察与确认计划</div>' +
+      '<div class="adv-sub">夜盘 / 次日预案保留最新可用结构。开盘后重新核对跳空、结构、3m确认与风险，预案不自动成为实时信号。</div>' +
+      (preparation.length ? group('夜盘 / 次日预案 · 最新可用结构', preparation, false, '') : '') +
+      group('条件已满足 · 进入详情人工核对', ready, true, '暂无满足全部条件的确认计划') +
+      group('等待条件', waiting, false, '暂无等待项') +
+      group('失效 / 风险受限 / 数据不足', unavailable, false, '暂无受限项');
     el.querySelectorAll('.adv-item').forEach(item => {
       item.onclick = () => focusSymbol(item.dataset.symbol);
     });
@@ -1196,7 +2119,7 @@
   const multiHint = document.getElementById('multi-hint');
   const multiCanvas = document.getElementById('multichart');
   let multiPeriod = null;
-  let multiTimer = null;
+  let multiTimer = null, multiSequence = 0, multiController = null, dbController = null;
   document.querySelectorAll('.multi-tab').forEach(t => {
     t.onclick = () => {
       document.querySelectorAll('.multi-tab').forEach(x => x.classList.remove('active'));
@@ -1205,30 +2128,51 @@
       loadMulti();
     };
   });
+  function stopMulti() {
+    multiSequence++;
+    if (multiTimer) clearInterval(multiTimer);
+    multiTimer = null;
+    if (multiController) multiController.abort();
+    if (dbController) dbController.abort();
+    multiController = dbController = null;
+  }
   async function loadMulti() {
-    if (!multiPeriod) return;
+    stopMulti();
+    if (!multiPeriod || detailView.style.display === 'none') return;
+    const symbol = currentSymbol, period = multiPeriod, sequence = multiSequence;
+    multiBarsCache = null;
     multiCanvas.style.display = 'none';
     multiHint.style.display = 'block';
     multiHint.textContent = '加载中…（首次拉取该周期需几秒）';
-    if (multiTimer) { clearInterval(multiTimer); multiTimer = null; }
+    document.getElementById('db-card').style.display = 'none';
+    const valid = d => sequence === multiSequence && symbol === currentSymbol && period === multiPeriod &&
+      detailView.style.display !== 'none' && (!d || d.symbol === symbol && Number(d.period) === period);
     const fetchOnce = async () => {
+      if (!valid()) return;
+      if (multiController) multiController.abort();
+      const controller = new AbortController(); multiController = controller;
       try {
-        const d = await (await fetch('/api/kline?period=' + multiPeriod)).json();
-        if (d.status === 'ok' && d.bars && d.bars.length) {
-          multiHint.style.display = 'none';
-          multiCanvas.style.display = 'block';
-          drawMultiChart(d.bars);
+        const response = await fetch('/api/kline?symbol=' + encodeURIComponent(symbol) + '&period=' + period,
+          { signal: controller.signal });
+        const d = await response.json();
+        if (!valid(d) || controller !== multiController) return;
+        if (response.ok && d.status === 'ok' && d.bars && d.bars.length && Date.now() / 1000 - Number(d.updated) <= 20) {
+          multiHint.style.display = 'none'; multiCanvas.style.display = 'block'; drawMultiChart(d.bars);
+          if (period === 86400 || period === 3600) loadDb(symbol, period, sequence);
+        } else {
+          multiBarsCache = null; multiCanvas.style.display = 'none'; multiHint.style.display = 'block';
+          multiHint.textContent = d.message || '等待该品种周期数据…';
+          document.getElementById('db-card').style.display = 'none';
         }
-      } catch (e) { /* 保持加载提示 */ }
-      // 轨道B 信号卡只在日线/1小时下显示
-      if (multiPeriod === 86400 || multiPeriod === 3600) {
-        loadDb();
-      } else {
-        document.getElementById('db-card').style.display = 'none';
+      } catch (e) {
+        if (e.name !== 'AbortError' && valid() && controller === multiController) {
+          multiBarsCache = null; multiCanvas.style.display = 'none'; multiHint.style.display = 'block';
+          multiHint.textContent = '辅助K线读取失败，旧图已撤下。'; document.getElementById('db-card').style.display = 'none';
+        }
       }
     };
-    await fetchOnce();
-    multiTimer = setInterval(fetchOnce, 3000);  // 每3秒跟随刷新
+    fetchOnce();
+    multiTimer = setInterval(fetchOnce, 3000);
   }
   let multiBarsCache = null;
   function drawMultiResize() { if (multiBarsCache) drawMultiChart(multiBarsCache); }
@@ -1240,14 +2184,20 @@
     body.classList.toggle('hide');
     document.getElementById('db-toggle').textContent = body.classList.contains('hide') ? '展开 ▸' : '收起 ▾';
   };
-  async function loadDb() {
-    dbCard.style.display = 'block';
+  async function loadDb(symbol, period, sequence) {
+    if (dbController) dbController.abort();
+    const controller = new AbortController(); dbController = controller;
+    const valid = d => sequence === multiSequence && symbol === currentSymbol && period === multiPeriod &&
+      detailView.style.display !== 'none' && controller === dbController && (!d || d.symbol === symbol && Number(d.period) === period);
     try {
-      const d = await (await fetch('/api/double_bottom?period=' + multiPeriod)).json();
-      if (d.status === 'ok') renderDb(d.result);
-      else document.getElementById('db-verdict').textContent =
-        d.status === 'loading' ? 'K线加载中…' : (d.message || '数据不足');
-    } catch (e) { /* 保持现状，下轮刷新再试 */ }
+      const response = await fetch('/api/double_bottom?symbol=' + encodeURIComponent(symbol) + '&period=' + period,
+        { signal: controller.signal });
+      const d = await response.json();
+      if (!valid(d)) return;
+      if (response.ok && d.status === 'ok' && Date.now() / 1000 - Number(d.updated) <= 20) {
+        dbCard.style.display = 'block'; renderDb(d.result);
+      } else dbCard.style.display = 'none';
+    } catch (e) { if (e.name !== 'AbortError' && valid()) dbCard.style.display = 'none'; }
   }
   function renderDb(r) {
     const scoreEl = document.getElementById('db-score');
@@ -1256,13 +2206,13 @@
     let color = '#484f58', verdict = '不做';
     if (r.score >= 75 && r.direction !== 'wait') {
       color = r.direction === 'long' ? '#da3633' : '#2ea043';
-      verdict = r.direction === 'long' ? '可做多' : '可做空';
+      verdict = r.direction === 'long' ? '结构偏多' : '结构偏空';
     } else if (r.score >= 55) { color = '#d29922'; verdict = '观望'; }
     scoreEl.style.color = color;
     const p = r.pattern || {};
     document.getElementById('db-verdict').textContent = verdict + ' · ' +
       (p.type === 'double_bottom' ? '双底' : p.type === 'double_top' ? '双顶' : '无结构');
-    const dirTxt = { long: '做多', short: '做空', wait: '观望' }[r.direction] || '观望';
+    const dirTxt = { long: '结构偏多', short: '结构偏空', wait: '观望' }[r.direction] || '观望';
     document.getElementById('db-meta').innerHTML = `方向判定：<b style="color:${color}">${dirTxt}</b>`;
 
     // 结构三价位 + 确认信号
@@ -1382,10 +2332,29 @@
     });
   }
 
-  async function poll() {
+  async function poll(force = false) {
+    if (document.hidden) return;
+    if (stateController) {
+      if (!force) return;
+      stateController.abort();
+    }
+    const requestSequence = ++stateRequestSequence;
+    const requestedFocus = focusRequestId;
+    const controller = new AbortController(); stateController = controller;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
     try {
-      const r = await fetch('/api/state');
+      const r = await fetch('/api/state', { signal: controller.signal, cache: 'no-store' });
       const s = await r.json();
+      if (requestSequence !== stateRequestSequence || requestedFocus !== focusRequestId) return;
+      if (pendingFocusSymbol) {
+        if (s.symbol !== pendingFocusSymbol) {
+          statusEl.textContent = Date.now() - pendingFocusAt > 15000
+            ? '品种切换仍未完成，等待目标行情或重新选择品种。' : '正在等待目标品种行情…';
+          return;
+        }
+        pendingFocusSymbol = null;
+      }
 
       if (s.mock) {
         statusEl.innerHTML = '<span class="mock">● 模拟数据(MOCK)</span>';
@@ -1399,7 +2368,17 @@
       if (s.symbol && s.symbol !== currentSymbol) setCurrentSymbol(s.symbol);
 
       const res = s.result;
-      if (!res) { return; }
+      if (!s.connected || !res || res.symbol !== currentSymbol || res.generation !== s.generation ||
+          Date.now() / 1000 - Number(s.updated) > 20) {
+        clearFocusCharts(); beaconDir.textContent = '等待有效行情';
+        if (!s.connected || Date.now() / 1000 - Number(s.updated) > 20) {
+          clearTradePlan('行情刷新中断，旧计划已撤下。', 'invalid');
+          // 主图订阅独立于辅助三腿结果；仅明确断连在此撤图，缓存时效由 outlook 自身核验。
+          if (!s.connected) outlookUnavailable('行情连接中断，旧路径已撤下。', '刷新中断');
+        }
+        return;
+      }
+      if (multiPeriod && !multiTimer && detailView.style.display !== 'none') loadMulti();
 
       latestPrice = res.price;
       priceEl.textContent = res.price != null ? res.price : '--';
@@ -1435,13 +2414,32 @@
         proximityEl.classList.remove('show');
       }
 
-      if (res.resonance && !lastResonance) beep(res.direction);
       lastResonance = res.resonance;
 
     } catch (e) {
+      if (e.name === 'AbortError' && !timedOut || requestSequence !== stateRequestSequence || requestedFocus !== focusRequestId) return;
       statusEl.innerHTML = '<span class="disc">● 面板断连，后端可能已停止</span>';
+      clearFocusCharts(); beaconDir.textContent = '行情连接中断';
+      clearTradePlan('面板连接中断，旧计划已撤下。', 'invalid');
+      outlookUnavailable('面板连接中断，旧路径已撤下。', '刷新中断');
+    } finally {
+      clearTimeout(timeout);
+      if (requestSequence === stateRequestSequence) stateController = null;
     }
   }
+
+  let lastResumeRefresh = 0;
+  function refreshVisibleMarket() {
+    if (document.hidden || Date.now() - lastResumeRefresh < 500) return;
+    lastResumeRefresh = Date.now();
+    poll(true);
+    if (detailView.style.display !== 'none') {
+      if (outlookData && Date.now() - outlookReceivedAt > 20000) outlookUnavailable('恢复页面，正在获取最新快照。', '刷新中');
+      loadOutlook(true);
+    } else loadOverview();
+  }
+  window.addEventListener('focus', refreshVisibleMarket);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshVisibleMarket(); });
 
   // ===== 我要开仓：双轴评分 · 象限决策面板（位置分 × 确定性分，唯一不做区=双低） =====
   const modalMode = document.getElementById('modal-mode');
@@ -1494,7 +2492,7 @@
     ctx.fillStyle = '#8b949e'; ctx.textAlign = 'center';
     ctx.fillText('位置分 →', M.l + pw / 2, H - 8);
     ctx.save(); ctx.translate(11, M.t + ph / 2); ctx.rotate(-Math.PI / 2);
-    ctx.fillText('确定性分 →', 0, 0); ctx.restore();
+    ctx.fillText('规则证据分（非胜率）→', 0, 0); ctx.restore();
     // 当前状态发光点（位置无法评估时画在左缘空心圈）
     const locNone = d.location_score === null || d.location_score === undefined;
     const cx = locNone ? M.l + 6 : X(Math.max(0, Math.min(100, d.location_score)));
@@ -1508,7 +2506,7 @@
       ctx.strokeStyle = color; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.stroke();
     }
-    const label = (d.quadrant_name || '') + (d.position_pct ? ' ' + d.position_pct + '%' : '');
+    const label = d.quadrant_name || '';
     ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = color;
     const lw = ctx.measureText(label).width;
     const leftSide = cx + 12 + lw > W - M.r;
@@ -1622,13 +2620,12 @@
       // 双分明细
       const sd = d.scores_detail || {};
       renderDetail(modalDetailLoc, '位置分', d.location_score, sd.location, 'loc');
-      renderDetail(modalDetailCer, '确定性分', d.certainty_score, sd.certainty, 'cer');
+      renderDetail(modalDetailCer, '规则证据分（非胜率）', d.certainty_score, sd.certainty, 'cer');
       // avoid/standby：大字说清等什么
       if (d.quadrant === 'avoid' || d.quadrant === 'standby') {
         modalWait.style.display = '';
         modalWait.innerHTML = '⏳ ' + (d.wait_for || d.summary || '');
       }
-      beep(d.quadrant === 'main' ? 'long' : 'short');
     } catch (e) {
       modalStrength.textContent = '检查失败';
       modalStrength.className = 'strength st-standby';
@@ -1644,6 +2641,382 @@
   document.getElementById('sig-help').onclick = () => helpMask.classList.add('show');
   document.getElementById('help-close').onclick = () => helpMask.classList.remove('show');
   helpMask.onclick = (e) => { if (e.target === helpMask) helpMask.classList.remove('show'); };
+
+  // ===== 固定30m交易计划 / 本地实仓记录：与辅助图表周期独立 =====
+  const tradeEl = id => document.getElementById(id);
+  if (window.StructureBoard) window.StructureBoard.mount(document.getElementById('structure-board'));
+  let tradingMode = 'confirmed';
+  try { if (localStorage.getItem('silver-plan-mode') === 'early') tradingMode = 'early'; } catch (_) {}
+  let tradingEpoch = 0, tradingTimer = null, lastTradePlan = null, latestPositions = null;
+  let tradingGeneration = -1, settingsDirty = false, tradingBusy = false;
+  const tradingRequests = new Map();
+  const tradeEvents = [];
+  const tradeStateMemory = new Map();
+  let tradeAudio = null;
+
+  function tradeMoney(value) {
+    return Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : '—';
+  }
+  function tradeTime(value) {
+    if (typeof value === 'string') return value.replace('T', ' ').slice(0, 19);
+    return Number.isFinite(value) && value > 0 ? new Date(value * 1000).toLocaleString('zh-CN',
+      { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
+  }
+  function tradeText(value) {
+    if (value == null) return '—';
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    return value.label || value.text || value.summary || '—';
+  }
+  function stopTrading() {
+    tradingEpoch++;
+    if (tradingTimer) clearInterval(tradingTimer);
+    tradingTimer = null;
+    tradingRequests.forEach(request => request.controller.abort());
+    tradingRequests.clear();
+  }
+  function clearTradePlan(message, state = 'waiting', structureContext = null) {
+    lastTradePlan = null;
+    if (window.StructureBoard) {
+      if (structureContext) window.StructureBoard.update(structureContext);
+      else window.StructureBoard.clear(message, currentSymbol);
+    }
+    tradeEl('trade-status').textContent = state === 'invalid' ? '计划不可用' : '等待核对';
+    tradeEl('trade-status').dataset.state = state;
+    tradeEl('trade-summary').textContent = message;
+    ['structure', 'wait', 'trigger', 'invalidation', 'target'].forEach(key => tradeEl('trade-' + key).textContent = '—');
+    ['structure-detail', 'entry', 'stop', 'target-basis', 'net-rr', 'risk-warning'].forEach(key => tradeEl('trade-' + key).textContent = '');
+    tradeEl('trade-risk-rows').textContent = '风险未核算';
+    tradeEl('trade-budget').textContent = '同一计划的试仓、加仓与重试合计；等待重新核算剩余风险额度。';
+    tradeEl('trade-risk-warning').classList.remove('critical');
+    tradeEl('trade-conditions').replaceChildren();
+    tradeEl('trade-times').textContent = '计算更新：— · 决策完成K线：—';
+  }
+  function resetTrading() {
+    stopTrading(); tradingGeneration = -1; latestPositions = null; settingsDirty = false; tradingBusy = false;
+    clearTradePlan('正在读取该品种30分钟计划…');
+    tradeEl('trade-error').textContent = ''; tradeEl('position-error').textContent = '';
+    tradeEl('position-list').textContent = '正在读取该品种记录…';
+    tradeEl('position-history').textContent = '等待记录'; tradeEl('position-count').textContent = '加载中';
+    tradeEl('trade-new-idea').disabled = true;
+    tradeEl('trade-budget').textContent = '同一计划的试仓、加仓与重试合计；正在核对本金和剩余风险额度。';
+    tradeEl('risk-fee').value = '';
+    tradeEl('position-form').reset();
+    tradeEl('position-mode').value = tradingMode;
+    document.querySelectorAll('.trade-submit').forEach(button => button.disabled = false);
+  }
+  function startTrading() {
+    resetTrading();
+    tradeEl('trade-context').textContent = currentSymbol + ' · 计划30m · 确认3m';
+    if (detailView.style.display === 'none') return;
+    updateTradeMode(); loadTradeSettings(); loadTradePlan(); loadTradePositions();
+    tradingTimer = setInterval(() => {
+      if (lastTradePlan && Date.now() - Number(lastTradePlan.updated) * 1000 > 20000) {
+        recordTradeState('error', '计算刷新中断，已清除旧计划', 'risk');
+        clearTradePlan('计算快照超过20秒未刷新，旧触发与风险结论已移除。', 'invalid');
+      }
+      loadTradePlan(); loadTradePositions();
+    }, 5000);
+  }
+  async function tradeRequest(key, url, body) {
+    const symbol = currentSymbol, epoch = tradingEpoch;
+    const previous = tradingRequests.get(key);
+    if (previous) previous.controller.abort();
+    const request = { controller: new AbortController() };
+    tradingRequests.set(key, request);
+    const timeout = setTimeout(() => request.controller.abort(), 12000);
+    try {
+      const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', cache: 'no-store',
+        signal: request.controller.signal,
+        ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
+      const data = await response.json();
+      if (epoch !== tradingEpoch || symbol !== currentSymbol || tradingRequests.get(key) !== request) return null;
+      if (data.symbol !== symbol) throw new Error('响应品种不匹配，已忽略该结果。');
+      if (!response.ok || data.ok === false) throw new Error(data.error || data.message || '操作失败');
+      return data;
+    } catch (error) {
+      if (epoch !== tradingEpoch || symbol !== currentSymbol || tradingRequests.get(key) !== request) return null;
+      if (error.name === 'AbortError') throw new Error(body === undefined ? '请求超时，等待下次刷新。' : '操作结果尚未确认，请先刷新记录，避免重复登记。');
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (tradingRequests.get(key) === request) tradingRequests.delete(key);
+    }
+  }
+  function updateTradeMode() {
+    document.querySelectorAll('.trade-mode button').forEach(button => {
+      const active = button.dataset.mode === tradingMode;
+      button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
+    });
+    tradeEl('trade-mode-note').textContent = tradingMode === 'early'
+      ? '提前试仓：尚未完成标准确认。1手与2手分别核算，试仓、加仓和重试共用同一计划风险上限。'
+      : '等待30分钟结构与3分钟确认条件。查看其他图表周期不改变本计划；规则证据不是胜率。';
+  }
+  document.querySelectorAll('.trade-mode button').forEach(button => button.onclick = () => {
+    if (button.dataset.mode === tradingMode) return;
+    tradingMode = button.dataset.mode;
+    try { localStorage.setItem('silver-plan-mode', tradingMode); } catch (_) {}
+    startTrading();
+  });
+  async function loadTradePlan() {
+    if (detailView.style.display === 'none' || tradingRequests.has('plan')) return;
+    try {
+      const data = await tradeRequest('plan', '/api/trade_plan?symbol=' + encodeURIComponent(currentSymbol) + '&mode=' + tradingMode);
+      if (!data) return;
+      if (Number(data.period) !== 1800 || data.plan && data.plan.mode !== tradingMode) throw new Error('计划周期或模式不匹配。');
+      if (data.status !== 'ok' || !data.plan) {
+        if (data.status === 'error') recordTradeState('error', data.message || '计划数据中断', 'risk');
+        clearTradePlan(data.message || data.error || '正在加载30分钟结构与3分钟确认K线。', data.status === 'error' ? 'invalid' : 'waiting', data.structure_context);
+        return;
+      }
+      const updated = Number(data.updated), generation = Number(data.generation);
+      if (!Number.isFinite(updated) || updated <= 0 || Date.now() - updated * 1000 > 20000 || updated * 1000 - Date.now() > 60000) {
+        throw new Error('计划快照已失效，等待重新计算。');
+      }
+      if (Number.isFinite(generation) && generation < tradingGeneration) return;
+      if (Number.isFinite(generation)) tradingGeneration = generation;
+      lastTradePlan = data; renderTradePlan(data);
+    } catch (error) {
+      recordTradeState('error', error.message, 'risk'); clearTradePlan(error.message, 'invalid');
+    }
+  }
+  function renderTradePlan(data) {
+    const plan = data.plan, risk = data.risk || {};
+    if (window.StructureBoard) {
+      if (data.structure_context) window.StructureBoard.update(data.structure_context);
+      else window.StructureBoard.clear('等待30分钟结构快照', currentSymbol);
+    }
+    const feeReady = risk.fee_configured === true;
+    const state = plan.status;
+    tradeEl('trade-status').dataset.state = state;
+    tradeEl('trade-status').textContent = (plan.label || ({ ready: '条件满足 · 待人工核对', candidate: '候选 · 尚未确认', waiting: '等待确认', invalid: '计划失效',
+        insufficient: '数据不足', risk_blocked: '风险未通过' }[state]) || '等待核对');
+    tradeEl('trade-summary').textContent = (tradingMode === 'early' ? '未确认试仓 · ' : '') + (plan.summary || '以触发、失效条件和风险核算为准。');
+    tradeEl('trade-structure').textContent = tradeText(plan.structure && plan.structure.label || plan.setup);
+    const structureSummary = tradeText(plan.structure && plan.structure.summary);
+    const structureEnd = plan.reference && plan.reference.end;
+    tradeEl('trade-structure-detail').textContent = structureSummary +
+      (Number.isFinite(outlookTimestamp(structureEnd)) ? ' · 结构参考截至 ' + outlookTime(structureEnd) : '');
+    tradeEl('trade-wait').textContent = tradeText(plan.wait_for || (plan.status === 'ready' ? '条件满足后仍需核对实际成交价与风险。' : '等待条件确认'));
+    tradeEl('trade-trigger').textContent = tradeText(plan.trigger);
+    tradeEl('trade-entry').textContent = '计划参考入场 ' + outlookPrice(plan.entry) + ' · ' +
+      ({ long: '做多方向', short: '做空方向' }[plan.direction] || '方向未确定');
+    tradeEl('trade-invalidation').textContent = tradeText(plan.invalidation);
+    tradeEl('trade-stop').textContent = '计划止损 ' + outlookPrice(plan.stop) + '（技术参考，不代表已挂单）';
+    tradeEl('trade-target').textContent = outlookPrice(plan.target);
+    tradeEl('trade-target-basis').textContent = tradeText(plan.target_basis);
+    tradeEl('trade-risk-rows').replaceChildren();
+    [1, 2].forEach(lots => {
+      const row = (risk.rows || []).find(item => Number(item.lots) === lots) || {};
+      const line = document.createElement('div'); line.className = 'trade-risk-row ' + (feeReady && row.allowed ? 'allowed' : 'blocked');
+      const size = document.createElement('span'), amount = document.createElement('span');
+      size.textContent = lots + '手';
+      amount.textContent = Number.isFinite(row.loss) ? (feeReady ? '' : '下限 ') + tradeMoney(row.loss) + '元 · ' +
+        tradeMoney(row.percent) + '% · ' + (!feeReady ? '待核算' : row.allowed ? '风险额度内' : '超限/不可新增') : '无法核算';
+      line.append(size, amount); tradeEl('trade-risk-rows').appendChild(line);
+      if (Number.isFinite(row.total_loss)) {
+        const total = document.createElement('div'); total.className = 'minor';
+        total.textContent = '含本计划累计：' + tradeMoney(row.total_loss) + '元'; tradeEl('trade-risk-rows').appendChild(total);
+      }
+    });
+    tradeEl('trade-net-rr').textContent = feeReady ? '扣费用后参考盈亏比 ' + (Number.isFinite(risk.net_rr) ? risk.net_rr.toFixed(2) : '待核算') : '扣费用后参考盈亏比：待核算（手续费未填）';
+    const budget = Number.isFinite(risk.max_loss) ? risk.max_loss : risk.budget;
+    tradeEl('trade-budget').textContent = '本金 ' + tradeMoney(risk.equity) + '元 · 本计划上限 ' + tradeMoney(budget) + '元' +
+      (risk.equity > 0 && Number.isFinite(budget) ? '（' + tradeMoney(budget / risk.equity * 100) + '%）' : '') +
+      ' · 已有风险 ' + tradeMoney(risk.open_risk) + '元 · 已录净亏损 ' + tradeMoney(risk.recorded_realized_loss) +
+      '元' + (Number(risk.unrecorded_fee_reserve) > 0 ? ' · 漏录费用风险预留 ' + tradeMoney(risk.unrecorded_fee_reserve) + '元' : '') + ' · 剩余额度 ' + tradeMoney(risk.remaining_budget) + '元 · 全部登记持仓风险 ' + tradeMoney(risk.portfolio_risk) + '元。';
+    tradeEl('trade-risk-warning').textContent = [!feeReady ? '未填写该品种真实往返手续费：当前金额仅为估算下限，不能视为风险通过。' : '',
+      risk.reason || '', Number(risk.unrecorded_fee_reserve) > 0 ? risk.fee_reserve_note || '漏录费用已预留风险额度，请补全真实费用后核对。' : '', '同一计划的试仓、加仓与重试合计；止损成交价和实际亏损可能受跳空、滑点影响。'].filter(Boolean).join(' ');
+    tradeEl('trade-risk-warning').classList.toggle('critical', Number.isFinite(budget) && Number(risk.open_risk || 0) + Number(risk.realized_loss || 0) > budget);
+    tradeEl('trade-conditions').replaceChildren();
+    (plan.conditions || []).forEach(condition => {
+      const item = document.createElement('span'); item.className = condition.met ? 'met' : '';
+      item.textContent = (condition.met ? '✓ ' : '○ ') + condition.label; tradeEl('trade-conditions').appendChild(item);
+    });
+    tradeEl('trade-times').textContent = '计算更新：' + tradeTime(data.updated) + ' · 决策完成K线：' + tradeTime(plan.decision_bar_time);
+    hydrateTradeSettings(data.settings || {}, risk);
+    recordTradeState(state, tradeEl('trade-status').textContent + ' · ' + tradeText(plan.wait_for || plan.summary),
+      ['invalid', 'risk_blocked'].includes(state) ? 'risk' : 'info');
+  }
+  function hydrateTradeSettings(settings, risk = {}) {
+    if (settingsDirty) return;
+    if (Number.isFinite(settings.equity)) tradeEl('risk-equity').value = settings.equity;
+    if (Number.isFinite(settings.max_loss)) tradeEl('risk-budget').value = settings.max_loss;
+    if (Number.isFinite(settings.slippage_ticks)) tradeEl('risk-slippage').value = settings.slippage_ticks;
+    const key = currentSymbol.replace(/[0-9]+$/, ''), product = key.split('.').pop();
+    const fees = settings.fees || {};
+    const value = risk.fee_configured === true ? risk.fee_per_lot : Number.isFinite(settings.fee_per_lot) ? settings.fee_per_lot :
+      [fees[currentSymbol], fees[key], fees[product]].find(Number.isFinite);
+    if (Number.isFinite(value)) tradeEl('risk-fee').value = value;
+  }
+  async function loadTradeSettings() {
+    try { const data = await tradeRequest('settings', '/api/trading/settings?symbol=' + encodeURIComponent(currentSymbol));
+      if (data) hydrateTradeSettings(data.settings || {});
+    } catch (error) { tradeEl('trade-error').textContent = '设置读取失败：' + error.message; }
+  }
+  tradeEl('trade-settings-form').oninput = () => { settingsDirty = true; };
+  async function tradingMutation(url, body, onSuccess) {
+    if (tradingBusy) return;
+    const epoch = tradingEpoch; tradingBusy = true;
+    document.querySelectorAll('.trade-submit').forEach(button => button.disabled = true);
+    tradeEl('trade-error').textContent = ''; tradeEl('position-error').textContent = '';
+    try {
+      const data = await tradeRequest('mutation', url, body);
+      if (!data) return;
+      const warning = data.warning || data.warn || (data.warnings || []).join(' ');
+      if (warning) { tradeEl('position-error').textContent = String(warning); addTradeEvent('risk', String(warning), false); }
+      if (onSuccess) onSuccess(data);
+      loadTradePlan(); loadTradePositions();
+    } catch (error) { tradeEl('trade-error').textContent = error.message; tradeEl('position-error').textContent = error.message; }
+    finally { if (epoch === tradingEpoch) { tradingBusy = false;
+      document.querySelectorAll('.trade-submit').forEach(button => button.disabled = false); } }
+  }
+  tradeEl('trade-settings-form').onsubmit = event => {
+    event.preventDefault(); if (!event.target.reportValidity()) return;
+    tradingMutation('/api/trading/settings', { symbol: currentSymbol, equity: Number(tradeEl('risk-equity').value),
+      max_loss: Number(tradeEl('risk-budget').value), slippage_ticks: Number(tradeEl('risk-slippage').value),
+      fee_per_lot: Number(tradeEl('risk-fee').value) }, data => {
+      settingsDirty = false; hydrateTradeSettings(data.settings || {}); addTradeEvent('info', '已保存风险设置，重新核对计划。', false);
+    });
+  };
+  async function loadTradePositions() {
+    if (detailView.style.display === 'none' || tradingRequests.has('positions')) return;
+    try { const data = await tradeRequest('positions', '/api/positions?symbol=' + encodeURIComponent(currentSymbol));
+      if (data) { latestPositions = data; renderTradePositions(data); }
+    } catch (error) { tradeEl('position-error').textContent = '本地记录读取失败：' + error.message; tradeEl('trade-new-idea').disabled = true; }
+  }
+  function renderTradePositions(data) {
+    if (data.load_error) {
+      tradeEl('position-error').textContent = data.load_error;
+      tradeEl('position-count').textContent = '记录读取异常'; tradeEl('trade-new-idea').disabled = true; return;
+    }
+    const positions = (data.positions || []).filter(p => !['closed', 'cancelled'].includes(p.status) && Number(p.lots) > 0);
+    tradeEl('position-count').textContent = positions.length ? positions.length + '笔 / ' + positions.reduce((n, p) => n + Number(p.lots), 0) + '手' : '当前空仓';
+    tradeEl('trade-new-idea').disabled = positions.length > 0 || tradingBusy;
+    const list = tradeEl('position-list');
+    if (!list.querySelector('details[open]') && !list.contains(document.activeElement)) {
+      list.replaceChildren();
+      if (!positions.length) { list.className = 'trade-empty'; list.textContent = '暂无已登记持仓。实际成交后再记录，计划候选不等于持仓。'; }
+      else list.className = '';
+      positions.forEach(position => {
+        const card = document.createElement('article'); card.className = 'trade-position';
+        const head = document.createElement('div'); head.className = 'trade-position-head';
+        head.textContent = (position.direction === 'long' ? '做多' : '做空') + ' ' + position.lots + '手 · 成交 ' + outlookPrice(position.entry) +
+          ' · ' + (position.mode === 'early' ? '提前试仓（未确认）' : '确认计划');
+        const stats = document.createElement('div'); stats.className = 'trade-position-stats';
+        stats.textContent = '止损 ' + outlookPrice(position.stop) + ' · 目标 ' + outlookPrice(position.target) +
+          ' · 初始风险 ' + tradeMoney(position.initial_risk) + '元 · 当前风险 ' + tradeMoney(position.remaining_risk) +
+          '元 · 浮动估算 ' + (lastTradePlan ? tradeMoney(position.unrealized_pnl) + '元' : '行情未核验') + ' · 登记 ' + tradeTime(position.opened_at);
+        card.append(head, stats);
+        if (position.management) {
+          const management = document.createElement('div'); management.className = 'trade-warning' + (position.stop_breached ? ' critical' : '');
+          management.textContent = position.management; card.appendChild(management);
+        }
+        if (position.warning || position.risk_exceeded || position.fees_recorded === false || position.entry_fee == null) {
+          const warning = document.createElement('div'); warning.className = 'trade-warning';
+          warning.textContent = position.warning || (position.risk_exceeded ? '已登记的真实持仓风险超过上限，请核对现有风险。' : '实际开仓费用未录，盈亏记录可能未含完整费用。'); card.appendChild(warning);
+        }
+        const edit = document.createElement('details'), label = document.createElement('summary'); label.textContent = '更新止损 / 记录实际平仓'; edit.appendChild(label);
+        edit.innerHTML += '<form class="trade-form stop-form"><div class="trade-fields"><label>新的计划止损价<input name="stop" type="number" min="0.0001" step="any" required></label></div>' +
+          '<div class="trade-actions"><button class="trade-button trade-submit" type="submit">更新本地止损记录</button><span class="hint">不会修改券商挂单。</span></div></form>' +
+          '<form class="trade-form close-form"><div class="trade-fields"><label>本次实际平仓手数<input name="lots" type="number" min="1" max="' + Number(position.lots) + '" step="1" value="1" required></label>' +
+          '<label>实际平仓成交价<input name="price" type="number" min="0.0001" step="any" required></label>' +
+          '<label>本次实际平仓手续费（元）<input name="fee" type="number" min="0" step="0.01" placeholder="实际费用，可明确填0" required></label></div>' +
+          '<div class="trade-actions"><button class="trade-button danger trade-submit" type="submit">记录已实际平仓</button><span class="hint">只更新记录，不发出平仓指令。</span></div></form>';
+        const stopForm = edit.querySelector('.stop-form'), closeForm = edit.querySelector('.close-form');
+        stopForm.elements.stop.value = Number.isFinite(position.stop) ? position.stop : '';
+        stopForm.onsubmit = event => { event.preventDefault(); if (!stopForm.reportValidity()) return;
+          tradingMutation('/api/positions/' + encodeURIComponent(position.id), { symbol: currentSymbol, action: 'update_stop', stop: Number(stopForm.elements.stop.value) }, () => { edit.open = false; }); };
+        closeForm.onsubmit = event => { event.preventDefault(); if (!closeForm.reportValidity()) return;
+          tradingMutation('/api/positions/' + encodeURIComponent(position.id), { symbol: currentSymbol, action: 'close', lots: Number(closeForm.elements.lots.value),
+            price: Number(closeForm.elements.price.value), fee: Number(closeForm.elements.fee.value) }, () => { edit.open = false; }); };
+        edit.ontoggle = () => { if (!edit.open && latestPositions && !tradingBusy) renderTradePositions(latestPositions); };
+        card.appendChild(edit); list.appendChild(card);
+      });
+    }
+    const history = data.history || [], target = tradeEl('position-history'); target.replaceChildren();
+    const stats = data.stats || {};
+    const summary = document.createElement('p'); summary.className = 'trade-position-stats';
+    summary.textContent = '已实现结果 ' + tradeMoney(stats.realized_pnl) + '元 · 完整平仓 ' + (stats.closed_trades ?? '—') + '笔。' +
+      (stats.note || '仅统计手工登记成交，不是策略胜率；未录费用会使结果不完整。') +
+      (Number(stats.unrecorded_fee_reserve) > 0 ? ' 漏录费用风险预留 ' + tradeMoney(stats.unrecorded_fee_reserve) + '元。' : ''); target.appendChild(summary);
+    if (!history.length) target.appendChild(document.createTextNode('暂无成交或止损调整记录。'));
+    else {
+      const table = document.createElement('table'), tr = document.createElement('tr');
+      ['时间', '记录', '手数', '价格', '本次已实现'].forEach(text => { const th = document.createElement('th'); th.textContent = text; tr.appendChild(th); }); table.appendChild(tr);
+      history.slice(-10).reverse().forEach(item => {
+        const row = document.createElement('tr');
+        [tradeTime(item.closed_at || item.timestamp || item.at), ({ open: '成交登记', close: '平仓登记', update_stop: '止损记录更新' }[item.action] || '成交记录'), String(item.lots || item.closed_lots || '—'),
+          outlookPrice(item.price ?? item.close_price ?? item.exit ?? item.entry ?? item.stop), tradeMoney(item.realized_pnl ?? item.net_pnl ?? item.pnl)].forEach(text => {
+          const td = document.createElement('td'); td.textContent = text; row.appendChild(td); }); table.appendChild(row);
+      }); target.appendChild(table);
+    }
+  }
+  tradeEl('position-form').onsubmit = event => {
+    event.preventDefault(); if (!event.target.reportValidity()) return;
+    const body = { symbol: currentSymbol, mode: tradeEl('position-mode').value, direction: tradeEl('position-direction').value,
+      lots: Number(tradeEl('position-lots').value), entry: Number(tradeEl('position-entry').value), stop: Number(tradeEl('position-stop').value),
+      target: tradeEl('position-target').value.trim() ? Number(tradeEl('position-target').value) : null };
+    if (tradeEl('position-entry-fee').value.trim()) body.entry_fee = Number(tradeEl('position-entry-fee').value);
+    tradingMutation('/api/positions', body, () => { tradeEl('position-form').reset(); tradeEl('position-register').open = false;
+      addTradeEvent('info', '已记录实际成交持仓；未发送交易指令。', false); });
+  };
+  tradeEl('trade-new-idea').onclick = () => {
+    if (!latestPositions || (latestPositions.positions || []).some(p => !['closed', 'cancelled'].includes(p.status) && Number(p.lots) > 0)) return;
+    tradingMutation('/api/trading/idea', { symbol: currentSymbol }, () => {
+      addTradeEvent('info', '已开始新计划，历史保留；本计划风险累计已重置。', false); });
+  };
+  function checkTradePlan() {
+    tradeEl('trade-workspace').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    tradeEl('trade-error').textContent = '';
+    if (!tradingTimer) startTrading(); else loadTradePlan();
+  }
+  tradeEl('trade-check').onclick = checkTradePlan;
+  entryBtn.onclick = checkTradePlan;  // 旧按钮只定位并核对新计划，不再使用旧仓位百分比弹窗。
+
+  function addTradeEvent(level, message, audible) {
+    tradeEvents.unshift({ time: Date.now() / 1000, symbol: currentSymbol, level, message });
+    tradeEvents.splice(8); tradeEl('trade-alert-count').textContent = tradeEvents.length + '条';
+    const list = tradeEl('trade-alert-list'); list.replaceChildren();
+    tradeEvents.forEach(event => { const line = document.createElement('li'), time = document.createElement('time');
+      line.dataset.level = event.level; time.textContent = tradeTime(event.time).slice(-8);
+      line.append(time, document.createTextNode(event.symbol + ' · ' + event.message)); list.appendChild(line); });
+    if (audible && soundOn && level === 'risk') playTradeSound(false);
+  }
+  function recordTradeState(state, message, level) {
+    const key = currentSymbol + ':' + tradingMode, previous = tradeStateMemory.get(key);
+    tradeStateMemory.set(key, state);
+    if (previous === undefined || previous === state) return;
+    addTradeEvent(level, message, true);
+  }
+  async function unlockTradeSound() {
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) throw new Error('当前浏览器不支持声音。');
+    if (!tradeAudio) tradeAudio = new Audio();
+    if (tradeAudio.state === 'suspended') await tradeAudio.resume();
+    if (tradeAudio.state !== 'running') throw new Error('声音尚未就绪，请再次点击测试。');
+  }
+  function playTradeSound(test) {
+    if (!tradeAudio || tradeAudio.state !== 'running') return;
+    const start = tradeAudio.currentTime, count = test ? 1 : 2;
+    for (let i = 0; i < count; i++) {
+      const oscillator = tradeAudio.createOscillator(), gain = tradeAudio.createGain(), at = start + i * .3;
+      oscillator.frequency.value = test ? 520 : 330; oscillator.connect(gain); gain.connect(tradeAudio.destination);
+      gain.gain.setValueAtTime(.001, at); gain.gain.exponentialRampToValueAtTime(.12, at + .02);
+      gain.gain.exponentialRampToValueAtTime(.001, at + .18); oscillator.start(at); oscillator.stop(at + .2);
+    }
+  }
+  async function toggleTradeSound() {
+    try { if (!soundOn) await unlockTradeSound(); soundOn = !soundOn;
+      tradeEl('trade-sound').textContent = soundOn ? '关闭风险声音' : '开启风险声音';
+      muteBtn.textContent = soundOn ? '风险声音：开' : '风险声音：关';
+      tradeEl('trade-sound-hint').textContent = soundOn ? '风险声音已就绪；条件确认仍只记录文字。' : '条件确认只记录文字；风险声音已关闭。';
+    } catch (error) { tradeEl('trade-sound-hint').textContent = error.message; }
+  }
+  tradeEl('trade-sound').onclick = toggleTradeSound; muteBtn.onclick = toggleTradeSound;
+  tradeEl('trade-test-sound').onclick = async () => { try { await unlockTradeSound(); playTradeSound(true);
+      tradeEl('trade-sound-hint').textContent = '测试音已播放。自动风险声音当前' + (soundOn ? '开启' : '关闭') + '。';
+    } catch (error) { tradeEl('trade-sound-hint').textContent = error.message; } };
+  updateTradeMode();
 
   // ===== 启动进度遮罩 =====
   const bootMask = document.getElementById('boot-mask');

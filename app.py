@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import webbrowser
+from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 
 import config
@@ -23,6 +24,14 @@ import double_bottom
 import entry_logic
 import fundamentals
 import user_settings
+import outlook
+import outlook_store
+import trading
+import trade_plan
+
+_trading_store = trading.TradingStore(os.path.join(user_settings.app_dir(), "state", "trading_state.json"))
+_structure_store = outlook_store.OutlookStore(os.path.join(user_settings.app_dir(), "state", "outlook_state.json"))
+_mock_structure_store = outlook_store.OutlookStore()
 
 
 def _resource_dir():
@@ -32,7 +41,8 @@ def _resource_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-app = Flask(__name__, template_folder=os.path.join(_resource_dir(), "templates"))
+app = Flask(__name__, template_folder=os.path.join(_resource_dir(), "templates"),
+            static_folder=os.path.join(_resource_dir(), "static"))
 
 # 返回给前端画图的最大K线根数
 CHART_BARS = 60
@@ -46,15 +56,15 @@ def _attach_mas(full_bars):
     把这些值附到每根K线上，再返回最后 CHART_BARS 根。这样可见区间内
     三条均线/VWAP 都是完整的，不会因为切片后数据不足导致画不出。
 
-    附加的领先型指标（走在 MA 之前）：
-    - vwap : 成交量加权均价，日内资金真实成本线，比 MA 更贴合多空分界。
+    附加指标：
+    - vwap : 观察窗口内的典型价成交量加权均价；未按交易日重置，不等同真实持仓成本。
     - rsi  : 14周期相对强弱，用于背离预警（价格新高但 RSI 未新高＝顶背离）。
     - swing: "H"=摆动高点 / "L"=摆动低点，用于画高低点结构、识别递减高点。
     """
     closes = [b["close"] for b in full_bars]
     highs = [b["high"] for b in full_bars]
     lows = [b["low"] for b in full_bars]
-    vols = [b.get("volume", 0) or 0 for b in full_bars]
+    vols = [b.get("volume", 0) for b in full_bars]
 
     # ---- MA ----
     for i, b in enumerate(full_bars):
@@ -64,45 +74,22 @@ def _attach_mas(full_bars):
             else:
                 b[f"ma{p}"] = None
 
-    # ---- VWAP（滚动累计：sum(典型价×量)/sum(量)）----
+    # ---- 观察窗口累计 VWAP：零量不参与权重；首笔有效成交量前返回 None ----
     cum_pv = 0.0
     cum_v = 0.0
     for i, b in enumerate(full_bars):
         typical = (highs[i] + lows[i] + closes[i]) / 3.0
-        v = vols[i] if vols[i] > 0 else 1  # 量为0时给微量，避免 VWAP 断裂
+        v = vols[i]
+        v = v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 else 0
         cum_pv += typical * v
         cum_v += v
         b["vwap"] = round(cum_pv / cum_v, 1) if cum_v else None
 
     # ---- RSI(14)：Wilder 平滑 ----
-    period = 14
-    if len(closes) > period:
-        gains, losses = [], []
-        for i in range(1, len(closes)):
-            ch = closes[i] - closes[i - 1]
-            gains.append(max(ch, 0.0))
-            losses.append(max(-ch, 0.0))
-        avg_gain = sum(gains[:period]) / period
-        avg_loss = sum(losses[:period]) / period
-        rsis = [None] * (period + 1)  # 前 period+1 根无值（含第0根）
-        for i in range(period, len(gains)):
-            if i > period:
-                avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-                avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-            if avg_loss == 0:
-                rsi = 100.0
-            else:
-                rs = avg_gain / avg_loss
-                rsi = 100.0 - 100.0 / (1.0 + rs)
-            rsis.append(round(rsi, 1))
-        # 对齐长度到 bars
-        while len(rsis) < len(full_bars):
-            rsis.append(None)
-        for i, b in enumerate(full_bars):
-            b["rsi"] = rsis[i] if i < len(rsis) else None
-    else:
-        for b in full_bars:
-            b["rsi"] = None
+    # 复用引擎的对齐实现：第14号K线已有首个RSI，后续涨跌逐根进入平滑。
+    rsis = double_bottom._rsi_list(closes, period=14)
+    for b, rsi in zip(full_bars, rsis):
+        b["rsi"] = round(rsi, 1) if rsi is not None else None
 
     # ---- 摆动高低点（左右各 win 根做分形）----
     win = 2
@@ -577,10 +564,14 @@ def _demo_entry_check(kind):
 _state_lock = threading.Lock()
 _state = {
     "connected": False,
+    "connection_status": "disconnected",
+    "feed_checked_at": 0,
+    "feed_received_at": 0,
     "mock": config.MOCK_MODE,
     "symbol": config.SYMBOL,
     "combo": config.DEFAULT_COMBO,  # 当前共振周期组合 key
     "result": None,       # resonance.evaluate 的输出
+    "generation": 0,
     "updated": 0,         # 最后更新时间戳
     "error": None,
     # 启动阶段：need_config / booting / connecting / loading / ready / error
@@ -596,6 +587,9 @@ def _set_boot(phase, pct, msg):
 
 def _set_state(**kwargs):
     with _state_lock:
+        if kwargs.get("connected") is False:
+            kwargs.setdefault("result", None)
+            kwargs.setdefault("connection_status", "disconnected")
         _state.update(kwargs)
         _state["updated"] = time.time()
 
@@ -603,6 +597,15 @@ def _set_state(**kwargs):
 def get_state():
     with _state_lock:
         return dict(_state)
+
+
+def _publish_focus_result(sym, combo, result):
+    """身份与结果一起发布；切换中不得把旧品种价格挂到新标题下。"""
+    with _state_lock:
+        if sym != config.SYMBOL or combo["key"] != _state.get("combo"):
+            return
+        tagged = dict(result, symbol=sym, combo=combo["key"], generation=_state["generation"])
+        _state.update(result=tagged, updated=time.time())
 
 
 # ---------------- 周期组合（面板直接切换，无需重启） ----------------
@@ -630,7 +633,8 @@ def _consume_combo_request():
             _combo_key = _combo_request
             combo = config.get_combo(_combo_key)
             _combo_request = None
-            _set_state(combo=combo["key"])
+            state = get_state()
+            _set_state(combo=combo["key"], result=None, generation=state.get("generation", 0) + 1)
             return combo
         _combo_request = None
         return None
@@ -657,7 +661,8 @@ def _consume_symbol_request():
         return None
     config.SYMBOL = req
     symbols.apply_symbol_params(config)   # 新品种 tick 参数（预设查不到保留默认）
-    _set_state(symbol=req)
+    state = get_state()
+    _set_state(symbol=req, result=None, generation=state.get("generation", 0) + 1)
     with _extra_lock:
         _extra_data.clear()               # 多周期缓存属于旧品种，清掉等前端重拉
     return req
@@ -669,6 +674,251 @@ _overview = {}   # 品种代码 -> 快照条目（结构即 signals_state.json �
 _tb_throttle = {}  # 品种 -> {"n": 已跑轮数, "summary": 轨道B摘要缓存}（节流用）
 _track_b_bars = {}  # 品种 -> 最近一份 1h 原始K线（三批次阶段识别用）
 _track_b_regime = {}  # 品种 -> 市场状态（detect_regime 输出，随轨道B节流重算）
+
+# 条件推演和30分计划共用同一代结构；辅助共振与评分仍独立。
+OUTLOOK_PERIODS = (180, 900, 1800, 3600)
+_outlook_lock = threading.Lock()
+_outlook_data = {}  # (symbol, period) -> 原始K线快照，按品种隔离防止切换串图
+
+
+def _bar_timestamp(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone(timedelta(hours=8))).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _snapshot_times(previous, unchanged, bars, period, now):
+    """检查缓存不代表新成交；首次载入的旧K线也不能获得交易时效。"""
+    market_updated = now
+    last_start = _bar_timestamp(bars[-1].get("dt"))
+    if last_start is not None:
+        # 日线的起点不是收盘时刻；没有交易日历，不生成日线名义收盘时间。
+        market_updated = (last_start if last_start > now else
+                          min(now, last_start + period if period < 86400 else last_start))
+    if previous and unchanged:
+        return {"updated": now, "changed_at": previous.get("changed_at", previous.get("market_updated", 0)),
+                "market_updated": previous.get("market_updated", 0)}
+    return {"updated": now, "changed_at": now, "market_updated": market_updated}
+
+
+def _chart_freshness(data, period, state=None, now=None):
+    """展示新鲜度与交易时效分开；不从无成交推断休市或网络中断。"""
+    state = get_state() if state is None else state
+    now = time.time() if now is None else now
+    data = data or {}
+    bars = data.get("full") or data.get("bars") or []
+    checked = data.get("updated", 0)
+    market = data.get("market_updated", 0)
+    connected = bool(state.get("connected"))
+    checked_recent = bool(checked and 0 <= now - checked <= 20)
+    realtime = bool(connected and bars and checked_recent and market and 0 <= now - market <= 20)
+    if not connected:
+        status, label = "disconnected", "连接中断，等待恢复"
+    elif not bars:
+        status, label = "loading", "正在加载最新可用K线"
+    elif not checked_recent:
+        status, label = "stale", "缓存刷新中断，等待重取"
+    elif realtime:
+        status, label = "receiving", "正在接收行情更新"
+    else:
+        status, label = "latest_available", "最新可用K线，暂未见新变动"
+    last_time = bars[-1].get("dt") if bars else None
+    start = _bar_timestamp(last_time)
+    last_state = "unknown"
+    if start is not None and period < 86400 and now >= start:
+        last_state = "forming" if now < start + period else "awaiting_next"
+    return {"status": status, "label": label, "checked_at": checked,
+            "changed_at": data.get("changed_at", 0), "market_updated": market,
+            "feed_checked_at": state.get("feed_checked_at", 0),
+            "feed_received_at": state.get("feed_received_at", 0),
+            "connection_status": state.get("connection_status", "unknown" if connected else "disconnected"),
+            "last_bar_time": last_time, "last_bar_state": last_state,
+            "last_completed_time": bars[-2].get("dt") if len(bars) > 1 else None,
+            "live_bar_included": bool(bars), "session": "unknown", "realtime": realtime}
+
+
+def _cache_outlook_bars(sym, period, bars):
+    if period not in OUTLOOK_PERIODS or not bars:
+        return
+    fields = ("open", "high", "low", "close", "volume", "oi", "dt")
+    view = [{k: b[k] for k in fields if k in b} for b in bars[-120:]]
+    now = time.time()
+    if config.MOCK_MODE and all(not b.get("dt") for b in view):
+        # 模拟行情没有交易所时间，仅给它独立、明确的模拟时间轴。
+        # 随机历史改写会显示重建原因，且不写入真实结构档案。
+        last_start = int(now // period) * period
+        for i, b in enumerate(view):
+            stamp = last_start - (len(view) - 1 - i) * period
+            b["dt"] = datetime.fromtimestamp(stamp, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    with _outlook_lock:
+        previous = _outlook_data.get((sym, period))
+        clocks = _snapshot_times(previous, previous and previous["bars"] == view, view, period, now)
+        _outlook_data[(sym, period)] = {"bars": view, **clocks}
+
+
+def _cache_chart_bars(sym, period, bars):
+    """替换独立快照，保留末根；完成棒裁切仅由分析模块处理。"""
+    if not bars or sym != config.SYMBOL:
+        return
+    full = [dict(bar) for bar in bars]
+    chart = _attach_mas([dict(bar) for bar in full])
+    with _extra_lock:
+        previous = _extra_data.get(period)
+        if previous and previous.get("symbol") != sym:
+            previous = None
+        clocks = _snapshot_times(previous, previous and previous.get("full") == full,
+                                 full, period, time.time())
+        _extra_data[period] = {"symbol": sym, "bars": chart, "full": full, **clocks}
+    _cache_outlook_bars(sym, period, full)
+
+
+def _requested_chart_periods():
+    with _extra_lock:
+        # 主战场独立于辅助共振组合，首次加载尚未完成也持续订阅。
+        return sorted(_extra_requests | {180, 1800})
+
+
+def _refresh_focus_charts(sym, bar_getter):
+    for period in _requested_chart_periods():
+        try:
+            _cache_chart_bars(sym, period, bar_getter(sym, period))
+        except Exception:  # 单周期失败保留旧快照，检查时间不续期，API显式显示停更。
+            continue
+
+
+def _tracked_outlook(sym, bars, period=1800):
+    """Called under _outlook_lock to serialize cached snapshots and advancement."""
+    preset = symbols.find(sym)
+    store = _mock_structure_store if config.MOCK_MODE else _structure_store
+    return store.analyze(bars[-120:], symbol=sym,
+                         tick=preset["tick"] if preset else config.PRICE_TICK, period=period)
+
+
+def _outlook_summary(sym, bars, period=1800):
+    with _outlook_lock:
+        data = _outlook_data.get((sym, period))
+        analysis = _tracked_outlook(sym, data["bars"] if data else bars, period)
+    state = analysis.get("state") or {}
+    market = analysis.get("market_structure") or {}
+    market_phase = market.get("phase") or {}
+    return {"state": state.get("label", "数据收集中"),
+            "summary": state.get("summary", analysis.get("message", "等待足够的已完成K线")),
+            "market_phase": market_phase.get("label"), "market_summary": market_phase.get("summary"),
+            "period": period, "structure_id": (analysis.get("structure_tracking", {}).get("active") or {}).get("id"),
+            "preparation": {"reference": market.get("reference"), "observation_zone": market.get("observation_zone"),
+                            "key_levels": {key: (market.get("key_levels") or {}).get(key) for key in
+                                           ("current_support", "current_resistance")},
+                            "basis_time": market.get("decision_bar_time")}
+            if market.get("status") == "ok" else None}
+
+
+def _registered_prices():
+    if not get_state().get("connected"):
+        return {}
+    with _outlook_lock:
+        return {sym: data["bars"][-1]["close"] for (sym, period), data in _outlook_data.items()
+                if period == 180 and data.get("bars") and _chart_freshness(data, period)["realtime"]}
+
+
+def _structure_presentation(sym, primary, small, analysis, plan=None, risk=None):
+    """30m展示快照；仅传已有结构证据，不替代点位编号或修改交易准入。"""
+    if not primary or not isinstance(analysis, dict) or analysis.get("status") != "ok":
+        return None
+    tracking = analysis.get("structure_tracking") or {}
+    active = tracking.get("active") or {}
+    state = analysis.get("state") or {}
+    market_updated = min(primary.get("market_updated", 0), (small or {}).get("market_updated", 0))
+    freshness = _chart_freshness(primary, 1800)
+    realtime = bool(freshness["realtime"] and _chart_freshness(small, 180)["realtime"])
+    completed = [{key: bar.get(key) for key in ("dt", "open", "high", "low", "close")}
+                 for bar in primary.get("bars", [])[-7:-1]]
+    return {"symbol": sym, "period": 1800, "structure_id": active.get("id"),
+            "phase": active.get("phase") or state.get("key"), "state_label": state.get("label"),
+            "summary": state.get("summary"), "range": analysis.get("range") or {},
+            "buffer": analysis.get("buffer"), "atr": analysis.get("atr"),
+            "candidate": tracking.get("candidate"), "events": (tracking.get("events") or [])[-3:],
+            "market_structure": analysis.get("market_structure") or {}, "freshness": freshness,
+            "completed": completed, "reference_end": (analysis.get("range") or {}).get("end_time"),
+            "updated": primary.get("updated", 0), "market_updated": market_updated,
+            "realtime": realtime, "price": analysis.get("price"),
+            "plan": plan if realtime and plan else {}, "risk": risk if realtime and risk else {}}
+
+
+def _trade_bundle(sym, mode="confirmed", record=False):
+    identity = {"symbol": sym, "period": 1800, "generation": get_state().get("generation", 0)}
+    preset = symbols.find(sym)
+    if not preset or mode not in ("confirmed", "early"):
+        return dict(status="error", message="未知品种或入场模式", **identity)
+    if _trading_store.load_error:
+        return dict(status="error", message=_trading_store.load_error, **identity)
+    with _outlook_lock:
+        primary = _outlook_data.get((sym, 1800))
+        small = _outlook_data.get((sym, 180))
+        analysis = _tracked_outlook(sym, primary["bars"]) if primary else None
+    identity["structure_context"] = _structure_presentation(sym, primary, small, analysis)
+    identity["freshness"] = _chart_freshness(primary, 1800)
+    if not primary or not small:
+        return dict(status="loading", message="正在收集30分结构与3分确认K线", **identity)
+    updated = min(primary["updated"], small["updated"])
+    if not get_state().get("connected"):
+        return dict(status="error", message="行情刷新中断，暂停交易计划", **identity)
+    if any(_chart_freshness(data, period)["status"] == "stale" for data, period in ((primary, 1800), (small, 180))):
+        return dict(status="error", message="K线缓存刷新中断，暂停交易计划", **identity)
+    if not all(_chart_freshness(data, period)["realtime"] for data, period in ((primary, 1800), (small, 180))):
+        return dict(status="error", message="行情超过20秒未变动（可能休市或停更），暂停实时计划", **identity)
+    if analysis and analysis.get("status") == "error":
+        return dict(status="error", message=analysis.get("message", "结构记录不可用"), **identity)
+    plan = trade_plan.build_plan(primary["bars"], small_bars=small["bars"],
+                                 tick=preset["tick"], mode=mode, live_price=small["bars"][-1]["close"],
+                                 analysis=analysis)
+    structure = (analysis.get("structure_tracking") or {}).get("active") or {}
+    plan["structure_id"] = structure.get("id")
+    plan["structure_phase"] = structure.get("phase")
+    plan["technical_status"] = plan["status"]
+    with _trading_store.lock:
+        settings = _trading_store.settings(sym)
+        risk = trading.risk_for_plan(plan, settings, preset, _trading_store.open_positions(), _trading_store.idea(sym))
+        positions = _trading_store.positions_view(sym, _registered_prices())["positions"]
+    if plan["status"] == "candidate":
+        if any(p["stop_breached"] for p in positions):
+            plan.update(status="risk_blocked", label="已有持仓触及止损", wait_for="先核对交易端止损与实际持仓，再考虑新增风险")
+            risk["max_lots"] = 0
+            for row in risk["rows"]:
+                row["allowed"] = False
+        elif not risk["max_lots"]:
+            plan.update(status="risk_blocked", label="风险未通过" if risk["fee_configured"] else "风险未核算",
+                        wait_for=risk["reason"])
+        elif risk["net_rr"] is None or risk["net_rr"] < config.MIN_RR:
+            plan.update(status="risk_blocked", label="净收益空间不足", wait_for=f"扣除费用和滑点预留后，收益风险比需至少{config.MIN_RR:g}")
+            risk["max_lots"] = 0
+            for row in risk["rows"]:
+                row["allowed"] = False
+        else:
+            plan.update(status="ready", label="提前试仓条件已满足" if mode == "early" else "确认条件已满足")
+    if record:
+        try:
+            _trading_store.record_signal(sym, plan, risk, plan.get("decision_bar_time"))
+        except (OSError, ValueError):
+            return dict(status="error", message="计划记录保存失败，请检查本地存储", **identity)
+    identity["structure_context"] = _structure_presentation(sym, primary, small, analysis, plan, risk)
+    return dict(status="ok", updated=updated, plan=plan, risk=risk, settings=settings,
+                positions=positions, **identity)
+
+
+def _plan_decision(bundle):
+    if bundle.get("status") != "ok":
+        return _decision_standby(bundle.get("message", "计划数据收集中"))
+    plan, risk = bundle["plan"], bundle["risk"]
+    ready = plan["status"] == "ready"
+    return {"quadrant": ("probe" if plan["mode"] == "early" else "confirm") if ready else "standby",
+            "position_pct": 0, "location_score": None, "certainty_score": 0,
+            "direction": plan["direction"], "stabilized": ready, "trigger_met": ready,
+            "stop": {"price": plan["stop"], "basis": "30分计划失效"} if plan.get("stop") else None,
+            "wait_for": plan["wait_for"], "label": plan["label"], "plan_status": plan["status"],
+            "max_lots": risk["max_lots"] if ready else 0, "period": 1800, "mode": plan["mode"],
+            "summary": plan["summary"]}
 
 
 def _lamp_of(track_a):
@@ -702,14 +952,17 @@ def _track_b_for(sym, kb):
     """轨道B摘要 + 市场状态（按 config.GLOBAL_TRACKB_EVERY 节流重算，K线未收盘时不变）。
     返回 (摘要, 本轮是否重算)；evaluate 全量输出缓存在 _tb_throttle[sym]["ev"]，
     供决策块复用（避免每轮重复跑评分引擎）。"""
-    _track_b_bars[sym] = kb          # 三批次阶段识别要用 1h 原始K线
+    kb = kb[:-1]  # SDK末根未完成，结构评分只使用完成棒。
+    _track_b_bars[sym] = kb
     ent = _tb_throttle.get(sym) or {"n": 0, "summary": None, "ev": None, "trigger_met": False}
-    ent["n"] += 1
-    refreshed = ent["summary"] is None or ent["n"] % max(1, config.GLOBAL_TRACKB_EVERY) == 0
+    stamp = tuple(tuple(b.get(k) for k in ("dt", "open", "high", "low", "close", "volume", "oi")) for b in kb)
+    refreshed = ent["summary"] is None or ent.get("stamp") != stamp
     if refreshed:
-        ent["ev"] = double_bottom.evaluate(kb)
+        preset = symbols.find(sym)
+        ent["ev"] = double_bottom.evaluate(kb, tick=preset["tick"] if preset else config.PRICE_TICK)
         ent["summary"] = _track_b_summary(ent["ev"])
         _track_b_regime[sym] = entry_logic.detect_regime(kb)
+        ent["stamp"] = stamp
     _tb_throttle[sym] = ent
     return ent["summary"], refreshed
 
@@ -805,20 +1058,24 @@ def _global_pass(bar_getter, focus_track_a=None, focus_trigger=None):
             kb = bar_getter(sym, config.GLOBAL_TRACKB_PERIOD)
         except Exception:  # noqa: BLE001 单品种失败跳过，不拖垮全局
             continue
+        for period, bars in ((config.GLOBAL_TREND_PERIOD, kt),
+                             (config.GLOBAL_FILTER_PERIOD, kf),
+                             (config.GLOBAL_TRACKB_PERIOD, kb)):
+            _cache_outlook_bars(sym, period, bars)
         if len(kt) < config.MA_SLOW + config.TREND_SLOPE_LOOKBACK or len(kb) < 40:
             _set_overview(sym, _collecting_entry(name, sym))
             continue
         # 轨道A两腿雷达（全局层没有30秒触发腿，聚焦品种由主流程覆盖为三腿结果）
-        direction = resonance.trend_direction(kt)
-        f_ok = resonance.filter_ok(kf, direction) if direction != "none" else False
-        track_a = {"direction": direction, "resonance": direction != "none" and f_ok}
+        direction = resonance.trend_direction(kt[:-1])
+        f_ok = resonance.filter_ok(kf[:-1], direction) if direction != "none" else False
+        track_a = {"direction": direction, "resonance": direction != "none" and f_ok, "scope": "两周期方向过滤"}
         if focus_track_a and sym == config.SYMBOL:
-            track_a = dict(focus_track_a)
+            track_a = dict(focus_track_a, scope="聚焦三周期辅助")
         tb, tb_fresh = _track_b_for(sym, kb)
         price = round(kf[-1]["close"] if kf else kt[-1]["close"], 2)
         # 小周期企稳（3分级别，trigger_ok 同一口径）：聚焦品种用完整三腿触发腿结果覆盖
         tf_direction = direction
-        tf_trigger_ok = resonance.trigger_ok(kf, direction) if (kf and direction != "none") else None
+        tf_trigger_ok = resonance.trigger_ok(kf[:-1], direction, tick=p["tick"]) if (kf and direction != "none") else None
         if focus_trigger and sym == config.SYMBOL:
             tf_direction = focus_trigger.get("direction")
             tf_trigger_ok = focus_trigger.get("trigger_ok")
@@ -826,13 +1083,15 @@ def _global_pass(bar_getter, focus_track_a=None, focus_trigger=None):
         ent = _tb_throttle.get(sym) or {}
         if tb_fresh:
             try:
-                stage = _stage_advice(kb, {"target1": tb["target1"], "target2": None,
+                stage = _stage_advice(kb[:-1], {"target1": tb["target1"], "target2": None,
                                            "track_b": tb}, price)
                 trig = stage.get("trigger")
                 ent["trigger_met"] = bool(trig and trig.get("met"))
             except Exception:  # noqa: BLE001 触发判定失败按未触发降级
                 ent["trigger_met"] = False
             _tb_throttle[sym] = ent
+        bundle = _trade_bundle(sym, record=True)
+        plan = bundle.get("plan", {})
         _set_overview(sym, {
             "name": name, "price": price,
             "track_a": track_a,
@@ -840,10 +1099,11 @@ def _global_pass(bar_getter, focus_track_a=None, focus_trigger=None):
                         ("score", "direction", "pattern", "support", "resistance", "volume_oi")},
             "regime": _track_b_regime.get(sym),
             "lamp": _lamp_of(track_a),
-            "entry": tb["entry"], "stop": tb["stop"], "target1": tb["target1"],
-            "decision": _decision_for(sym, price, tf_direction, tf_trigger_ok),
+            "entry": plan.get("entry"), "stop": plan.get("stop"), "target1": plan.get("target"),
+            "decision": _plan_decision(bundle),
             "fundamentals": fundamentals.state_block(sym),
             "reasons": tb["reasons"],
+            "outlook": _outlook_summary(sym, kt, config.GLOBAL_TREND_PERIOD),
         })
 
 
@@ -945,10 +1205,11 @@ _MOCK_PATTERN = {"SHFE.ag2608": "bottom", "SHFE.rb2610": "top", "DCE.jm2609": "b
 def _mock_loop():
     """模拟全部预设品种：聚焦品种走完整面板管线，全部品种出全局快照。"""
     _set_boot("loading", 60, "生成模拟数据…")
-    _set_state(connected=True, error=None)
+    _set_state(connected=True, connection_status="simulated", error=None)
     phase = 0.0
     first = True
     while True:
+        _note_feed_poll(received=True)
         # 用正弦让方向周期性在多/空/震荡之间切换，便于看灯变化
         phase += 0.15
         drift = math.sin(phase) * 0.6
@@ -959,15 +1220,12 @@ def _mock_loop():
         kl_trend = _mock_series(base, config.KLINE_LENGTH, drift * 0.4, 3)
         kl_filter = _mock_series(kl_trend[-1]["close"], config.KLINE_LENGTH, drift * 0.5, 2)
         kl_trigger = _mock_series(kl_filter[-1]["close"], config.KLINE_LENGTH, drift * 0.6, 1)
-        result = resonance.evaluate(kl_trend, kl_filter, kl_trigger, _combo_labels(combo))
+        result = resonance.evaluate(kl_trend[:-1], kl_filter[:-1], kl_trigger[:-1], _combo_labels(combo), tick=config.PRICE_TICK)
+        result["price"] = kl_trigger[-1]["close"]
         # 多周期K线：前端查看过的周期才生成（注入双底形态，便于演示轨道B评分）
-        with _extra_lock:
-            extra_ps = list(_extra_requests)
-        for p in extra_ps:
+        for p in _requested_chart_periods():
             full = _mock_pattern_series(config.KLINE_LENGTH, base)
-            with _extra_lock:
-                _extra_data[p] = {"bars": _attach_mas(full), "full": full,
-                                  "updated": time.time()}
+            _cache_chart_bars(config.SYMBOL, p, full)
         result["klines"] = {
             "trend": _attach_mas(kl_trend),
             "filter": _attach_mas(kl_filter),
@@ -987,7 +1245,7 @@ def _mock_loop():
         }
         # 压力/支撑贴近警告（用最短周期30秒的S/R + 现价）
         result["proximity"] = _proximity_warning(result.get("price"), result["sr"]["trigger"])
-        _set_state(result=result)
+        _publish_focus_result(config.SYMBOL, combo, result)
         # ---- 全局层：全部预设品种快照（每品种相位错开，灯色各异）----
         idx_of = {p["symbol"]: i for i, p in enumerate(symbols.PRESETS)}
 
@@ -1014,9 +1272,43 @@ def _mock_loop():
 
 
 # ---------------- TQSDK 真实数据 ----------------
+class _KlineSubscriptions:
+    """一个行情会话内每个键只订阅一次；HTTP刷新只重读已订阅serial。"""
+    def __init__(self, api):
+        self.api = api
+        self.serials = {}
+
+    def get(self, sym, period):
+        key = (sym, period)
+        if key not in self.serials:
+            self.serials[key] = self.api.get_kline_serial(sym, period, config.KLINE_LENGTH)
+        return self.serials[key]
+
+    def market_changed(self):
+        return any(self.api.is_changing(serial) for serial in self.serials.values())
+
+
+def _note_feed_poll(received=False, notifications=(), market_changed=False):
+    """SDK事件泵存活、业务更新和行情连接通知是三个独立证据。"""
+    now = time.time()
+    with _state_lock:
+        _state["feed_checked_at"] = now
+        if received:
+            _state["feed_received_at"] = now
+        codes = {n.get("code") for n in notifications if n.get("conn_id") == "md"}
+        # TqNotify的同批通知顺序无严格保证；断开证据优先，后续行情更新再恢复。
+        lost = bool(codes & {2019112910, 2019112911})
+        recovered = bool(codes & {2019112901, 2019112902}) or market_changed
+        if lost:
+            _state.update(connected=False, connection_status="reconnecting", result=None,
+                          error="行情连接中断，SDK正在自动恢复")
+        elif recovered:
+            _state.update(connected=True, connection_status="connected", error=None)
+
+
 def _tqsdk_loop():
     try:
-        from tqsdk import TqApi, TqAuth
+        from tqsdk import TqApi, TqAuth, TqNotify
     except ImportError:
         _set_boot("error", 0, "未安装 tqsdk")
         _set_state(connected=False, error="未安装 tqsdk，请先 pip install -r requirements.txt")
@@ -1027,13 +1319,23 @@ def _tqsdk_loop():
         auth = None
         if config.TQ_USER:
             auth = TqAuth(config.TQ_USER, config.TQ_PASSWORD)
-        api = TqApi(auth=auth) if auth else TqApi()
+        api = TqApi(auth=auth, debug=False, disable_print=True)
+        notifications = TqNotify(api)
     except Exception as e:  # noqa: BLE001
         _set_boot("error", 0, f"连接天勤失败：{e}")
         _set_state(connected=False, error=f"连接天勤失败: {e}")
         return
 
     try:
+        # 使用行情源的实际主力映射；联网失败时保留有效缓存/日历回退。
+        _set_boot("loading", 35, "正在更新主力合约…")
+        try:
+            symbols.refresh_from_api(api)
+        except Exception as e:
+            print(f"主力合约更新失败，沿用已有预设（{type(e).__name__}）", flush=True)
+        config.SYMBOL = symbols.rollover_if_expired(config.SYMBOL)
+        symbols.apply_symbol_params(config)
+        _set_state(symbol=config.SYMBOL)
         # 先校验合约是否存在/有效（换月过期、拼写错误会在这里立刻暴露，而不是死等K线）
         _set_boot("loading", 45, "正在校验合约…")
         try:
@@ -1062,20 +1364,15 @@ def _tqsdk_loop():
         # K线订阅缓存：(品种,周期)->serial。切换组合/品种/查看多周期时复用，避免重复订阅。
         # 订阅数估算：全局层 12品种×3周期=36 条（聚焦品种的与全局复用同key），
         # 聚焦品种额外只有 30秒触发腿 + 前端查看过的多周期（≤7条）。
-        _serials = {}
-
-        def serial(sym, period):
-            key = (sym, period)
-            if key not in _serials:
-                _serials[key] = api.get_kline_serial(sym, period, config.KLINE_LENGTH)
-            return _serials[key]
+        subscriptions = _KlineSubscriptions(api)
+        serial = subscriptions.get
 
         combo = _current_combo()
         focus = config.SYMBOL
         kt = serial(focus, combo["trend"])
         kf = serial(focus, combo["filter"])
         kg = serial(focus, combo["trigger"])
-        _set_state(connected=True, error=None, combo=combo["key"])
+        _set_state(connected=True, connection_status="unknown", error=None, combo=combo["key"])
 
         def to_list(df):
             # 过滤未生成的NaN行，返回 OHLC + 成交量 + 持仓量变化(CCL)
@@ -1087,7 +1384,8 @@ def _tqsdk_loop():
             volumes = df["volume"].tolist() if "volume" in df else [0] * len(closes)
             open_ois = df["open_oi"].tolist() if "open_oi" in df else [0] * len(closes)
             close_ois = df["close_oi"].tolist() if "close_oi" in df else [0] * len(closes)
-            for o, h, low, c, v, ooi, coi in zip(opens, highs, lows, closes, volumes, open_ois, close_ois):
+            timestamps = df["datetime"].tolist()
+            for o, h, low, c, v, ooi, coi, ts in zip(opens, highs, lows, closes, volumes, open_ois, close_ois, timestamps):
                 if math.isnan(c):
                     continue
                 vol = 0 if (isinstance(v, float) and math.isnan(v)) else int(v)
@@ -1096,7 +1394,8 @@ def _tqsdk_loop():
                     oi_delta = int(coi - ooi)
                 rows.append({"open": float(o), "high": float(h),
                              "low": float(low), "close": float(c),
-                             "volume": vol, "oi": oi_delta})
+                             "volume": vol, "oi": oi_delta,
+                             "dt": datetime.fromtimestamp(int(ts) / 1e9, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")})
             return rows
 
         first = True
@@ -1120,27 +1419,33 @@ def _tqsdk_loop():
                 kg = serial(focus, combo["trigger"])
                 first = True
                 wait_start = time.time()
-            # 关键：必须带 deadline，否则非交易时段/无推送时 wait_update() 会永久阻塞，
-            # 下面的 30 秒看门狗永远执行不到，界面就会一直卡在"正在拉取三周期K线…"。
-            # deadline 到点 tqsdk 会抛 TimeoutError，这里吞掉，让流程走到看门狗判断。
+            # 提前登记焦点30m/3m及查看过的周期；warmup不足也不能挡住图表刷新。
+            for period in _requested_chart_periods():
+                serial(focus, period)
+            # deadline超时返回False，不代表断网/休市；SDK自己恢复断开的连接。
             try:
-                api.wait_update(deadline=time.time() + 5)
+                received = api.wait_update(deadline=time.time() + 5)
             except TimeoutError:
-                pass
+                received = False
+            _note_feed_poll(received=received, notifications=notifications.get_notifies(),
+                            market_changed=bool(received and subscriptions.market_changed()))
+            _refresh_focus_charts(focus, lambda s, p: to_list(serial(s, p)))
+            if not get_state().get("connected"):
+                continue
             kt_list, kf_list, kg_list = to_list(kt), to_list(kf), to_list(kg)
             # 首次要等三周期都有足够数据
             if first and (len(kt_list) < config.MA_SLOW or len(kg_list) < config.MA_FAST):
-                # 看门狗：30秒还填不满K线 → 报错，避免永久卡在"拉取三周期K线"
+                # 保留同一会话继续等待/重连，不因辅助组合加载慢关闭正常的图表订阅。
                 if time.time() - wait_start > 30:
-                    raise TimeoutError(
-                        f"30秒内未取到足够K线（{combo['trend_label']}{len(kt_list)}根/{combo['trigger_label']}{len(kg_list)}根）。"
-                        f"可能原因：①合约 {config.SYMBOL} 暂无推送（非交易时段） "
-                        f"②同一天勤账号在别处登录（同账号不能多设备同时在线）"
-                        f"③网络/行情服务异常。"
-                        f"合约本身会在启动时自动换月，无需手工维护；仍不行请到配置页核对。"
-                    )
+                    _set_boot("loading", 60,
+                              f"仍在等待辅助周期K线（{combo['trend_label']}{len(kt_list)}根/"
+                              f"{combo['trigger_label']}{len(kg_list)}根）；图表独立刷新，连接恢复后自动续取")
                 continue
-            result = resonance.evaluate(kt_list, kf_list, kg_list, _combo_labels(combo))
+            result = resonance.evaluate(kt_list[:-1], kf_list[:-1], kg_list[:-1], _combo_labels(combo), tick=config.PRICE_TICK)
+            result["price"] = kg_list[-1]["close"] if kg_list else None
+            for period, bars in ((combo["trend"], kt_list), (combo["filter"], kf_list),
+                                 (combo["trigger"], kg_list)):
+                _cache_outlook_bars(focus, period, bars)
             result["sr"] = {
                 "trend": _find_sr(kt_list),
                 "filter": _find_sr(kf_list),
@@ -1158,19 +1463,7 @@ def _tqsdk_loop():
                 "filter": _detect_signals(kf_list),
                 "trigger": _detect_signals(kg_list),
             }
-            _set_state(result=result)
-            # 多周期K线（懒加载）：只订阅/刷新前端查看过的周期（聚焦品种）
-            with _extra_lock:
-                extra_ps = list(_extra_requests)
-            for p in extra_ps:
-                try:
-                    bars = to_list(serial(focus, p))
-                    if bars:
-                        with _extra_lock:
-                            _extra_data[p] = {"bars": _attach_mas(bars), "full": bars,
-                                              "updated": time.time()}
-                except Exception:  # noqa: BLE001 单个周期失败不影响主流程
-                    pass
+            _publish_focus_result(focus, combo, result)
             # 全局层：全部预设品种快照 + 落盘（聚焦品种用三腿结果覆盖）
             _global_pass(lambda s, p: to_list(serial(s, p)),
                          focus_track_a={"direction": result["direction"],
@@ -1288,6 +1581,8 @@ def api_symbol():
     sym = (data.get("symbol") or "").strip()
     if not sym:
         return jsonify({"ok": False, "error": "缺少 symbol"}), 400
+    if not symbols.find(sym) and sym != config.SYMBOL:
+        return jsonify({"ok": False, "error": "未知品种"}), 400
     with _symbol_lock:
         _symbol_request = sym
     return jsonify({"ok": True, "symbol": sym})
@@ -1304,7 +1599,37 @@ def api_overview():
     known = [p["symbol"] for p in symbols.PRESETS]
     if config.SYMBOL not in known and config.SYMBOL in ov:
         cards.append({"symbol": config.SYMBOL, **ov[config.SYMBOL]})
-    return jsonify({"symbols": cards, "current": config.SYMBOL})
+    state = get_state()
+    connected = state.get("connected", False)
+    for card in cards:
+        with _outlook_lock:
+            data = _outlook_data.get((card["symbol"], 1800))
+            small = _outlook_data.get((card["symbol"], 180))
+        primary_freshness = _chart_freshness(data, 1800, state=state)
+        small_freshness = _chart_freshness(small, 180, state=state)
+        display_available = primary_freshness["status"] in ("receiving", "latest_available")
+        realtime = primary_freshness["realtime"] and small_freshness["realtime"]
+        # Quiet but actively checked history remains useful for preparation. The legacy
+        # stale flag continues to block trading; it no longer means "hide the structure".
+        card.update(freshness=primary_freshness, confirmation_freshness=small_freshness,
+                    display_available=display_available, realtime=realtime, stale=not realtime,
+                    view_mode="live" if realtime else "preparation" if display_available else "unavailable")
+        if display_available:
+            # Use the same immutable 30m snapshot for the displayed reference price and time.
+            card["price"] = data["bars"][-1]["close"]
+            card["price_bar_time"] = primary_freshness["last_bar_time"]
+            # The slower auxiliary warmup must not hide otherwise usable 30m history.
+            if not card.get("outlook") or card["outlook"].get("period") != 1800:
+                card["outlook"] = _outlook_summary(card["symbol"], data["bars"])
+        if not realtime:
+            message = ("最新可用结构可用于夜盘 / 次日预案；开盘后重新核对行情、触发与风险"
+                       if display_available else primary_freshness["label"])
+            decision = _decision_standby(message)
+            decision.update(plan_status="preparation" if display_available else "unavailable",
+                            label="预案观察 · 实时确认暂停" if display_available else primary_freshness["label"], max_lots=0)
+            card.update(decision=decision, lamp="gray")
+    return jsonify({"symbols": cards, "current": config.SYMBOL, "connected": connected,
+                    "generation": get_state().get("generation", 0)})
 
 
 @app.route("/api/periods")
@@ -1332,51 +1657,194 @@ def api_period():
 @app.route("/api/kline")
 def api_kline():
     """多周期K线（懒加载）：前端切到某周期才来登记；数据未就绪返回 loading。"""
+    sym = request.args.get("symbol", config.SYMBOL)
+    identity = {"symbol": sym, "generation": get_state().get("generation", 0)}
     try:
         period = int(request.args.get("period", "0"))
     except ValueError:
         period = 0
     if period not in config.EXTRA_KLINE_SECONDS:
         return jsonify({"status": "error", "error": "不支持的周期"}), 400
+    identity["period"] = period
+    if sym != config.SYMBOL:
+        return jsonify(status="loading", freshness=_chart_freshness(None, period), **identity)
     with _extra_lock:
         _extra_requests.add(period)
         data = _extra_data.get(period)
-    if data:
-        return jsonify({"status": "ok", "period": period,
-                        "bars": data["bars"], "updated": data["updated"]})
-    return jsonify({"status": "loading"})
+    if data and data.get("symbol") != sym:
+        data = None
+    freshness = _chart_freshness(data, period)
+    identity.update(freshness=freshness, refresh_requested=request.args.get("refresh") == "1")
+    if data and data.get("symbol") == sym:
+        if freshness["status"] in ("stale", "disconnected"):
+            return jsonify(status="error", message="行情刷新中断", **identity)
+        return jsonify(status="ok", bars=data["bars"], updated=data["updated"],
+                       market_updated=data.get("market_updated", 0), realtime=freshness["realtime"], **identity)
+    return jsonify(status="loading", **identity)
 
 
 @app.route("/api/double_bottom")
 def api_double_bottom():
     """轨道B 双底评分：对指定周期K线跑评分（复用多周期懒加载订阅缓存）。"""
+    sym = request.args.get("symbol", config.SYMBOL)
+    identity = {"symbol": sym, "generation": get_state().get("generation", 0)}
     try:
         period = int(request.args.get("period", "0"))
     except ValueError:
         period = 0
     if period not in config.EXTRA_KLINE_SECONDS:
         return jsonify({"status": "error", "error": "不支持的周期"}), 400
+    identity["period"] = period
+    if sym != config.SYMBOL:
+        return jsonify(status="loading", **identity)
     with _extra_lock:
         _extra_requests.add(period)   # 顺便登记懒加载，数据线程会开始订阅该周期
         data = _extra_data.get(period)
-    if not data:
-        return jsonify({"status": "loading"})
-    bars = data.get("full") or data["bars"]
+    identity["freshness"] = _chart_freshness(data if data and data.get("symbol") == sym else None, period)
+    if not data or data.get("symbol") != sym:
+        return jsonify(status="loading", **identity)
+    if identity["freshness"]["status"] in ("stale", "disconnected"):
+        return jsonify(status="error", message="行情刷新中断", **identity)
+    bars = (data.get("full") or data["bars"])[:-1]
     if len(bars) < 40:
-        return jsonify({"status": "insufficient",
-                        "message": f"K线不足（当前{len(bars)}根，需≥40根），稍候再试"})
-    result = double_bottom.evaluate(bars)
-    return jsonify({"status": "ok", "period": period,
-                    "updated": data["updated"], "result": result})
+        return jsonify(status="insufficient", message=f"完成K线不足（当前{len(bars)}根，需≥40根）", **identity)
+    preset = symbols.find(sym)
+    result = double_bottom.evaluate(bars, tick=preset["tick"] if preset else config.PRICE_TICK)
+    return jsonify(status="ok", updated=data["updated"], result=result, **identity)
+
+
+@app.route("/api/outlook")
+def api_outlook():
+    """阶段自适应条件推演；完成K线推进结构，盘中现价只更新路径。"""
+    sym = (request.args.get("symbol") or config.SYMBOL).strip()
+    try:
+        period = int(request.args.get("period", "1800"))
+    except ValueError:
+        period = 0
+    identity = {"symbol": sym, "period": period}
+    if period not in OUTLOOK_PERIODS:
+        return jsonify(status="error", message="不支持的推演周期", **identity), 400
+    preset = symbols.find(sym)
+    if not preset and sym != config.SYMBOL:
+        return jsonify(status="error", message="未知品种", **identity), 400
+    with _outlook_lock:
+        data = _outlook_data.get((sym, period))
+    if sym == config.SYMBOL:
+        with _extra_lock:
+            _extra_requests.add(period)
+    freshness = _chart_freshness(data, period)
+    identity.update(freshness=freshness,
+                    refresh_requested=sym == config.SYMBOL and request.args.get("refresh") == "1")
+    if not data:
+        message = "正在加载该周期K线…" if sym == config.SYMBOL else "请先聚焦该品种以加载此周期"
+        return jsonify(status="loading", message=message, **identity)
+    if freshness["status"] in ("stale", "disconnected"):
+        return jsonify(status="error", stale=True, updated=data["updated"],
+                       message="行情刷新中断，推演已暂停", **identity)
+    with _outlook_lock:
+        # 分析与图表使用同一份不可变缓存引用；并发新快照留给下一轮请求。
+        chart_bars = data["bars"][-120:]
+        analysis = _tracked_outlook(sym, chart_bars, period)
+    market_updated = data.get("market_updated", data["updated"])
+    return jsonify(status=analysis["status"], updated=data["updated"], market_updated=market_updated,
+                   message=analysis.get("message"),
+                   realtime=freshness["realtime"],
+                   bars=chart_bars, analysis=analysis, **identity)
 
 
 @app.route("/api/entry_check")
 def api_entry_check():
-    # mock 演示：?demo=main|probe|confirm|avoid 强制某象限（合成输入走真实引擎）
-    demo = request.args.get("demo")
-    if demo and config.MOCK_MODE and demo in _DEMO_EV:
-        return jsonify(_demo_entry_check(demo))
-    return jsonify(_entry_check())
+    bundle = _trade_bundle(request.args.get("symbol", config.SYMBOL), request.args.get("mode", "confirmed"))
+    if bundle["status"] != "ok":
+        return jsonify(bundle)
+    plan = bundle["plan"]
+    return jsonify({**bundle, **_plan_decision(bundle), "mode_label": "30分主结构 / 3分确认",
+                    "quadrant_name": plan["label"], "stage": plan["setup"], "stage_name": plan["label"],
+                    "entry_point_ref": None, "scores_detail": [],
+                    "ladder": {"price": plan["entry"], "stop": plan["stop"], "target1": plan["target"],
+                               "target2": None, "L1": None, "L2": None, "neck": None}})
+
+
+@app.route("/api/trade_plan")
+def api_trade_plan():
+    return jsonify(_trade_bundle(request.args.get("symbol", config.SYMBOL),
+                                 request.args.get("mode", "confirmed"), record=True))
+
+
+def _trading_payload():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise ValueError("请求须包含JSON对象")
+    return payload
+
+
+@app.route("/api/trading/settings", methods=["GET", "POST"])
+def api_trading_settings():
+    sym = request.args.get("symbol", config.SYMBOL)
+    try:
+        payload = _trading_payload() if request.method == "POST" else {}
+        sym = payload.get("symbol", sym)
+        if not symbols.find(sym):
+            raise ValueError("未知品种")
+        settings = _trading_store.update_settings(payload, sym) if request.method == "POST" else _trading_store.settings(sym)
+        return jsonify(ok=True, symbol=sym, settings=settings)
+    except (ValueError, OSError) as exc:
+        return jsonify(ok=False, symbol=sym, error=str(exc), message=str(exc)), 400
+
+
+@app.route("/api/trading/idea", methods=["POST"])
+def api_trading_idea():
+    sym = config.SYMBOL
+    try:
+        payload = _trading_payload()
+        sym = payload.get("symbol", sym)
+        if not symbols.find(sym):
+            raise ValueError("未知品种")
+        return jsonify(ok=True, symbol=sym, idea=_trading_store.new_idea(sym))
+    except (ValueError, OSError) as exc:
+        return jsonify(ok=False, symbol=sym, error=str(exc), message=str(exc)), 400
+
+
+@app.route("/api/positions", methods=["GET", "POST"])
+def api_positions():
+    sym = request.args.get("symbol", config.SYMBOL)
+    try:
+        payload = _trading_payload() if request.method == "POST" else {}
+        sym = payload.get("symbol", sym)
+        preset = symbols.find(sym)
+        if not preset:
+            raise ValueError("未知品种")
+        if _trading_store.load_error:
+            raise ValueError(_trading_store.load_error)
+        if request.method == "POST":
+            _trading_store.register(payload, preset)
+        view = _trading_store.positions_view(sym, _registered_prices())
+        risk = trading.risk_for_plan({}, _trading_store.settings(sym), preset,
+                                    _trading_store.open_positions(), _trading_store.idea(sym))
+        warning = "该计划登记风险已超过上限，请核对交易端持仓" if risk["open_risk"] + risk["realized_loss"] > risk["budget"] else ""
+        return jsonify(ok=True, symbol=sym, warning=warning, **view)
+    except (ValueError, OSError) as exc:
+        return jsonify(ok=False, symbol=sym, error=str(exc), message=str(exc)), 400
+
+
+@app.route("/api/positions/<position_id>", methods=["POST"])
+def api_position_update(position_id):
+    sym = config.SYMBOL
+    try:
+        payload = _trading_payload()
+        sym = payload.get("symbol", sym)
+        result = _trading_store.update_position(position_id, payload)
+        sym = result["symbol"]
+        return jsonify(ok=True, symbol=sym, **_trading_store.positions_view(sym, _registered_prices()))
+    except (ValueError, OSError) as exc:
+        return jsonify(ok=False, symbol=sym, error=str(exc), message=str(exc)), 400
+
+
+@app.route("/api/trading/journal")
+def api_trading_journal():
+    sym = request.args.get("symbol", config.SYMBOL)
+    return jsonify(ok=not bool(_trading_store.load_error), symbol=sym, signals=_trading_store.signals(sym),
+                   **_trading_store.positions_view(sym, _registered_prices()))
 
 
 @app.route("/api/fundamentals")

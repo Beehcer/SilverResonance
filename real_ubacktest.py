@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-real_ubacktest.py — 正版共振系统回测（真实三周期数据）
+real_ubacktest.py — 旧共振规则回放（真实三周期数据）
 
 入场要件（用户实盘口径）:
   1. 共振灯亮：真实 15m(趋势) + 3m(过滤) + 30s(触发) 三腿全满足（收盘时刻评估，防未来函数）
@@ -8,7 +8,8 @@ real_ubacktest.py — 正版共振系统回测（真实三周期数据）
   3. 方向一致：共振方向 == 双底方向
   4. 次根 1h 放量(>前20根均量) + OI 增仓 + 收线同向 → t+2 开盘入场
 出场: +¥100/手 止盈 / −¥50/手 止损（按 tick_value 换算跳数，同根先判止损=保守）
-      60 根超时强平；末尾强平。R 口径：50元 = 1R。
+      下午收盘、60 根超时或样本末尾退出。价格按tick向外对齐，R分母为对齐后的实际初始风险。
+      成本为明确假设，主连换月不可成交问题尚未建模；旧报告不是本版本业绩证据。
 
 数据:
   1h   = 15m 聚合（已与 backtest/cache 的 1h 逐根核对 100% 一致，且补足到最新）
@@ -24,13 +25,16 @@ import json
 import os
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config  # noqa: F401  确保常量被加载
 import resonance
 import symbols as symbols_mod
 import panel_backtest as pb
+from backtest import (aligned_levels, barrier_exit, align_price,
+                      trading_day_labels, day_close_indices, EXECUTION_LIMITATIONS,
+                      EXECUTION_VERSION)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 KL = os.path.join(BASE, "backtest", "klines")
@@ -50,7 +54,8 @@ def load_klines(sym, label):
     if not os.path.exists(p):
         return []
     with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)["bars"]
+        # A download may end with a still-forming candle. Conservatively omit it.
+        return json.load(f)["bars"][:-1]
 
 
 def agg_1h(b15):
@@ -64,29 +69,33 @@ def agg_1h(b15):
             cur_h = h
             cur = {"dt": h + ":00:00", "open": b["open"], "high": b["high"],
                    "low": b["low"], "close": b["close"],
-                   "volume": b.get("volume", 0), "oi": b.get("oi", 0)}
+                   "volume": b.get("volume", 0), "oi": b.get("oi", 0),
+                   "end_ts": _ts(b["dt"]) + 900}
         else:
             cur["high"] = max(cur["high"], b["high"])
             cur["low"] = min(cur["low"], b["low"])
             cur["close"] = b["close"]
             cur["volume"] += b.get("volume", 0)
             cur["oi"] += b.get("oi", 0)
+            cur["end_ts"] = _ts(b["dt"]) + 900
     if cur is not None:
         rows.append(cur)
     return rows
 
 
 def _ts(s):
-    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").timestamp()
+    return datetime.fromisoformat(s).replace(tzinfo=timezone(timedelta(hours=8))).timestamp()
 
 
-def _tail_at(tarr, arr, close_ts, n=TAIL):
-    """截至 close_ts 已收盘的最近 n 根（start < close_ts 即已收盘）。"""
-    i = bisect.bisect_left(tarr, close_ts)
+def _tail_at(tarr, arr, close_ts, period_sec, n=TAIL):
+    """Only candles whose end (start + duration) is known by close_ts."""
+    if period_sec <= 0:
+        raise ValueError("period_sec must be positive")
+    i = bisect.bisect_right(tarr, close_ts - period_sec)
     return arr[max(0, i - n):i]
 
 
-def replay_one(preset):
+def replay_one(preset, intraday=True):
     sym = preset["symbol"]
     name = preset["name"]
     tick = preset["tick"]
@@ -100,7 +109,11 @@ def replay_one(preset):
     b30 = load_klines(sym, "30s")
     if not (b15 and b3 and b30):
         return None
-    b1h = agg_1h(b15)
+    b1h = agg_1h(b15)[:-1]  # The final aggregate may cover only part of an hour.
+    if len(b1h) < WARMUP + 3:
+        return None
+    days = trading_day_labels(b1h)
+    day_ends = day_close_indices(b1h, days)
 
     t15s = [_ts(b["dt"]) for b in b15]
     t3s = [_ts(b["dt"]) for b in b3]
@@ -116,19 +129,24 @@ def replay_one(preset):
 
     def open_pos(rdir, ps, t, ct):
         nonlocal pos
-        entry = b1h[ct + 1]["open"]
         sgn = 1 if rdir == "long" else -1
+        raw_entry = b1h[ct + 1]["open"]
+        entry, sl, tp = aligned_levels(raw_entry, raw_entry - sgn * sl_dist,
+                                       raw_entry + sgn * tp_dist, sgn, tick)
         pos = {
             "entry_i": ct + 1, "entry": entry, "sgn": sgn,
-            "sl": entry - sgn * sl_dist, "tp": entry + sgn * tp_dist,
+            "sl": sl, "tp": tp,
+            "risk_yuan": abs(entry - sl) * mult,
             "entry_ts": _ts(b1h[ct + 1]["dt"]),          # 1h bar 开盘时刻
             "s30": bisect.bisect_left(t30s, _ts(b1h[ct + 1]["dt"])),
             "meta": {
                 "symbol": sym, "name": name, "direction": rdir,
                 "quadrant": (ps.get("decide") or {}).get("quadrant", "?"),
                 "regime": (ps.get("regime_detail") or {}).get("regime", "?"),
-                "entry_time": b1h[ct + 1]["dt"], "entry_date": b1h[ct + 1]["dt"][:10],
-                "entry_price": entry, "tp_yuan": TP_Y, "sl_yuan": SL_Y,
+                "entry_time": b1h[ct + 1]["dt"], "entry_date": days[ct + 1],
+                "entry_price": entry, "tp_yuan": abs(tp - entry) * mult,
+                "sl_yuan": abs(entry - sl) * mult,
+                "requested_tp_yuan": TP_Y, "requested_sl_yuan": SL_Y,
                 "sig_time": b1h[t]["dt"],
             },
         }
@@ -139,7 +157,7 @@ def replay_one(preset):
             if t < pos["entry_i"]:
                 # 尚未到入场 bar（确认根仍在走）——持仓等待，不判出场
                 continue
-            bar_end = _ts(b1h[t]["dt"]) + 3600        # 本 1h bar 收盘时刻
+            bar_end = b1h[t]["end_ts"]
             sgn, sl, tp = pos["sgn"], pos["sl"], pos["tp"]
             k = pos["s30"]
             ep = rp = et = None
@@ -148,47 +166,38 @@ def replay_one(preset):
                     k += 1
                     continue
                 b = b30[k]
-                hs = (b["low"] <= sl) if sgn > 0 else (b["high"] >= sl)
-                ht = (b["high"] >= tp) if sgn > 0 else (b["low"] <= tp)
-                if hs:
-                    ep, rp, et = sl, "stop", b["dt"]
-                    k += 1
-                    break
-                if ht:
-                    ep, rp, et = tp, "target", b["dt"]
+                ep, rp = barrier_exit(b, sl, tp, sgn, tick)
+                if rp is not None:
+                    et = b["dt"]
                     k += 1
                     break
                 k += 1
             pos["s30"] = k
             if rp is None:
                 bar = b1h[t]
-                if t - pos["entry_i"] >= MAX_HOLD:
+                if k >= len(t30s):
+                    # No more fine-grained data: stop-first OHLC fallback.
+                    ep, rp = barrier_exit(bar, sl, tp, sgn, tick)
+                    et = bar["dt"] if rp is not None else None
+                if rp is None and intraday and t in day_ends:
+                    ep, rp, et = align_price(bar["close"], tick, sgn < 0), "day_close", bar["dt"]
+                elif rp is None and t - pos["entry_i"] >= MAX_HOLD:
                     ep, rp, et = bar["close"], "timeout", bar["dt"]
-                elif k >= len(t30s):
-                    # 30s 耗尽（持仓跨出窗口）→ 退回 1h 判定兜底
-                    hit_sl = bar["low"] <= sl if sgn > 0 else bar["high"] >= sl
-                    hit_tp = bar["high"] >= tp if sgn > 0 else bar["low"] <= tp
-                    if hit_sl:
-                        ep, rp, et = sl, "stop", bar["dt"]
-                    elif hit_tp:
-                        ep, rp, et = tp, "target", bar["dt"]
-                    elif t - pos["entry_i"] >= MAX_HOLD:
-                        ep, rp, et = bar["close"], "timeout", bar["dt"]
                 if rp is None:
                     continue
             pnl = (ep - pos["entry"]) * sgn * mult - COST * tv
             trades.append({**pos["meta"], "exit_time": et,
                            "exit_price": round(ep, 4), "exit_reason": rp,
                            "bars_held": t - pos["entry_i"] + 1,
-                           "pnl_yuan": round(pnl, 1), "R": round(pnl / SL_Y, 3)})
+                           "pnl_yuan": round(pnl, 1), "R": round(pnl / pos["risk_yuan"], 3)})
             pos = None
             continue
 
         # ---------- 空仓：入场要件 ----------
-        close_ts = _ts(b1h[t]["dt"]) + 3600
+        close_ts = b1h[t]["end_ts"]
         if not (w_first <= close_ts <= w_last):
             continue                                # 30s 无覆盖，灯无从判断
-        start_ts = close_ts - 3600
+        start_ts = _ts(b1h[t]["dt"])
         # 扫该 1h bar 内每根 30s 收盘时刻（贴实盘：用户盘中实时看灯，亮过即算）
         i0 = bisect.bisect_left(t30s, start_ts)
         i1 = bisect.bisect_left(t30s, close_ts)
@@ -197,12 +206,12 @@ def replay_one(preset):
         rdir = None
         for k in range(i0, i1):
             ck = t30s[k] + 30
-            a15 = _tail_at(t15s, b15, ck)
-            a3 = _tail_at(t3s, b3, ck)
-            a30 = _tail_at(t30s, b30, ck)
+            a15 = _tail_at(t15s, b15, ck, 900)
+            a3 = _tail_at(t3s, b3, ck, 180)
+            a30 = _tail_at(t30s, b30, ck, 30)
             if len(a15) < 35 or len(a3) < 35 or len(a30) < 35:
                 continue
-            res = resonance.evaluate(a15, a3, a30)      # 便宜筛灯
+            res = resonance.evaluate(a15, a3, a30, tick=tick)
             if res["resonance"]:
                 rdir = res["direction"]
                 stats["灯亮"] += 1
@@ -212,7 +221,7 @@ def replay_one(preset):
             continue
 
         # 灯亮才跑完整面板判定（双底结构，全前缀）
-        ps = pb.compute_panel_score_fast(b1h[:t + 1], a15, a3, a30)
+        ps = pb.compute_panel_score_fast(b1h[:t + 1], a15, a3, a30, tick=tick)
         d = ps.get("decide") or {}
         ddir = d.get("direction", "none")
         quad = d.get("quadrant", "standby")
@@ -233,6 +242,8 @@ def replay_one(preset):
 
         # 次根 1h 动能确认
         ct = t + 1
+        if ct + 1 >= n or (intraday and (days[ct] != days[t] or days[ct + 1] != days[t])):
+            continue
         cbar = b1h[ct]
         lo = max(WARMUP, ct - VOL_MA)
         vma = sum(b1h[j]["volume"] for j in range(lo, ct)) / (ct - lo) if ct > lo else 0
@@ -252,9 +263,11 @@ def replay_one(preset):
         pnl = (bar["close"] - pos["entry"]) * pos["sgn"] * mult - COST * tv
         trades.append({**pos["meta"], "exit_time": bar["dt"], "exit_price": bar["close"],
                        "exit_reason": "end", "bars_held": n - 1 - pos["entry_i"],
-                       "pnl_yuan": round(pnl, 1), "R": round(pnl / SL_Y, 3)})
+                       "pnl_yuan": round(pnl, 1), "R": round(pnl / pos["risk_yuan"], 3)})
 
     return {
+        "execution_version": EXECUTION_VERSION,
+        "limitations": EXECUTION_LIMITATIONS,
         "preset": preset, "window": (b30[0]["dt"], b30[-1]["dt"], len(b30)),
         "stats": stats, "dirs": dict(dirs), "trades": trades,
         "b1h_n": n,
@@ -275,8 +288,10 @@ def main():
         print("no preset"); return 1
 
     print("=" * 70)
-    print("正版共振系统回测: 真实15m/3m/30s 灯亮 + 双底同向 + 次根1h放量/OI  →  止盈100元/止损50元")
+    print("旧共振规则回放: 真实15m/3m/30s + 双底同向 + 次根1h确认；100/50元仅为tick对齐前的毛盈亏设定")
     print("数据: klines 真实主连;  窗口 = 30s 覆盖区间(免费账号 ~8900根上限)")
+    print(EXECUTION_LIMITATIONS)
+    print("日内下午收盘退出；末根下载K线保守排除；本次结果不是旧文档成绩的复现。")
     print("=" * 70)
     all_trades = []
     for p in presets:

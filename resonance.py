@@ -13,6 +13,7 @@
 """
 
 from typing import List, Dict, Optional
+import math
 import config
 
 
@@ -85,18 +86,23 @@ def filter_ok(klines: List[Dict], direction: str) -> bool:
     return True
 
 
-def trigger_ok(klines: List[Dict], direction: str) -> bool:
+def trigger_ok(klines: List[Dict], direction: str, tick: Optional[float] = None) -> bool:
     """
     30秒触发：企稳确认，防止一根影线扫过 MA 就误判。
     要求（做多为例，做空对称）：
       1. 最近连续 N 根"收盘价"都站在 MA_FAST 上方，且越过至少 buffer 跳（用收盘价，影线不算）；
       2. MA_FAST 自身在向上（拐头/延续），与方向一致。
     """
-    if direction == "none":
+    if direction not in ("long", "short"):
         return False
     closes = _closes(klines)
     n_confirm = max(1, config.TRIGGER_CONFIRM_BARS)
-    buffer = config.TRIGGER_MA_BUFFER_TICKS * config.PRICE_TICK
+    tick = config.PRICE_TICK if tick is None else tick
+    if not isinstance(tick, (int, float)) or isinstance(tick, bool) or not math.isfinite(tick) or tick <= 0:
+        return False
+    if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in closes):
+        return False
+    buffer = config.TRIGGER_MA_BUFFER_TICKS * tick
 
     # 数据要够：算 MA_FAST + 回看 n_confirm 根 + MA 斜率比较
     if len(closes) < config.MA_FAST + n_confirm:
@@ -130,7 +136,7 @@ def trigger_ok(klines: List[Dict], direction: str) -> bool:
 
 
 def evaluate(kl_trend: List[Dict], kl_filter: List[Dict], kl_trigger: List[Dict],
-             labels: Optional[Dict] = None) -> Dict:
+             labels: Optional[Dict] = None, tick: Optional[float] = None) -> Dict:
     """
     综合判定，返回面板需要的完整状态字典。
     labels：三个周期的显示文案，如 {"trend": "1小时", "filter": "15分", "trigger": "3分"}；
@@ -139,7 +145,7 @@ def evaluate(kl_trend: List[Dict], kl_filter: List[Dict], kl_trigger: List[Dict]
     labels = labels or {"trend": "15分", "filter": "3分", "trigger": "30秒"}
     direction = trend_direction(kl_trend)
     f_ok = filter_ok(kl_filter, direction) if direction != "none" else False
-    t_ok = trigger_ok(kl_trigger, direction) if direction != "none" else False
+    t_ok = trigger_ok(kl_trigger, direction, tick=tick) if direction != "none" else False
 
     resonance = direction != "none" and f_ok and t_ok
 
