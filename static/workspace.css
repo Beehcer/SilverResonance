@@ -74,3 +74,9 @@
 .plan-opacity-field{margin:10px 0;color:#b9c5d0;font-size:12px}
 .drawing-options .draw-opacity{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:11px;color:#b9c5d0}
 .drawing-options .draw-opacity input{height:23px;padding:2px 3px}
+body{user-select:none;-webkit-user-select:none}
+input,textarea,select,[contenteditable=""],[contenteditable=true],[contenteditable=plaintext-only],[contenteditable=""] *,[contenteditable=true] *,[contenteditable=plaintext-only] *{user-select:text;-webkit-user-select:text}
+.quote-row{user-select:none;-webkit-user-select:none}
+.quote-dragging{opacity:.45}
+.quote-entry.quote-drop-before{box-shadow:inset 0 2px #d4a72c}
+.quote-entry.quote-drop-after{box-shadow:inset 0 -2px #d4a72c}

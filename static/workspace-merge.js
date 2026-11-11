@@ -27,6 +27,8 @@
           edit.node_inserts.push({point:clone(point),after:after.points[index-1]?.id||null,before:after.points.slice(index+1).find(p=>previous.has(p.id))?.id||null});
         }else{
           const changes={};for(const key of ['time','price'])if(!equal(old[key],point[key]))changes[key]=point[key];
+          const anchorChanged=!equal(old.chart_anchor??null,point.chart_anchor??null);
+          if(anchorChanged||Object.hasOwn(changes,'time')&&(old.chart_anchor!=null||point.chart_anchor!=null)){changes.time=point.time;changes.chart_anchor=clone(point.chart_anchor??null);}
           if(Object.keys(changes).length)edit.node_updates.push({id:point.id,changes});
         }
       });
@@ -51,7 +53,7 @@
     for(const key of edit.unset||[])delete result[key];
     if((edit.node_updates||[]).length||(edit.node_inserts||[]).length||(edit.node_deletes||[]).length){
       const deleted=new Set(edit.node_deletes||[]),points=(result.points||[]).filter(point=>!deleted.has(point.id)),nodes=byId(points);
-      for(const update of edit.node_updates||[])if(nodes.has(update.id))Object.assign(nodes.get(update.id),clone(update.changes));
+      for(const update of edit.node_updates||[])if(nodes.has(update.id)){const point=nodes.get(update.id);if(Object.hasOwn(update.changes,'time')&&!Object.hasOwn(update.changes,'chart_anchor'))delete point.chart_anchor;Object.assign(point,clone(update.changes));}
       for(const insert of edit.node_inserts||[]){
         if(nodes.has(insert.point.id))continue;
         const before=points.findIndex(point=>point.id===insert.before),after=points.findIndex(point=>point.id===insert.after);
@@ -86,7 +88,12 @@
       const saved=(sent?.object_edits||[]).find(item=>item.id===edit.id);if(!saved)continue;
       for(const[key,value]of Object.entries(saved.changes||{}))if(equal(edit.changes?.[key],value))delete edit.changes[key];
       edit.unset=(edit.unset||[]).filter(key=>!(saved.unset||[]).includes(key));
-      for(const update of edit.node_updates||[]){const old=(saved.node_updates||[]).find(item=>item.id===update.id);if(old)for(const[key,value]of Object.entries(old.changes))if(equal(update.changes[key],value))delete update.changes[key];}
+      for(const update of edit.node_updates||[]){
+        const old=(saved.node_updates||[]).find(item=>item.id===update.id);if(!old)continue;
+        const anchored=Object.hasOwn(update.changes,'chart_anchor');
+        if(anchored&&Object.hasOwn(old.changes,'chart_anchor')&&equal(update.changes.time,old.changes.time)&&equal(update.changes.chart_anchor,old.changes.chart_anchor)){delete update.changes.time;delete update.changes.chart_anchor;}
+        for(const[key,value]of Object.entries(old.changes))if(!(anchored&&['time','chart_anchor'].includes(key))&&equal(update.changes[key],value))delete update.changes[key];
+      }
       edit.node_updates=(edit.node_updates||[]).filter(update=>Object.keys(update.changes).length);
       edit.node_inserts=(edit.node_inserts||[]).filter(insert=>!(saved.node_inserts||[]).some(old=>equal(insert,old)));
       edit.node_deletes=(edit.node_deletes||[]).filter(id=>!(saved.node_deletes||[]).includes(id));

@@ -10,6 +10,15 @@
   function fieldChanges(before,after,ignored=[]){
     const changes={};for(const key of new Set([...Object.keys(before||{}),...Object.keys(after||{})]))if(!ignored.includes(key)&&!equal(before?.[key],after?.[key]))changes[key]={before:clone(before?.[key]),after:clone(after?.[key])};return changes;
   }
+  function pointChanges(before,after){
+    const fields=fieldChanges(before,after,['id','label']);
+    if((fields.time||fields.chart_anchor)&&(before.chart_anchor!=null||after.chart_anchor!=null)){
+      // Time and source-candle anchor are one horizontal coordinate; undo must check both.
+      fields.time={before:clone(before.time),after:clone(after.time)};
+      fields.chart_anchor={before:clone(before.chart_anchor),after:clone(after.chart_anchor)};
+    }
+    return fields;
+  }
   function objectChange(before,after){
     const change={before:clone(before),after:clone(after)};
     if(!before||!after)return change;
@@ -19,7 +28,7 @@
       const a=new Map(before.points.map(p=>[p.id,p])),b=new Map(after.points.map(p=>[p.id,p])),changes={};
       for(const id of new Set([...a.keys(),...b.keys()])){
         const old=a.get(id),next=b.get(id);if(equal(pointValue(old),pointValue(next)))continue;
-        changes[id]={before:clone(old),after:clone(next),...(old&&next?{fields:fieldChanges(old,next,['id','label'])}:{})};
+        changes[id]={before:clone(old),after:clone(next),...(old&&next?{fields:pointChanges(old,next)}:{})};
       }
       const beforeOrder=before.points.map(p=>p.id),afterOrder=after.points.map(p=>p.id),common=beforeOrder.filter(id=>b.has(id));
       change.nodes={changes,beforeOrder,afterOrder,reorder:!equal(common,afterOrder.filter(id=>a.has(id)))};
@@ -37,7 +46,7 @@
       const actual=points.get(id),from=change[expected],to=change[target];
       if(!from||!to){if(check&&!equal(pointValue(actual),pointValue(from)))conflicts.push(id);else if(to)points.set(id,clone(to));else points.delete(id);}
       else if(!actual)conflicts.push(id);
-      else for(const[key,field]of Object.entries(change.fields||fieldChanges(change.before,change.after,['id','label']))){if(check&&!equal(actual[key],field[expected]))conflicts.push(id+':'+key);else put(actual,key,field[target]);}
+      else for(const[key,field]of Object.entries(change.fields||pointChanges(change.before,change.after))){if(check&&!equal(actual[key],field[expected]))conflicts.push(id+':'+key);else put(actual,key,field[target]);}
     }
     let order=(current||[]).map(p=>p.id).filter(id=>points.has(id));
     const desired=nodes[target+'Order'],fromOrder=nodes[expected+'Order'];

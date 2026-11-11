@@ -17,8 +17,11 @@ COOKIE_NAME = "workspace_session"
 MAX_REQUEST_BYTES = 128 * 1024
 
 
-def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None):
-    """Providers: market(symbol), symbols(), rules(), evaluate(plan,market,risk,version)."""
+def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None,
+                       market_incremental_provider=None):
+    """Providers: market(symbol), optional incremental(symbol, token), symbols(),
+    rules(), evaluate(plan, market, risk, version). Reviews always read full data.
+    """
     bp = Blueprint("workspace", __name__, url_prefix="/api/workspace")
 
     def fail(message, code):
@@ -203,7 +206,12 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     @authenticated
     def market():
         symbol = symbol_requested()
-        return jsonify(status="ok", market=market_provider(symbol))
+        history = request.args.get("history", "")
+        if history and len(history) <= 128 and market_incremental_provider is not None:
+            result = market_incremental_provider(symbol, history)
+        else:
+            result = market_provider(symbol)
+        return jsonify(status="ok", market=result)
 
     @bp.get("/review")
     @authenticated

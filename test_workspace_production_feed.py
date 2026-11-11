@@ -6,6 +6,8 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+import numpy  # Load before patch.dict(sys.modules) can remove lazily imported C extensions.
+
 import app
 from workspace_market import WorkspaceMarketCache, timestamp
 
@@ -57,7 +59,7 @@ class FakeAPI:
         step = self.steps.pop(0)
         self.owner.monotonic = step.get("at", self.owner.monotonic)
         self.owner.now = self.owner.started + self.owner.monotonic
-        self.changed = step.get("changed", False)
+        self.changed = step.get("changed", bool(step.get("advance_price")))
         self.notifications = step.get("notifications", [])
         if step.get("advance_price"):
             for frame in self.frames.values():
@@ -186,6 +188,127 @@ class ProductionFeedTests(unittest.TestCase):
         with patch.dict(app.app.config, {"WORKSPACE_PRODUCTION": False}), \
                 patch.object(app, "_outlook_data", {(code, 180): {"bars": [{"close": 321, "dt": "old"}], "updated": 5}}):
             self.assertEqual(app._workspace_quotes_provider()[0]["price"], 321)
+
+    def reader(self):
+        code = self.presets[0]["symbol"]
+        self.cache.request(code)
+        api = FakeAPI(self, [])
+        reader = app._WorkspaceSerialReader(api, self.cache)
+        reader.subscribe_requested()
+        reader.refresh(True)
+        return code, api, reader
+
+    def test_unchanged_history_is_checked_without_conversion_after_five_minutes(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.now += 301
+        with patch.object(app, "_serial_rows", wraps=app._serial_rows) as convert:
+            reader.subscribe_requested()
+            reader.observe(False)
+            reader.refresh(True)
+        convert.assert_not_called()
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.assertEqual(len(api.calls), 3)
+        self.assertEqual(after["history_token"], before["history_token"])
+        self.assertEqual(after["quote_at"], before["quote_at"])
+        self.assertEqual(after["feed_status"], "idle")
+        self.assertTrue(all(f["checked_recent"] for f in after["freshness"].values()))
+
+    def test_accumulated_tick_converts_only_tail_after_unchanged_sdk_tick(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        api.frames[(code, 180)]["close"][-1] = 102
+        api.changed = True
+        reader.observe(True)
+        api.changed = False
+        reader.observe(True)
+        self.now += 2
+        with patch.object(app, "_serial_rows", wraps=app._serial_rows) as convert:
+            reader.refresh(True)
+        self.assertEqual(convert.call_count, 3)
+        self.assertEqual([len(call.args[0]["close"]) for call in convert.call_args_list], [2, 2, 2])
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True}, history_token=before["history_token"])
+        self.assertTrue(after["incremental"])
+        self.assertEqual(after["price"], 102)
+
+    def test_historical_correction_forces_full_resync_without_new_quote(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        api.frames[(code, 180)]["high"][100] = 105
+        api.changed = True
+        reader.observe(True)
+        self.now += 30
+        with patch.object(app, "_serial_rows", wraps=app._serial_rows) as convert:
+            reader.refresh(True)
+        self.assertEqual([len(call.args[0]["close"]) for call in convert.call_args_list], [2, 2, 10000])
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True}, history_token=before["history_token"])
+        self.assertFalse(after["incremental"])
+        self.assertEqual(after["periods"]["m3"][100]["high"], 105)
+        self.assertEqual(after["quote_at"], before["quote_at"])
+        self.assertFalse(after["fresh"])
+
+    def test_rolled_bar_reloads_full_period_and_rotates_token(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        frame = api.frames[(code, 180)]
+        for field, values in frame.items():
+            next_value = values[-1] + 180 * 1000000000 if field == "datetime" else values[-1]
+            frame[field] = Column(values[1:] + [next_value])
+        api.changed = True
+        reader.observe(True)
+        self.now += 180
+        reader.refresh(True)
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True}, history_token=before["history_token"])
+        self.assertFalse(after["incremental"])
+        self.assertEqual(len(after["periods"]["m3"]), 10000)
+        self.assertNotEqual(after["periods"]["m3"][-1]["dt"], before["periods"]["m3"][-1]["dt"])
+
+    def test_disconnected_or_invalid_tail_cannot_renew_checked_time(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.now += 30
+        reader.refresh(False)
+        disconnected = self.cache.snapshot(code, self.presets[0], {"connected": False})
+        for key in before["freshness"]:
+            self.assertEqual(disconnected["freshness"][key]["checked_at"], before["freshness"][key]["checked_at"])
+            self.assertFalse(disconnected["freshness"][key]["checked_recent"])
+        api.frames[(code, 180)]["low"][-1] = 110
+        api.changed = True
+        reader.observe(True)
+        reader.refresh(True)
+        invalid = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.assertEqual(invalid["feed_status"], "stale")
+        self.assertEqual(invalid["freshness"]["m3"]["checked_at"], before["freshness"]["m3"]["checked_at"])
+        self.assertEqual(invalid["periods"]["m3"], before["periods"]["m3"])
+        self.assertEqual(invalid["history_token"], before["history_token"])
+        api.frames[(code, 180)]["low"][-1] = 98
+        reader.refresh(True)
+        recovered = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.assertEqual(recovered["feed_status"], "idle")
+
+    def test_invalid_current_close_does_not_discard_current_bar_or_make_old_bar_fresh(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.now += 1
+        api.frames[(code, 180)]["close"][-1] = math.nan
+        api.changed = True
+        reader.observe(True)
+        reader.refresh(True)
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.assertEqual(after["periods"]["m3"], before["periods"]["m3"])
+        self.assertEqual(after["freshness"]["m3"]["checked_at"], before["freshness"]["m3"]["checked_at"])
+        self.assertEqual(after["feed_status"], "stale")
+        self.assertFalse(after["fresh"])
+
+    def test_new_subscription_rechecks_older_frames_for_nested_sdk_updates(self):
+        code, api, reader = self.reader()
+        self.cache.request(self.presets[1]["symbol"])
+        api.frames[(code, 180)]["close"][-1] = 103
+        reader.subscribe_requested()
+        self.assertEqual(len(reader.dirty), 6)
+        reader.refresh(True)
+        self.assertEqual(self.cache.snapshot(code, self.presets[0], {"connected": True})["price"], 103)
+        self.assertEqual(len(api.calls), 6)
 
 
 if __name__ == "__main__":

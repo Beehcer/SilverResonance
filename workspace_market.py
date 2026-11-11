@@ -1,6 +1,7 @@
 """Per-contract workspace chart subscriptions; independent of the legacy focus tab."""
-import copy
+import hashlib
 import math
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -48,25 +49,36 @@ def daily_boundary(value):
 
 
 class WorkspaceMarketCache:
-    def __init__(self, clock=time.time):
+    def __init__(self, clock=time.time, allowed_symbols=None):
         self.clock = clock
+        self.allowed_symbols = allowed_symbols
         self.lock = threading.RLock()
         self.requests = {}
         self.data = {}
+        self.epoch = secrets.token_hex(16)
+
+    def _allowed(self):
+        return set(self.allowed_symbols()) if self.allowed_symbols is not None else None
 
     def request(self, symbol):
         with self.lock:
+            allowed = self._allowed()
+            if allowed is not None and symbol not in allowed:
+                return False
             self.requests[symbol] = self.clock()
+            return True
 
     def requested(self):
         with self.lock:
-            return [symbol for symbol, checked in self.requests.items() if self.clock() - checked < 180]
+            allowed = self._allowed()
+            if allowed is not None:
+                self.requests = {symbol: checked for symbol, checked in self.requests.items() if symbol in allowed}
+            # Once viewed, keep its existing SDK subscriptions warm for this process.
+            return list(self.requests)
 
-    def cache(self, symbol, period, bars, simulated=False):
-        if period not in PERIODS.values() or not bars:
-            return
-        now = self.clock()
+    def _prepare_rows(self, period, bars, simulated=False):
         rows = []
+        stamps = []
         selected = bars[-data_length_for_period(period):]
         for index, bar in enumerate(selected):
             prices = [bar.get(key) for key in ("open", "high", "low", "close")]
@@ -77,68 +89,116 @@ class WorkspaceMarketCache:
                 raise ValueError("行情高低价顺序无效")
             stamp = timestamp(bar.get("dt"))
             if simulated and stamp is None:
-                stamp = int(now // period) * period - (len(selected) - index - 1) * period
-            if stamp is None or (rows and stamp <= timestamp(rows[-1]["dt"])):
+                stamp = int(self.clock() // period) * period - (len(selected) - index - 1) * period
+            if stamp is None or (stamps and stamp <= stamps[-1]):
                 raise ValueError("行情时间缺失或顺序无效")
             row = {key: bar[key] for key in ("open", "high", "low", "close", "volume", "oi") if key in bar}
             row["dt"] = iso(stamp)
             rows.append(row)
+            stamps.append(stamp)
+        for index, row in enumerate(rows):
+            start = stamps[index]
+            row["closed"] = index < len(rows) - 1
+            if period == 86400:
+                # A Monday trading-date label can already be live on Friday night.
+                row["source_trade_day"] = datetime.fromtimestamp(start, TZ).date().isoformat()
+                row["session_boundary"] = iso(daily_boundary(start))
+            if row["closed"]:
+                if period < 86400:
+                    end = min(start + period, stamps[index + 1])
+                else:
+                    label = datetime.fromtimestamp(start, TZ).replace(hour=18, minute=0, second=0, microsecond=0)
+                    end = min(label.timestamp(), daily_boundary(stamps[index + 1]))
+                row["end_time"] = row["closed_at"] = iso(end)
+        return rows
+
+    def _store_rows(self, symbol, period, rows, previous, token):
+        now = self.clock()
+        changed = not previous or previous["bars"][-1] != rows[-1]
+        start = timestamp(rows[-1]["dt"])
+        latest_possible = start + period if period < 86400 else start
+        market_at = min(now, latest_possible) if start <= now else start
+        # Entries and rows are replaced, never mutated after publication. Snapshot
+        # readers can capture references under the lock and copy outside it.
+        self.data[(symbol, period)] = {
+            "bars": rows, "checked_at": now,
+            "market_at": market_at if changed else previous["market_at"],
+            "error": None, "history_token": token,
+        }
+
+    def cache(self, symbol, period, bars, simulated=False):
+        if period not in PERIODS.values() or not bars:
+            return False
+        rows = self._prepare_rows(period, bars, simulated)
         with self.lock:
             previous = self.data.get((symbol, period))
-            # Corrections to older bars are historical evidence, not a new quote.
-            changed = not previous or previous["bars"][-1] != rows[-1]
-            start = timestamp(rows[-1]["dt"])
-            latest_possible = start + period if period < 86400 else start
-            market_at = min(now, latest_possible) if start <= now else start
-            self.data[(symbol, period)] = {
-                "bars": rows, "checked_at": now,
-                "market_at": market_at if changed else previous["market_at"],
-                "error": None,
-            }
+            old_rows = previous["bars"] if previous else []
+            same_history = (len(old_rows) == len(rows) and old_rows[:-2] == rows[:-2]
+                            and [row["dt"] for row in old_rows[-2:]] == [row["dt"] for row in rows[-2:]])
+            token = previous["history_token"] if same_history else secrets.token_hex(16)
+            self._store_rows(symbol, period, rows, previous, token)
+        return True
+
+    def update_tail(self, symbol, period, bars):
+        """Replace only a verified unchanged-window tail; otherwise request full data."""
+        if period not in PERIODS.values() or not 1 <= len(bars) <= 2:
+            return False
+        rows = self._prepare_rows(period, bars)
+        with self.lock:
+            previous = self.data.get((symbol, period))
+            if not previous:
+                return False
+            old_rows = previous["bars"]
+            if len(rows) != min(2, len(old_rows)) or [r["dt"] for r in old_rows[-2:]] != [r["dt"] for r in rows]:
+                return False
+            self._store_rows(symbol, period, old_rows[:-2] + rows, previous, previous["history_token"])
+        return True
+
+    def mark_checked(self, symbol, period):
+        with self.lock:
+            previous = self.data.get((symbol, period))
+            if not previous or previous.get("error"):
+                return False
+            self.data[(symbol, period)] = {**previous, "checked_at": self.clock()}
+            return True
+
+    def mark_failed(self, symbol, period):
+        with self.lock:
+            previous = self.data.get((symbol, period))
+            if previous:
+                self.data[(symbol, period)] = {**previous, "error": "该周期行情刷新失败"}
 
     def refresh(self, getter, simulated=False):
         for symbol in self.requested():
             for period in PERIODS.values():
                 try:
-                    self.cache(symbol, period, getter(symbol, period), simulated)
+                    if not self.cache(symbol, period, getter(symbol, period), simulated):
+                        self.mark_failed(symbol, period)
                 except Exception:
                     # Do not renew old evidence when a subscription fails.
-                    with self.lock:
-                        old = self.data.get((symbol, period))
-                        if old:
-                            old["error"] = "该周期行情刷新失败"
+                    self.mark_failed(symbol, period)
 
-    def snapshot(self, symbol, preset, state, simulated=False):
+    def snapshot(self, symbol, preset, state, simulated=False, history_token=None):
         self.request(symbol)
         now = self.clock()
         periods, freshness = {}, {}
         with self.lock:
-            for key, duration in PERIODS.items():
-                cached = copy.deepcopy(self.data.get((symbol, duration), {}))
-                bars = cached.get("bars", [])
-                for index, bar in enumerate(bars):
-                    bar["closed"] = index < len(bars) - 1
-                    if duration == 86400:
-                        # Keep the trading-date label for chart axes; do not mistake
-                        # Monday's label on Friday night for a future closing event.
-                        bar["source_trade_day"] = datetime.fromtimestamp(timestamp(bar["dt"]), TZ).date().isoformat()
-                        bar["session_boundary"] = iso(daily_boundary(timestamp(bar["dt"])))
-                    if bar["closed"]:
-                        start, next_start = timestamp(bar["dt"]), timestamp(bars[index + 1]["dt"])
-                        if duration < 86400:
-                            end = min(start + duration, next_start)
-                        else:
-                            label = datetime.fromtimestamp(start, TZ).replace(hour=18, minute=0, second=0, microsecond=0)
-                            end = min(label.timestamp(), daily_boundary(next_start))
-                        bar["end_time"] = bar["closed_at"] = iso(end)
-                periods[key] = bars
-                freshness[key] = {
-                    "checked_at": cached.get("checked_at"),
-                    "quote_at": iso(cached["market_at"]) if cached.get("market_at") else None,
-                    "available": bool(bars),
-                    "checked_recent": bool(bars and not cached.get("error") and 0 <= now - cached.get("checked_at", 0) <= 20),
-                    "changed_recent": bool(bars and 0 <= now - cached.get("market_at", 0) <= 20),
-                }
+            entries = {key: self.data.get((symbol, duration), {}) for key, duration in PERIODS.items()}
+        token_parts = [self.epoch, symbol] + [entries[key].get("history_token", "missing") for key in PERIODS]
+        token = hashlib.sha256("|".join(token_parts).encode()).hexdigest()
+        incremental = bool(history_token and history_token == token)
+        counts = {}
+        for key, cached in entries.items():
+            bars = cached.get("bars", [])
+            counts[key] = len(bars)
+            periods[key] = [dict(row) for row in (bars[-2:] if incremental else bars)]
+            freshness[key] = {
+                "checked_at": cached.get("checked_at"),
+                "quote_at": iso(cached["market_at"]) if cached.get("market_at") else None,
+                "available": bool(bars),
+                "checked_recent": bool(bars and not cached.get("error") and 0 <= now - cached.get("checked_at", 0) <= 20),
+                "changed_recent": bool(bars and 0 <= now - cached.get("market_at", 0) <= 20),
+            }
         connected = state.get("connected") is True
         m3_start = timestamp(periods["m3"][-1]["dt"]) if periods["m3"] else None
         m30_start = timestamp(periods["m30"][-1]["dt"]) if periods["m30"] else None
@@ -174,5 +234,6 @@ class WorkspaceMarketCache:
             "fresh": bool(fresh), "connected": connected, "as_of": iso(now),
             "feed_status": feed_status,
             "quote_at": freshness["m3"]["quote_at"], "periods": periods, "freshness": freshness,
+            "history_token": token, "incremental": incremental, "period_counts": counts,
             "message": message,
         }

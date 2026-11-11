@@ -65,10 +65,10 @@ class WorkspaceMarketTests(unittest.TestCase):
         self.assertFalse(disconnected["fresh"])
         self.assertEqual(disconnected["feed_status"], "disconnected")
 
-    def test_invalid_prices_and_expired_requests(self):
+    def test_invalid_prices_and_viewed_requests_stay_warm(self):
         self.cache.request("ONE")
         self.now += 181
-        self.assertEqual(self.cache.requested(), [])
+        self.assertEqual(self.cache.requested(), ["ONE"])
         broken = self.bars(180)
         broken[-1]["low"] = 1000
         with self.assertRaises(ValueError):

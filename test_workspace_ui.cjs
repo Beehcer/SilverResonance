@@ -314,7 +314,8 @@ test('forecast right-click wins at a plan-line crossing and clears a previously 
 test('plan paths keep free coordinates instead of snapping to candle OHLC',()=>{
   const{chart,pointer}=chartHarness();chart.bars=[{time:40,open:100,high:104,low:96,close:102}];chart.setTool('path');
   const point={x:chart.tx.x(40)+2,y:chart.tx.y(101.3)};chart.down(pointer(point.x,point.y));
-  assert.deepEqual(chart.path,[chart.toValue(point,false)]);
+  assert.deepEqual(chart.path.map(({time,price})=>({time,price})),[chart.toValue(point,false)]);
+  assert.equal(chart.path[0].chart_anchor.base_time,40);
   assert.notEqual(chart.path[0].price,104);
 });
 

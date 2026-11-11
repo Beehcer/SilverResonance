@@ -574,6 +574,7 @@ class WorkspaceStore:
     @staticmethod
     def _object_edits(raw):
         """Validate operation shape before merging into a concurrently edited object."""
+        from workspace_rules import validate_chart_anchor
         if not isinstance(raw, list) or len(raw) > 500:
             raise WorkspaceError("图层修改格式无效")
         seen = set()
@@ -598,17 +599,29 @@ class WorkspaceStore:
             node_ids = set()
             for update in updates:
                 if (not isinstance(update, dict) or set(update) != {"id", "changes"} or not identity(update.get("id"))
-                        or not isinstance(update["changes"], dict) or set(update["changes"]) - {"time", "price"}):
+                        or not isinstance(update["changes"], dict) or set(update["changes"]) - {"time", "price", "chart_anchor"}):
                     raise WorkspaceError("节点位置修改无效")
+                if "chart_anchor" in update["changes"]:
+                    if "time" not in update["changes"]:
+                        raise WorkspaceError("图表横坐标修改须同时提供时间与柱位锚定")
+                    try:
+                        validate_chart_anchor(update["changes"]["chart_anchor"])
+                    except ValueError as exc:
+                        raise WorkspaceError(str(exc)) from exc
                 if update["id"] in node_ids:
                     raise WorkspaceError("同一节点不能重复修改")
                 node_ids.add(update["id"])
             for insert in inserts:
                 if (not isinstance(insert, dict) or set(insert) - {"point", "before", "after"}
                         or not isinstance(insert.get("point"), dict) or not identity(insert["point"].get("id"))
-                        or set(insert["point"]) - {"id", "time", "price", "label"}
+                        or set(insert["point"]) - {"id", "time", "price", "label", "chart_anchor"}
                         or any(insert.get(k) is not None and not identity(insert[k]) for k in ("before", "after"))):
                     raise WorkspaceError("新增节点无效")
+                if "chart_anchor" in insert["point"]:
+                    try:
+                        validate_chart_anchor(insert["point"]["chart_anchor"])
+                    except ValueError as exc:
+                        raise WorkspaceError(str(exc)) from exc
                 if insert["point"]["id"] in node_ids:
                     raise WorkspaceError("同一节点不能重复修改")
                 node_ids.add(insert["point"]["id"])
@@ -635,6 +648,9 @@ class WorkspaceStore:
             for update in edit.get("node_updates", []):
                 # A stale drag must never resurrect a node another editor deleted.
                 if update["id"] in nodes:
+                    if "time" in update["changes"] and "chart_anchor" not in update["changes"]:
+                        # Older clients send absolute time only; do not retain an unrelated source-candle anchor.
+                        nodes[update["id"]].pop("chart_anchor", None)
                     nodes[update["id"]].update(copy.deepcopy(update["changes"]))
             for insert in edit.get("node_inserts", []):
                 point = copy.deepcopy(insert["point"])

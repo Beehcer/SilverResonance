@@ -7,36 +7,65 @@
   const isForecast=object=>['wave','path'].includes(object?.kind);
   const finite=value=>typeof value==='number'&&Number.isFinite(value),PERIOD_RANK={day:0,m30:1,m3:2};
   const drawingOpacity=value=>finite(value)&&value>=0&&value<=1?value:1;
+  const textWidth=(value,size)=>Array.from(String(value||'')).reduce((width,char)=>width+size*(char.codePointAt(0)>255?1:.6),0);
   function pathPeriodOpacity(source,target){if(!source||source==='all')return 1;const from=PERIOD_RANK[source],to=PERIOD_RANK[target];if(from===undefined||to===undefined||to<from)return null;return Math.pow(.4,to-from);}
   function visibleOnPeriod(object,period){if(!object.period||object.period==='all')return true;if(['path','wave'].includes(object.kind))return pathPeriodOpacity(object.period,period)!==null;return object.period===period;}
   function timestamp(value){if(finite(value))return value;const parsed=Date.parse(value);return Number.isFinite(parsed)?parsed:null;}
   function snap(price,tick){if(!finite(price)||!finite(tick)||tick<=0)return price;return Number((Math.round(price/tick)*tick).toFixed(10));}
   function priceNumber(value){if(value===null||value===undefined||String(value).trim()==='')return null;const number=Number(value);return Number.isFinite(number)&&number>0?number:null;}
   function zoneBounds(object){if(!object||!Array.isArray(object.points)||object.points.length!==2)return null;const[a,b]=object.points;if(!finite(a.price)||!finite(b.price)||a.price<=0||b.price<=0||!finite(a.time)||!finite(b.time))return null;return{low:Math.min(a.price,b.price),high:Math.max(a.price,b.price),start:Math.min(a.time,b.time),end:Math.max(a.time,b.time)};}
-  function transform(view,plot,bars=[],period=null){
-    const times=bars.map(bar=>bar.time).filter(finite),step=INTERVAL[period]||1800000;
+  function timeScale(bars=[],period=null){
+    const times=bars.map(bar=>timestamp(bar.time??bar.dt)).filter(finite),step=INTERVAL[period]||1800000;
     const position=time=>{
-      if(times.length<2)return 0;
+      if(!times.length)return time/step;
       if(time<=times[0])return (time-times[0])/step;
       const last=times.at(-1);if(time>=last)return times.length-1+(time-last)/step;
       let low=0,high=times.length-1;
       while(low+1<high){const middle=(low+high)>>1;if(times[middle]<=time)low=middle;else high=middle;}
       return low+(time-times[low])/(times[high]-times[low]);
     };
+    const time=target=>{
+      if(!times.length)return target*step;
+      const last=times.at(-1);
+      if(target<=0)return times[0]+target*step;
+      if(target>=times.length-1)return last+(target-times.length+1)*step;
+      const low=Math.floor(target),ratio=target-low;return times[low]+ratio*(times[low+1]-times[low]);
+    };
+    return{times,indices:new Map(times.map((value,index)=>[value,index])),position,time};
+  }
+  function transform(view,plot,bars=[],period=null){
+    const scale=timeScale(bars,period),times=scale.times,position=scale.position;
     const start=position(view.start),end=position(view.end),span=end-start;
     const x=time=>times.length<2?plot.x+(time-view.start)/(view.end-view.start)*plot.w:plot.x+(position(time)-start)/span*plot.w;
     const y=price=>plot.y+(view.max-price)/(view.max-view.min)*plot.h;
     const time=px=>{
       if(times.length<2)return view.start+(px-plot.x)/plot.w*(view.end-view.start);
-      const target=start+(px-plot.x)/plot.w*span,last=times.at(-1);
-      if(target<=0)return times[0]+target*step;
-      if(target>=times.length-1)return last+(target-times.length+1)*step;
-      const low=Math.floor(target),ratio=target-low;return times[low]+ratio*(times[low+1]-times[low]);
+      return scale.time(start+(px-plot.x)/plot.w*span);
     };
     return{x,y,time,price:py=>view.max-(py-plot.y)/plot.h*(view.max-view.min)};
   }
+  function resolvePointTime(point,market,scales=null){
+    const anchor=point?.chart_anchor;if(!anchor||!INTERVAL[anchor.period]||!finite(anchor.base_time)||!finite(anchor.offset))return point.time;
+    const scale=scales?.[anchor.period]||timeScale(market?.periods?.[anchor.period]||[],anchor.period);
+    if(!scale.indices.has(anchor.base_time))return point.time;
+    return scale.time(scale.indices.get(anchor.base_time)+anchor.offset);
+  }
+  function anchorPoint(point,bars,period){
+    const result={...point};if(Object.hasOwn(result,'chart_anchor'))result.chart_anchor=null;
+    const scale=timeScale(bars,period),last=scale.times.at(-1);
+    const offset=finite(last)?scale.position(point.time)-(scale.times.length-1):null;
+    if(finite(last)&&point.time>last&&offset<=10000)result.chart_anchor={period,base_time:last,offset};
+    return result;
+  }
+  function preserveView(view,previous,bars,period,follow=false){
+    if(!view||!previous.length||!bars.length)return view;
+    const before=timeScale(previous,period),after=timeScale(bars,period),base=before.times.at(-1);
+    if(!after.indices.has(base))return view;
+    const offset=after.position(base)-before.position(base),shift=follow?Math.max(0,after.position(after.times.at(-1))-after.position(base)):0;
+    return{...view,start:after.time(before.position(view.start)+offset+shift),end:after.time(before.position(view.end)+offset+shift)};
+  }
   function fitView(bars,period,levels=[]){const usable=(bars||[]).map(bar=>({...bar,time:timestamp(bar.dt)})).filter(bar=>bar.time!==null&&[bar.open,bar.high,bar.low,bar.close].every(finite));if(!usable.length)return null;const visible=usable.slice(-65),last=visible.at(-1),step=INTERVAL[period];const prices=visible.flatMap(bar=>[bar.high,bar.low]).concat(levels.filter(value=>finite(value)&&value>0));let min=Math.min(...prices),max=Math.max(...prices);const pad=Math.max((max-min)*.12,max*.001,1e-5);return{start:visible[0].time-step,end:last.time+step*14,min:min-pad,max:max+pad};}
-  function zoomView(view,period,scale,anchor=null,bars=[]){if(!view)return null;if(bars.length>1){const unit={x:0,y:0,w:1,h:1},tx=transform(view,unit,bars,period),ratio=finite(anchor?.time)?tx.x(anchor.time):.5,priceRatio=finite(anchor?.price)?(view.max-anchor.price)/(view.max-view.min):.5,price=finite(anchor?.price)?anchor.price:(view.min+view.max)/2,priceSpan=Math.max(1e-8,(view.max-view.min)/scale),slot=Math.abs(tx.x(bars.at(-1).time)-tx.x(bars.at(-2).time)),count=slot?1/slot:65,factor=Math.max(4,Math.min(700,count/scale))/count;return{start:tx.time(ratio-ratio*factor),end:tx.time(ratio+(1-ratio)*factor),min:price-(1-priceRatio)*priceSpan,max:price+priceRatio*priceSpan};}const step=INTERVAL[period]||1800000,oldTime=view.end-view.start,oldPrice=view.max-view.min,timeRange=Math.max(step*4,Math.min(step*700,oldTime/scale)),priceRange=Math.max(1e-8,oldPrice/scale),timeRatio=finite(anchor?.time)?(anchor.time-view.start)/oldTime:.5,priceRatio=finite(anchor?.price)?(view.max-anchor.price)/oldPrice:.5,centerTime=finite(anchor?.time)?anchor.time:(view.start+view.end)/2,centerPrice=finite(anchor?.price)?anchor.price:(view.min+view.max)/2;return{start:centerTime-timeRatio*timeRange,end:centerTime+(1-timeRatio)*timeRange,min:centerPrice-(1-priceRatio)*priceRange,max:centerPrice+priceRatio*priceRange};}
+  function zoomView(view,period,scale,anchor=null,bars=[],maxSlots=10000){if(!view)return null;if(bars.length>1){const unit={x:0,y:0,w:1,h:1},tx=transform(view,unit,bars,period),ratio=finite(anchor?.time)?tx.x(anchor.time):.5,priceRatio=finite(anchor?.price)?(view.max-anchor.price)/(view.max-view.min):.5,price=finite(anchor?.price)?anchor.price:(view.min+view.max)/2,priceSpan=Math.max(1e-8,(view.max-view.min)/scale),slot=Math.abs(tx.x(bars.at(-1).time)-tx.x(bars.at(-2).time)),count=slot?1/slot:65,factor=Math.max(4,Math.min(Math.max(maxSlots,bars.length+14,count),count/scale))/count;return{start:tx.time(ratio-ratio*factor),end:tx.time(ratio+(1-ratio)*factor),min:price-(1-priceRatio)*priceSpan,max:price+priceRatio*priceSpan};}const step=INTERVAL[period]||1800000,oldTime=view.end-view.start,oldPrice=view.max-view.min,timeRange=Math.max(step*4,Math.min(Math.max(step*maxSlots,oldTime),oldTime/scale)),priceRange=Math.max(1e-8,oldPrice/scale),timeRatio=finite(anchor?.time)?(anchor.time-view.start)/oldTime:.5,priceRatio=finite(anchor?.price)?(view.max-anchor.price)/oldPrice:.5,centerTime=finite(anchor?.time)?anchor.time:(view.start+view.end)/2,centerPrice=finite(anchor?.price)?anchor.price:(view.min+view.max)/2;return{start:centerTime-timeRatio*timeRange,end:centerTime+(1-timeRatio)*timeRange,min:centerPrice-(1-priceRatio)*priceRange,max:centerPrice+priceRatio*priceRange};}
   function segmentDistance(point,a,b){const dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy,ratio=length?Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.y-a.y)*dy)/length)):0;return Math.hypot(point.x-a.x-ratio*dx,point.y-a.y-ratio*dy);}
   function wavePoints(points){return points.map((p,index)=>({...p,id:p.id||('point-'+(globalThis.crypto?.randomUUID?.()||Math.random().toString(36).slice(2))),label:String(index+1)}));}
   function editPathPoints(points,segment,direction,tick,step){const next=JSON.parse(JSON.stringify(points));if(direction<0){if(next.length<=2)return next;if(Number.isInteger(segment)&&segment>=0&&segment<next.length-1)next.splice(segment+1,1);else next.pop();return next;}if(Number.isInteger(segment)&&segment>=0&&segment<next.length-1){const a=next[segment],b=next[segment+1];next.splice(segment+1,0,{time:Math.round((a.time+b.time)/2),price:snap((a.price+b.price)/2,tick)});return next;}const last=next.at(-1),previous=next.at(-2)||{time:last.time-step,price:last.price-tick*3};next.push({time:last.time+Math.max(step,last.time-previous.time),price:snap(Math.max(tick,last.price+(last.price-previous.price)),tick)});return next;}
@@ -49,12 +78,20 @@
     return{start,end:midnight+18*3600000,label};
   }
   function rangeBars(bars,range){return range?bars.filter(b=>b.time>=range.start&&b.time<range.end):[];}
-  function fitVisiblePrice(bars,view,tick=1,period="m30"){
+  function fitVisiblePrice(bars,view,tick=1,period="m30",drawings=[],pointTime=point=>point.time){
     if(!view)return view;
     const tx=transform(view,{x:0,y:0,w:1,h:1},bars,period),slot=bars.length>1?Math.abs(tx.x(bars[1].time)-tx.x(bars[0].time)):INTERVAL[period]/(view.end-view.start);
     const visible=bars.filter(b=>tx.x(b.time)>=-slot*.38&&tx.x(b.time)<=1+slot*.38&&finite(b.high)&&finite(b.low));
-    if(!visible.length)return view;
-    const low=Math.min(...visible.map(b=>b.low)),high=Math.max(...visible.map(b=>b.high)),pad=Math.max((high-low)*.08,tick*2,high*.00002);
+    const prices=visible.flatMap(bar=>[bar.low,bar.high]);
+    for(const object of drawings){
+      if(object.visible===false||drawingOpacity(object.opacity)===0||!visibleOnPeriod(object,period)||!['wave','path','segment','zone'].includes(object.kind))continue;
+      const points=(object.points||[]).map(point=>({x:tx.x(pointTime(point)),price:point.price})).filter(point=>finite(point.x)&&finite(point.price));
+      if(object.kind==='zone'&&points.length===2){if(Math.min(...points.map(p=>p.x))<=1&&Math.max(...points.map(p=>p.x))>=0)prices.push(...points.map(p=>p.price));continue;}
+      for(const point of points)if(point.x>=0&&point.x<=1)prices.push(point.price);
+      for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i];if(a.x===b.x)continue;for(const edge of [0,1])if(Math.min(a.x,b.x)<edge&&Math.max(a.x,b.x)>edge)prices.push(a.price+(b.price-a.price)*(edge-a.x)/(b.x-a.x));}
+    }
+    if(!prices.length)return view;
+    const low=Math.min(...prices),high=Math.max(...prices),pad=Math.max((high-low)*.08,tick*2,high*.00002);
     return{...view,min:low-pad,max:high+pad};
   }
   function candleWidth(bars,tx,plot,period){
@@ -88,16 +125,20 @@
       host.addEventListener('keydown',event=>this.keydown(event));
     }
     setData(market,plan,reset=false){
-      if(reset){this.linkedRange=null;this.hoverDayKey=null;this.crosshair=null;}
-      this.market=market;this.plan=plan||{objects:[]};this.tick=market?.tick||1;
+      if(reset){this.linkedRange=null;this.hoverDayKey=null;this.crosshair=null;this.pendingMarket=null;}
+      if(!reset&&(this.drag||this.path.length)){this.pendingMarket=market;this.plan=plan||{objects:[]};this.render();return;}
+      const previousBars=this.bars;
+      this.market=market;this.plan=plan||{objects:[]};this.tick=market?.tick||1;this.anchorScales={};this.syncTitleEditor();
       this.bars=(market?.periods?.[this.period]||[]).map(bar=>({...bar,time:timestamp(bar.dt)})).filter(bar=>bar.time!==null&&[bar.open,bar.high,bar.low,bar.close].every(finite));
-      const first=this.bars[0],last=this.bars.at(-1),previousLastTime=this.lastBarTime,signature=first&&last?`${first.time}:${first.open}:${last.time}`:'',contentSignature=signature+`:${last?['open','high','low','close','volume','oi'].map(key=>last[key]).join(':'):''}:${market?.fresh}:${market?.feed_status}:${market?.unavailable}`,unchanged=contentSignature===this.contentSignature;
+      const first=this.bars[0],last=this.bars.at(-1),previousLastTime=this.lastBarTime,signature=first&&last?`${first.time}:${first.open}:${last.time}:${this.bars.length}`:'',tailSignature=this.bars.slice(-2).map(bar=>['time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':')).join('|'),contentSignature=signature+`:${tailSignature}:${market?.history_token}:${market?.fresh}:${market?.feed_status}:${market?.unavailable}`,unchanged=contentSignature===this.contentSignature;
       this.contentSignature=contentSignature;this.dataSignature=signature;
+      if(!reset&&this.view&&previousBars.length&&signature!==this.previousTimelineSignature)this.view=preserveView(this.view,previousBars,this.bars,this.period,this.viewCustomized!==true&&this.followLatest!==false);
+      this.previousTimelineSignature=signature;
       if(reset||!this.view)this.fit();
       else if(this.viewCustomized===true||this.followLatest===false){if(!unchanged)this.render();}
       else if(last){
         let changed=false;
-        if(finite(previousLastTime)&&last.time>previousLastTime){const delta=last.time-previousLastTime;const tx=transform(this.view,{x:0,y:0,w:1,h:1},this.bars,this.period),shift=tx.x(last.time)-tx.x(previousLastTime);this.view={...this.view,start:tx.time(shift),end:tx.time(1+shift)};changed=true;}
+        if(finite(previousLastTime)&&last.time>previousLastTime)changed=true;
         const padding=(this.view.max-this.view.min)*.03;
         if(last.close>this.view.max){const delta=last.close-this.view.max+padding;this.view={...this.view,min:this.view.min+delta,max:this.view.max+delta};changed=true;}
         else if(last.close<this.view.min){const delta=last.close-this.view.min-padding;this.view={...this.view,min:this.view.min+delta,max:this.view.max+delta};changed=true;}
@@ -124,16 +165,23 @@
       this.svg.append(createSVG('rect',{'data-linked-volume':range.label,x,y:this.indicator.y,width:right-x,height:this.indicator.h,fill:'#509fce','fill-opacity':'.12','pointer-events':'none'}));
     }
     setPresence(peers){const next=peers||[],signature=JSON.stringify(next);if(signature===this.presenceSignature)return;this.presenceSignature=signature;this.peers=next;if(this.peerLayer&&this.tx)this.renderPresence();}
-    setPlan(plan){this.plan=plan||{objects:[]};if(this.titleObjectId){const object=this.plan.objects.find(o=>o.id===this.titleObjectId);if(!object||object.locked)this.closeTitleEditor();}this.render();}
+    setPlan(plan){this.plan=plan||{objects:[]};this.syncTitleEditor();this.render();}
     setTool(tool,options={}){this.snapPreview=null;this.lastPathClick=null;if(this.period==='day'&&this.hoverDayKey){this.hoverDayKey=null;this.callbacks.hoverDay?.(null);}if(this.drag)this.cancelGesture();this.closeTextEditor();this.closeTitleEditor();this.cancelPath({render:false});this.placementPreview=null;this.tool=tool;this.toolDirection=['long','short'].includes(options.direction)?options.direction:null;this.toolName=options.name||null;this.toolColor=options.color||null;this.toolOpacity=drawingOpacity(options.opacity);this.hoverPath=null;this.pathControl=null;this.insertWave=null;this.draft=null;this.host.style.cursor=tool==='pan'?'grab':tool==='select'?'default':'crosshair';this.render();}
     fit(includeDrawings=false){
       this.followLatest=true;this.viewCustomized=false;this.autoPrice=!includeDrawings;
       const drawings=(this.plan.objects||[]).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period)),levels=includeDrawings?[this.plan.entry_low,this.plan.entry_high,this.plan.stop_price,this.plan.planned_entry_price,this.plan.main_level,this.plan.trigger_price,this.plan.obstacle_price,...drawings.flatMap(object=>object.points.map(point=>point.price))]:[];
       this.view=fitView(this.bars,this.period,levels);
-      if(includeDrawings&&this.view){const points=drawings.flatMap(object=>object.points);if(points.length){const start=Math.min(this.view.start,...points.map(point=>point.time)),end=Math.max(this.view.end,...points.map(point=>point.time)),padding=Math.max(INTERVAL[this.period],(end-start)*.03);this.view={...this.view,start:start-padding,end:end+padding};}}
+      if(includeDrawings&&this.view){const points=drawings.flatMap(object=>object.points);if(points.length){const start=Math.min(this.view.start,...points.map(point=>this.pointTime(point))),end=Math.max(this.view.end,...points.map(point=>this.pointTime(point))),padding=Math.max(INTERVAL[this.period],(end-start)*.03);this.view={...this.view,start:start-padding,end:end+padding};}}
       this.render();this.callbacks.viewChanged?.(this);
     }
-    zoom(scale,point=null){if(!this.view)return;const inside=point&&this.plot&&point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h,rightBar=this.bars.filter(b=>b.time>=this.view.start&&b.time<=this.view.end).at(-1),anchor=inside?this.toValue(point,false):rightBar?{time:rightBar.time,price:rightBar.close}:null;this.view=fitVisiblePrice(this.bars,zoomView(this.view,this.period,scale,anchor,this.bars),this.tick,this.period);this.autoPrice=true;this.viewCustomized=true;this.callbacks.viewChanged?.(this);this.render();}
+    zoom(scale,point=null){if(!this.view)return;const inside=point&&this.plot&&point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h,rightBar=this.bars.filter(b=>b.time>=this.view.start&&b.time<=this.view.end).at(-1),anchor=inside?this.toValue(point,false):rightBar?{time:rightBar.time,price:rightBar.close}:null;this.view=this.priceFit(zoomView(this.view,this.period,scale,anchor,this.bars,this.zoomLimit()));this.autoPrice=true;this.viewCustomized=true;this.callbacks.viewChanged?.(this);this.render();}
+    pointTime(point){this.anchorScales??={};const period=point?.chart_anchor?.period;if(period&&INTERVAL[period]&&!this.anchorScales[period])this.anchorScales[period]=timeScale(this.market?.periods?.[period]||(period===this.period?this.bars:[]),period);return resolvePointTime(point,this.market,this.anchorScales);}
+    zoomLimit(){const scale=timeScale(this.bars,this.period);let left=0,right=this.bars.length;for(const object of this.objects())for(const point of object.points||[]){const position=scale.position(this.pointTime(point));if(finite(position)){left=Math.min(left,position);right=Math.max(right,position);}}return Math.max(10000,(right-left)*1.4+30);}
+    forecastPoint(point){return anchorPoint(point,this.bars,this.period);}
+    applyPendingMarket(){if(this.pendingMarket&&!this.drag&&!this.path.length){const market=this.pendingMarket;this.pendingMarket=null;this.setData(market,this.plan);}}
+    editForecastPoints(object,segment,direction){const rendered=object.points.map(point=>({...point,time:this.pointTime(point)})),edited=editPathPoints(rendered,segment,direction,this.tick,INTERVAL[this.period]);return edited.map(point=>{const index=rendered.findIndex(old=>old.id===point.id&&old.time===point.time&&old.price===point.price);return index>=0?{...object.points[index]}:this.forecastPoint(point);});}
+    priceFit(view){return fitVisiblePrice(this.bars,view,this.tick,this.period,this.objects(),point=>this.pointTime(point));}
+    locateObject(object){const points=object?.points||[];if(!points.length||!this.view)return;const times=points.map(point=>this.pointTime(point)),prices=points.map(point=>point.price),scale=timeScale(this.bars,this.period),positions=times.map(time=>scale.position(time)),left=Math.min(...positions),right=Math.max(...positions),span=Math.max(8,(right-left)*1.3),low=Math.min(...prices),high=Math.max(...prices),pad=Math.max(this.tick*4,(high-low)*.15);this.view={start:scale.time((left+right-span)/2),end:scale.time((left+right+span)/2),min:low-pad,max:high+pad};this.autoPrice=false;this.followLatest=false;this.viewCustomized=true;this.render();}
     point(event){const bounds=this.svg.getBoundingClientRect(),box=this.svg.viewBox?.baseVal,sx=box?.width&&bounds.width?box.width/bounds.width:1,sy=box?.height&&bounds.height?box.height/bounds.height:1;return{x:(event.clientX-bounds.left)*sx+(box?.x||0),y:(event.clientY-bounds.top)*sy+(box?.y||0)};}
     snapTarget(point){
       if(this.callbacks.snapEnabled&&!this.callbacks.snapEnabled()||point.x<this.plot.x||point.x>this.plot.x+this.plot.w)return null;
@@ -143,7 +191,7 @@
     }
     toValue(point,useSnap=true,freePrice=false){const target=useSnap?this.snapTarget(point):null;return target?{time:target.time,price:target.price}:{time:Math.max(0,Math.round(this.tx.time(point.x))),price:freePrice?Math.max(Number.EPSILON,this.tx.price(point.y)):snap(Math.max(this.tick,this.tx.price(point.y)),this.tick)};}
     objects(){return(this.plan.objects||[]).map((o,i)=>({o,rank:Number.isFinite(o.z_index)?o.z_index:i})).sort((a,b)=>a.rank-b.rank).map(item=>item.o).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period));}
-    objectPoints(object){return(object.points||[]).map(point=>({x:this.tx.x(point.time),y:this.tx.y(point.price)}));}
+    objectPoints(object){return(object.points||[]).map(point=>({x:this.tx.x(this.pointTime(point)),y:this.tx.y(point.price)}));}
     hit(point){
       const objects=this.objects().slice().reverse();let closest=null;
       for(const object of objects){if((!isForecast(object)&&object.id!==this.selected)||object.kind==='zone')continue;const points=this.objectPoints(object);for(let index=0;index<points.length;index++){const distance=Math.hypot(point.x-points[index].x,point.y-points[index].y);if(distance<=12&&(!closest||distance<closest.distance))closest={object,anchor:index,distance};}}
@@ -151,7 +199,7 @@
       for(const object of [...objects.filter(o=>o.kind!=='zone'),...objects.filter(o=>o.kind==='zone')]){const points=this.objectPoints(object);
         if(object.kind==='zone'){const bounds=zoneBounds(object);if(bounds&&point.x>=this.tx.x(bounds.start)-5&&point.x<=this.tx.x(bounds.end)+5&&point.y>=this.tx.y(bounds.high)-5&&point.y<=this.tx.y(bounds.low)+5)return{object,anchor:null};}
         else if(object.kind==='horizontal'&&points[0]&&Math.abs(point.y-points[0].y)<7)return{object,anchor:null};
-        else if(object.kind==='text'&&points[0]&&Math.abs(point.y-points[0].y)<12&&point.x>=points[0].x-5&&point.x<=points[0].x+Math.max(45,(object.name||'').length*13))return{object,anchor:null};
+        else if(object.kind==='text'&&points[0]&&(this.titleContains(object,point)||Math.hypot(point.x-points[0].x,point.y-points[0].y)<=8))return{object,anchor:null};
         else if(['trend','reference'].includes(object.kind)&&points.length>=2){const segment=infiniteSegment(points[0],points[1],this.plot);if(segmentDistance(point,segment[0],segment[1])<8)return{object,anchor:null};}
         else for(let index=1;index<points.length;index++)if(segmentDistance(point,points[index-1],points[index])<8)return{object,anchor:null,segment:index-1};
       }return null;
@@ -160,17 +208,40 @@
     levelGeometry(){return planLevelGeometry(this.displayPlan(),this.tx,this.plot,this.host.clientWidth);}
     clearPresence(cursor=null){this.callbacks.presence?.({object_id:null,preview_object:null,cursor,editing:false},true);}
     releasePointer(drag){if(drag&&this.svg.hasPointerCapture?.(drag.pointerId))this.svg.releasePointerCapture(drag.pointerId);}
-    cancelGesture(){this.snapPreview=null;const drag=this.drag;this.drag=null;this.placementPreview=null;this.callbacks.previewLevel?.(null,null);if(drag?.kind==='plan-level')this.callbacks.dragLevel?.(drag.field,drag.originPrice,{phase:'cancel'});if(drag?.kind==='pan')this.view=drag.view;this.releasePointer(drag);this.clearPresence();this.render();}
+    cancelGesture(){this.snapPreview=null;const drag=this.drag;this.drag=null;this.placementPreview=null;this.callbacks.previewLevel?.(null,null);if(drag?.kind==='plan-level')this.callbacks.dragLevel?.(drag.field,drag.originPrice,{phase:'cancel'});if(drag?.kind==='pan')this.view=drag.view;this.releasePointer(drag);this.clearPresence();this.applyPendingMarket();this.render();}
     closeTextEditor(){if(this.textEditor)this.textEditor.hidden=true;this.textAnchor=null;}
-    zoneTitleAt(point){for(const object of this.objects().slice().reverse()){if(object.kind!=='zone')continue;const b=zoneBounds(object);if(!b)continue;const x=Math.max(this.plot.x+4,this.tx.x(b.start)+4),y=Math.max(this.plot.y+12,this.tx.y(b.high)+12),width=Math.max(24,(object.name||'区域').length*11);if(point.x>=x-4&&point.x<=x+width&&point.y>=y-12&&point.y<=y+4)return object;}return null;}
-    closeTitleEditor(){if(this.titleObjectId)this.clearPresence();if(this.titleEditor)this.titleEditor.hidden=true;this.titleObjectId=null;}
+    nameLabel(object){
+      const point=object?.points?.[0];if(!point||!this.tx)return null;const tx=this.tx,plot=this.plot;let x,y,name,size=10,anchor='start';
+      if(object.kind==='zone'){const b=zoneBounds(object);if(!b)return null;x=Math.max(plot.x+4,tx.x(b.start)+4);y=Math.max(plot.y+12,tx.y(b.high)+12);name=object.name||TYPES[object.zone_type]||'区域';}
+      else if(object.kind==='text'){anchor=object.text_side==='left'?'end':'start';x=tx.x(point.time)+(anchor==='end'?-7:7);y=tx.y(point.price)+4;size=12;name=object.name||'文本';}
+      else if(object.kind==='horizontal'){x=plot.x+5;y=tx.y(point.price)-4;name=object.name||'水平线';}
+      else if(['trend','reference'].includes(object.kind)){x=tx.x(point.time)+4;y=tx.y(point.price)-6;name=object.name||(object.kind==='trend'?'趋势线':'参考线');}
+      else if(object.kind==='segment'&&object.name&&object.name!=='水平线段'){x=Math.max(plot.x+4,Math.min(...this.objectPoints(object).map(p=>p.x)));y=tx.y(point.price)+14;name=object.name;}
+      else return null;
+      const width=Math.max(12,textWidth(name,size)),left=anchor==='end'?x-width:x;
+      return{x,y,name,size,anchor,left,width};
+    }
+    titleContains(object,point){const label=this.nameLabel(object);return Boolean(label&&point.x>=label.left-3&&point.x<=label.left+label.width+3&&point.y>=label.y-label.size-3&&point.y<=label.y+4);}
+    editableTitleAt(point,event=null){
+      if(event?.target?.closest?.('[data-layer-price],[data-segment-price]'))return null;
+      const objects=this.objects().slice().reverse(),id=event?.target?.closest?.('[data-edit-name]')?.getAttribute('data-edit-name');
+      if(id){const exact=objects.find(object=>object.id===id&&this.nameLabel(object));if(exact)return exact;}
+      return objects.find(object=>this.titleContains(object,point))||null;
+    }
+    zoneTitleAt(point){return this.objects().slice().reverse().find(object=>object.kind==='zone'&&this.titleContains(object,point))||null;}
+    syncTitleEditor(){if(!this.titleObjectId)return;const object=this.plan.objects?.find(o=>o.id===this.titleObjectId);if(!object||object.locked||object.visible===false||!visibleOnPeriod(object,this.period)||!this.nameLabel(object)||this.selected!==object.id)this.closeTitleEditor();}
+    closeTitleEditor(){const editing=this.titleObjectId;this.titleObjectId=null;if(this.titleEditor)this.titleEditor.hidden=true;if(editing)this.clearPresence();}
     openTitleEditor(object,point){
-      if(object.locked){this.callbacks.notice?.('标记已锁定，请先解锁。');return;}
-      if(!this.titleEditor){const input=document.createElement('input');input.className='chart-title-editor';input.maxLength=80;input.setAttribute('aria-label','区域标题');this.host.append(input);this.titleEditor=input;
-        const save=event=>{if(event.isComposing||!this.titleObjectId)return;const current=this.plan.objects.find(o=>o.id===this.titleObjectId);if(!current||current.locked){this.closeTitleEditor();return;}if(current.name!==input.value)this.callbacks.update?.(current.id,{name:input.value});};
-        input.addEventListener('input',save);input.addEventListener('compositionend',save);input.addEventListener('blur',()=>{this.closeTitleEditor();this.clearPresence();});input.addEventListener('keydown',event=>{event.stopPropagation();if(event.key==='Enter'||event.key==='Escape'){event.preventDefault();input.blur();}});
+      const current=this.plan.objects?.find(item=>item.id===object?.id);if(!current||!this.nameLabel(current))return;
+      if(current.locked){this.callbacks.notice?.('标记已锁定，请先解锁。');return;}
+      this.closeTextEditor();this.closeTitleEditor();this.selected=current.id;this.selectedAnchor=null;this.callbacks.select?.(current.id,null);
+      if(!this.titleEditor){const input=document.createElement('input');input.className='chart-title-editor';input.maxLength=80;input.autocomplete='off';this.host.append(input);this.titleEditor=input;
+        const save=event=>{if(event?.isComposing||this.titleComposing||!this.titleObjectId)return;const latest=this.plan.objects?.find(o=>o.id===this.titleObjectId);if(!latest||latest.locked||latest.visible===false){this.closeTitleEditor();return;}if(input.value===this.titleLastValue)return;this.titleLastValue=input.value;if(latest.name!==input.value)this.callbacks.update?.(latest.id,{name:input.value});};
+        input.addEventListener('compositionstart',()=>{this.titleComposing=true;});input.addEventListener('input',save);input.addEventListener('compositionend',event=>{this.titleComposing=false;save(event);});
+        input.addEventListener('blur',event=>{save(event);this.closeTitleEditor();});input.addEventListener('keydown',event=>{event.stopPropagation();if(event.isComposing||this.titleComposing||event.keyCode===229)return;if(event.key==='Enter'||event.key==='Escape'){event.preventDefault();if(event.key==='Enter')save(event);this.closeTitleEditor();this.host.focus({preventScroll:true});}});
       }
-      this.titleObjectId=object.id;this.titleEditor.value=object.name||'';this.titleEditor.hidden=false;this.titleEditor.style.left=Math.max(4,Math.min(point.x,this.host.clientWidth-190))+'px';this.titleEditor.style.top=Math.max(4,Math.min(point.y-14,this.host.clientHeight-32))+'px';this.titleEditor.focus();this.titleEditor.select();this.callbacks.presence?.({object_id:object.id,editing:true},true);
+      const label=this.nameLabel(current),width=Math.max(90,Math.min(360,this.host.clientWidth-8,label.width+24));
+      this.titleObjectId=current.id;this.titleComposing=false;this.titleEditor.value=current.name||'';this.titleLastValue=this.titleEditor.value;this.titleEditor.setAttribute('aria-label',current.kind==='text'?'文本内容':'图层名称');this.titleEditor.hidden=false;this.titleEditor.style.width=width+'px';this.titleEditor.style.left=Math.max(4,Math.min(label.left,this.host.clientWidth-width-4))+'px';this.titleEditor.style.top=Math.max(4,Math.min(label.y-label.size-7,this.host.clientHeight-32))+'px';this.titleEditor.focus();this.titleEditor.select();this.callbacks.presence?.({object_id:current.id,editing:true},true);
     }
     openTextEditor(value,point){
       let form=this.textEditor;
@@ -190,7 +261,7 @@
       const object=this.plan.objects?.find(o=>o.id===id&&isForecast(o));if(!object||object.locked)return;
       const points=JSON.parse(JSON.stringify(object.points));let segment=Number.isInteger(atSegment)?atSegment:this.selected===id&&Number.isInteger(this.selectedAnchor)?this.selectedAnchor:null;
       if(segment===null){const screen=this.objectPoints(object);let distance=Infinity;for(let i=0;i<screen.length-1;i++){const d=segmentDistance(point,screen[i],screen[i+1]);if(d<distance){distance=d;segment=i;}}}
-      const index=Math.min(points.length,(segment??points.length-1)+1);points.splice(index,0,this.toValue(point,false,true));
+      const index=Math.min(points.length,(segment??points.length-1)+1);points.splice(index,0,this.forecastPoint(this.toValue(point,false,true)));
       this.selectedAnchor=index;this.insertWave=null;this.callbacks.update?.(id,{points:wavePoints(points)});this.callbacks.anchorSelected?.(id,index);this.render();
     }
     deleteSelection(){const object=this.plan.objects?.find(o=>o.id===this.selected);if(!object)return;if(object.locked){this.callbacks.notice?.('标记已锁定，请先解锁。');return;}if(isForecast(object)&&Number.isInteger(this.selectedAnchor)){if(object.points.length<=2){this.callbacks.notice?.('预期线至少保留两个点；点击线段后按 Delete 可删除整条。');return;}this.deleteWavePoint();return;}this.callbacks.deleteObject?.(object.id);}
@@ -198,13 +269,13 @@
       const object=this.plan.objects?.find(o=>o.id===this.selected&&isForecast(o));if(!object||object.locked||object.points.length<=2||!Number.isInteger(this.selectedAnchor))return;
       const points=object.points.filter((p,i)=>i!==this.selectedAnchor);this.selectedAnchor=null;this.callbacks.update?.(object.id,{points:wavePoints(points)});this.callbacks.anchorSelected?.(object.id,null);this.render();
     }
-    adjustPathControl(control){const object=this.plan.objects?.find(item=>item.id===control.id&&['path','wave'].includes(item.kind));if(!object||object.locked)return;let points;if(Number.isInteger(control.index)&&control.direction<0){points=JSON.parse(JSON.stringify(object.points));if(points.length<=2)return;points.splice(control.index,1);}else{const segment=Number.isInteger(control.index)?(control.index<object.points.length-1?control.index:null):control.segment;points=editPathPoints(object.points,segment,control.direction,this.tick,INTERVAL[this.period]);if(control.direction>0&&Number.isInteger(control.index)){const inserted=points[control.index+1];if(inserted)points[control.index+1]=this.toValue({x:this.tx.x(inserted.time),y:this.tx.y(inserted.price)},false);}}if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});this.hoverPath=null;this.pathControl=null;this.pathControls=null;}
+    adjustPathControl(control){const object=this.plan.objects?.find(item=>item.id===control.id&&['path','wave'].includes(item.kind));if(!object||object.locked)return;let points;if(Number.isInteger(control.index)&&control.direction<0){points=JSON.parse(JSON.stringify(object.points));if(points.length<=2)return;points.splice(control.index,1);}else{const segment=Number.isInteger(control.index)?(control.index<object.points.length-1?control.index:null):control.segment;points=this.editForecastPoints(object,segment,control.direction);}if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});this.hoverPath=null;this.pathControl=null;this.pathControls=null;}
     down(event){
       // Open on secondary press: live SVG redraws can remove the native contextmenu target.
       if(event.button===2){this.contextMenu(event);this.secondaryPress={x:event.clientX,y:event.clientY,at:event.timeStamp??Date.now()};return;}
       if(event.button!==0||!this.view||!this.tx)return;this.callbacks.interaction?.();this.callbacks.activate?.(this.period);this.host.focus({preventScroll:true});const point=this.point(event),inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h,levelHit=this.tool==='select'?hitPlanLevel(point,this.levelGeometry(),this.plot,this.host.clientWidth):null;
       if(!inside&&!levelHit)return;event.preventDefault?.();this.svg.setPointerCapture(event.pointerId);const value=this.toValue(point);if(this.insertWave){this.insertWavePoint(this.insertWave,point);this.releasePointer({pointerId:event.pointerId});return;}const objectHit=this.tool==='select'?this.hit(point):null,pathControl=this.tool==='select'?this.hitPathControl(point):null;if(pathControl){this.adjustPathControl(pathControl);this.render();return;}
-      const title=this.tool==='select'?this.zoneTitleAt(point):null,titleTime=event.timeStamp??Date.now(),lastTitle=this.lastTitleClick;this.lastTitleClick=title?{id:title.id,at:titleTime,point}:null;
+      const title=this.tool==='select'?this.editableTitleAt(point,event):null,titleTime=event.timeStamp??Date.now(),lastTitle=this.lastTitleClick;this.lastTitleClick=title?{id:title.id,at:titleTime,point}:null;
       if(title&&lastTitle?.id===title.id&&titleTime-lastTitle.at<=450&&Math.hypot(point.x-lastTitle.point.x,point.y-lastTitle.point.y)<=6){this.lastTitleClick=null;this.suppressDoubleClickUntil=titleTime+450;this.releasePointer({pointerId:event.pointerId});this.openTitleEditor(title,point);return;}
       if(['planned-entry','planned-stop'].includes(this.tool)){this.drag={kind:'place-level',field:this.tool==='planned-entry'?'planned_entry_price':'stop_price',price:this.toValue(point,false).price,pointerId:event.pointerId};this.callbacks.previewLevel?.(this.drag.field,this.drag.price);this.render();return;}
       if(['path','wave'].includes(this.tool)){
@@ -212,7 +283,7 @@
         const finish=previous&&now-previous.at>=0&&now-previous.at<=450&&Math.hypot(point.x-previous.x,point.y-previous.y)<=6;
         this.releasePointer({pointerId:event.pointerId});
         if(finish){this.lastDrawingClick=null;this.suppressDoubleClickUntil=now+450;this.finishPath(event);return;}
-        this.lastDrawingClick={x:point.x,y:point.y,at:now};this.path.push(this.toValue(point,false,this.tool==='wave'));
+        this.lastDrawingClick={x:point.x,y:point.y,at:now};this.path.push(this.forecastPoint(this.toValue(point,false,this.tool==='wave')));
         this.callbacks.draftChanged?.({period:this.period,count:this.path.length});this.render();return;
       }
       if(this.tool==='horizontal'){this.callbacks.add?.({kind:'horizontal',name:'水平线',points:[value],color:'#f1c40f',opacity:this.toolOpacity,period:'all'});return;}
@@ -222,7 +293,7 @@
       if(this.tool==='zone'){this.drag={kind:'new-zone',origin:value,point:value,pointerId:event.pointerId};this.render();return;}
       if(levelHit&&!(isForecast(objectHit?.object)&&levelHit.target!=='label')){this.selected=null;this.selectedLevel=levelHit.field;this.callbacks.select?.(null);this.drag={...beginLevelDrag(levelHit.field,levelHit.price,this.tick),pointerId:event.pointerId};this.callbacks.dragLevel?.(levelHit.field,levelHit.price,{phase:'start'});this.callbacks.presence?.({object_id:'field:'+levelHit.field,cursor:{...value,price:levelHit.price},preview_object:null,editing:true},true);this.render();return;}
       if(this.tool==='pan'){this.followLatest=false;this.drag={kind:'pan',origin:point,view:{...this.view},pointerId:event.pointerId};this.render();return;}
-      const hit=objectHit;this.selectedLevel=null;
+      const hit=title?{object:title,anchor:null}:objectHit;this.selectedLevel=null;
       // SVG children are replaced while selecting, so native dblclick may lose its target.
       const now=event.timeStamp??Date.now(),previousClick=this.lastPathClick;
       this.lastPathClick=isForecast(hit?.object)?{id:hit.object.id,anchor:hit.anchor,segment:hit.segment,x:point.x,y:point.y,at:now}:null;
@@ -240,7 +311,7 @@
       if(drag.anchor===null){
         // Replay this gesture on the latest geometry instead of restoring its starting snapshot.
         const zoneDelta=current.kind==='zone'?Math.max(dp,this.tick-Math.min(...current.points.map(point=>point.price))):dp;
-        return{...current,points:current.points.map(anchor=>({...anchor,time:['zone','segment'].includes(current.kind)?Math.max(0,Math.round(this.tx.time(this.tx.x(anchor.time)+drag.point.x-drag.start.x))):Math.max(0,anchor.time+dt),price:current.kind==='zone'?anchor.price+zoneDelta:isForecast(current)?Math.max(Number.EPSILON,anchor.price+dp):snap(Math.max(this.tick,anchor.price+dp),this.tick)}))};
+        return{...current,points:current.points.map(anchor=>{const horizontalMove=Math.abs(drag.point.x-drag.start.x)>.01,moved={...anchor,time:isForecast(current)&&!horizontalMove?anchor.time:['zone','segment'].includes(current.kind)||isForecast(current)?Math.max(0,Math.round(this.tx.time(this.tx.x(this.pointTime(anchor))+drag.point.x-drag.start.x))):Math.max(0,anchor.time+dt),price:current.kind==='zone'?anchor.price+zoneDelta:isForecast(current)?Math.max(Number.EPSILON,anchor.price+dp):snap(Math.max(this.tick,anchor.price+dp),this.tick)};return isForecast(current)&&horizontalMove?this.forecastPoint(moved):moved;})};
       }
       const original=drag.object.points[drag.anchor];
       // Stable IDs survive peer insertions/deletions. Legacy forecasts use an exact, unique anchor match.
@@ -254,12 +325,12 @@
         value.price=current.points[0].price;
       }
       this.selectedAnchor=index;
-      return{...current,points:current.points.map((anchor,i)=>i===index?{...anchor,...value}:anchor)};
+      return{...current,points:current.points.map((anchor,i)=>i===index?(isForecast(current)?Math.abs(drag.point.x-drag.start.x)<=.01?{...anchor,price:value.price}:this.forecastPoint({...anchor,...value}):{...anchor,...value}):anchor)};
     }
     move(event){
       if(!this.view||!this.tx)return;const point=this.point(event);this.crosshair=point;if(this.period==='day'){const range=!this.drag&&this.tool==='select'?this.dayAt(point):null,key=range?.label||null;if(key!==this.hoverDayKey){this.hoverDayKey=key;this.callbacks.hoverDay?.(range);}}if(!this.drag&&['planned-entry','planned-stop'].includes(this.tool)){const inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h;this.placementPreview=inside?{field:this.tool==='planned-entry'?'planned_entry_price':'stop_price',price:this.toValue(point,false).price}:null;this.callbacks.previewLevel?.(this.placementPreview?.field||null,this.placementPreview?.price||null);}
       if(this.drag){const drag=this.drag;
-        if(drag.kind==='pan'){const tx=transform(drag.view,this.plot,this.bars,this.period),dx=point.x-drag.origin.x,dp=(point.y-drag.origin.y)/this.plot.h*(drag.view.max-drag.view.min);this.view={start:tx.time(this.plot.x-dx),end:tx.time(this.plot.x+this.plot.w-dx),min:drag.view.min+dp,max:drag.view.max+dp};this.autoPrice=true;this.view=fitVisiblePrice(this.bars,this.view,this.tick,this.period);this.callbacks.viewChanged?.(this);}
+        if(drag.kind==='pan'){const tx=transform(drag.view,this.plot,this.bars,this.period),dx=point.x-drag.origin.x,dp=(point.y-drag.origin.y)/this.plot.h*(drag.view.max-drag.view.min);this.view={start:tx.time(this.plot.x-dx),end:tx.time(this.plot.x+this.plot.w-dx),min:drag.view.min+dp,max:drag.view.max+dp};this.autoPrice=true;this.view=this.priceFit(this.view);this.callbacks.viewChanged?.(this);}
         else if(drag.kind==='plan-level'){this.drag=moveLevelDrag(drag,this.toValue(point,false).price,this.tick);this.callbacks.dragLevel?.(drag.field,this.drag.price,{phase:'move'});}
         else if(drag.kind==='place-level'){drag.price=this.toValue(point,false).price;this.callbacks.previewLevel?.(drag.field,drag.price);}
         else if(drag.kind==='new-zone'||drag.kind==='new-line')drag.point=this.toValue(point);
@@ -280,11 +351,11 @@
       else if(drag.kind==='new-line'){if(Math.hypot(drag.origin.time-drag.point.time,drag.origin.price-drag.point.price)>0)this.callbacks.add?.({kind:drag.lineKind,name:drag.lineKind==='trend'?'趋势线':'参考线',period:'all',points:[drag.origin,drag.point],color:'#f1c40f',opacity:this.toolOpacity,line_style:drag.lineKind==='reference'?'dashed':'solid'});}
       else if(drag.kind==='new-segment'){if(Math.abs(this.tx.x(drag.origin.time)-this.tx.x(drag.point.time))>=3)this.callbacks.add?.({kind:'segment',name:'水平线段',period:this.period,points:[drag.origin,drag.point],opacity:this.toolOpacity});}
       else if(drag.kind==='object'&&drag.moved){const preview=this.objectDragPreview(drag);if(preview)this.callbacks.update?.(drag.object.id,{points:preview.points});}this.render();
-      this.snapPreview=null;const point=this.point(event),inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h;this.clearPresence(inside?this.toValue(point,false,true):null);
+      this.snapPreview=null;const point=this.point(event),inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h;this.clearPresence(inside?this.toValue(point,false,true):null);this.applyPendingMarket();
     }
     editPathAtHit(hit,point){if(!isForecast(hit?.object))return;this.selected=hit.object.id;this.selectedAnchor=hit.anchor;this.callbacks.select?.(hit.object.id,hit.anchor);if(Number.isInteger(hit.anchor))this.deleteSelection();else if(Number.isInteger(hit.segment))this.insertWavePoint(hit.object.id,point,hit.segment);}
-    doubleClick(event){if((event.timeStamp??Date.now())<=this.suppressDoubleClickUntil){event.preventDefault();return;}if(['path','wave'].includes(this.tool)){event.preventDefault();this.finishPath(event);return;}if(this.tool!=='select'||!this.tx)return;const point=this.point(event),title=this.zoneTitleAt(point);if(title){event.preventDefault();this.openTitleEditor(title,point);return;}const hit=this.hit(point);if(isForecast(hit?.object)){event.preventDefault();this.lastPathClick=null;this.editPathAtHit(hit,point);}}
-    cancelPath({render=true}={}){const hadPoints=this.path.length>0;this.path=[];this.lastDrawingClick=null;this.callbacks.draftChanged?.({period:this.period,count:0});if(render)this.render();return hadPoints;}
+    doubleClick(event){if((event.timeStamp??Date.now())<=this.suppressDoubleClickUntil){event.preventDefault();return;}if(['path','wave'].includes(this.tool)){event.preventDefault();this.finishPath(event);return;}if(this.tool!=='select'||!this.tx)return;const point=this.point(event),title=this.editableTitleAt(point,event);if(title){event.preventDefault();this.openTitleEditor(title,point);return;}const hit=this.hit(point);if(isForecast(hit?.object)){event.preventDefault();this.lastPathClick=null;this.editPathAtHit(hit,point);}}
+    cancelPath({render=true}={}){const hadPoints=this.path.length>0;this.path=[];this.lastDrawingClick=null;this.callbacks.draftChanged?.({period:this.period,count:0});this.applyPendingMarket();if(render)this.render();return hadPoints;}
     finishPath(event){
       event?.preventDefault();if(!['path','wave'].includes(this.tool)||this.path.length<2)return false;
       const points=this.path.filter((point,index,array)=>!index||point.time!==array[index-1].time||point.price!==array[index-1].price);
@@ -294,7 +365,7 @@
       this.cancelPath({render:false});this.callbacks.add?.(object);this.render();return true;
     }
     keydown(event){if(event.key==='Escape'){this.insertWave=null;event.preventDefault();this.cancelPath({render:false});this.draft=null;this.cancelGesture();this.tool='select';this.callbacks.cancelTool?.();this.render();}if(event.key==='Enter'&&this.path.length>=2)this.finishPath(event);}
-    adjustSelectedPath(direction){const object=this.plan.objects?.find(item=>item.id===this.selected&&['path','wave'].includes(item.kind));if(!object||object.locked)return;const points=editPathPoints(object.points,null,direction,this.tick,INTERVAL[this.period]);if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});}
+    adjustSelectedPath(direction){const object=this.plan.objects?.find(item=>item.id===this.selected&&['path','wave'].includes(item.kind));if(!object||object.locked)return;const points=this.editForecastPoints(object,null,direction);if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});}
     drawPathControl(){
       this.pathControl=null;this.pathControls=null;if(this.tool!=='select'||!this.hoverPath)return;
       const object=this.objects().find(item=>item.id===this.hoverPath?.id);if(!object||object.locked||isForecast(object))return;
@@ -320,9 +391,10 @@
       this.render();
     }
     render(){
+      this.syncTitleEditor();
       const width=Math.round(this.host.clientWidth),height=Math.round(this.host.clientHeight);if(!width||!height)return;this.svg.setAttribute('width',width);this.svg.setAttribute('height',height);this.svg.setAttribute('viewBox',`0 0 ${width} ${height}`);this.svg.replaceChildren();const indicatorHeight=Math.max(54,Math.min(82,height*.2));this.plot={x:5,y:5,w:Math.max(80,width-67),h:Math.max(45,height-indicatorHeight-40)};this.indicator={x:5,y:this.plot.y+this.plot.h+24,w:this.plot.w,h:Math.max(35,height-this.plot.y-this.plot.h-42)};
       if(!this.view||!this.bars.length){this.svg.append(createSVG('text',{x:width/2,y:height/2,'text-anchor':'middle',fill:'#6c7985','font-size':12},'等待行情'));return;}
-      if(this.autoPrice&&!this.drag)this.view=fitVisiblePrice(this.bars,this.view,this.tick,this.period);const view=this.view;this.tx=transform(view,this.plot,this.bars,this.period);const tx=this.tx,plot=this.plot,shown=this.displayPlan(),defs=createSVG('defs'),clip=createSVG('clipPath',{id:this.uid+'-clip'});clip.append(createSVG('rect',{x:plot.x,y:plot.y,width:plot.w,height:plot.h}));const hatch=createSVG('pattern',{id:this.uid+'-hatch',width:7,height:7,patternUnits:'userSpaceOnUse',patternTransform:'rotate(35)'});hatch.append(createSVG('rect',{width:7,height:7,fill:'#372d18','fill-opacity':'.25'}),createSVG('line',{x1:0,y1:0,x2:0,y2:7,stroke:'#a67b32','stroke-opacity':'.35'}));defs.append(clip,hatch);this.svg.append(defs);const layer=createSVG('g',{'clip-path':`url(#${this.uid}-clip)`});
+      if(this.autoPrice&&!this.drag)this.view=this.priceFit(this.view);const view=this.view;this.tx=transform(view,this.plot,this.bars,this.period);const tx=this.tx,plot=this.plot,shown=this.displayPlan(),defs=createSVG('defs'),clip=createSVG('clipPath',{id:this.uid+'-clip'});clip.append(createSVG('rect',{x:plot.x,y:plot.y,width:plot.w,height:plot.h}));const hatch=createSVG('pattern',{id:this.uid+'-hatch',width:7,height:7,patternUnits:'userSpaceOnUse',patternTransform:'rotate(35)'});hatch.append(createSVG('rect',{width:7,height:7,fill:'#372d18','fill-opacity':'.25'}),createSVG('line',{x1:0,y1:0,x2:0,y2:7,stroke:'#a67b32','stroke-opacity':'.35'}));defs.append(clip,hatch);this.svg.append(defs);const layer=createSVG('g',{'clip-path':`url(#${this.uid}-clip)`});
       const last=this.bars.at(-1),futureX=Math.max(plot.x,tx.x(last.time));layer.append(createSVG('rect',{x:futureX,y:plot.y,width:Math.max(0,plot.x+plot.w-futureX),height:plot.h,fill:'#a5adb5','fill-opacity':'.035'}));
       this.drawLinkedRange(layer);
       for(let index=0;index<=5;index++){const price=view.min+(view.max-view.min)*index/5,y=tx.y(price);this.svg.append(createSVG('line',{x1:plot.x,y1:y,x2:plot.x+plot.w,y2:y,stroke:'#2b333b','stroke-dasharray':'1 3','stroke-width':.6}),createSVG('text',{x:plot.x+plot.w+5,y:y+3,fill:'#7f8b96','font-size':10},priceLabel(price,this.tick)));}
@@ -368,15 +440,16 @@
         group.append(createSVG('path',{d:'M 0 0 L 0 18 L 5 13 L 10 22 L 14 20 L 9 11 L 17 11 Z',fill:color,stroke:'#10151b','stroke-width':1.2}),createSVG('rect',{x:left,y:top,width,height:20,rx:4,fill:color}),createSVG('text',{x:left+7,y:top+14,fill:'#fff','font-size':11,'font-weight':600},name));layer.append(group);
       }
     }
+    nameText(object,color,attrs={}){const label=this.nameLabel(object);return createSVG('text',{'data-edit-name':object.id||'',x:label.x,y:label.y,'text-anchor':label.anchor,fill:color,'font-size':label.size,style:object.locked?'':'cursor:text',...attrs},label.name);}
     drawObject(layer,object,{selection=true}={}){const tx=this.tx,plot=this.plot;if(!object.points?.length)return;const periodOpacity=['path','wave'].includes(object.kind)?pathPeriodOpacity(object.period,this.period):1;if(periodOpacity===null)return;const parent=layer,opacity=drawingOpacity(object.opacity),group=createSVG('g',{'data-chart-object':object.id||'','data-object-artwork':object.id||object.kind,opacity});layer.append(group);layer=group;if(periodOpacity<1){const mapped=createSVG('g',{opacity:periodOpacity,'data-mapped-wave':isForecast(object)?object.id:'','data-source-period':object.period});layer.append(mapped);layer=mapped;}const selected=selection&&object.id&&object.id===this.selected,color=object.color||'#f1c40f',width=Number(object.width)||1.5,dash=object.line_style==='dashed'?'5 4':'';
       if(object.kind==='zone'){
         const bounds=zoneBounds(object);if(!bounds)return;const zoneColor=object.color||COLORS[object.zone_type]||COLORS.danger,patternId=this.uid+'-zone-'+(this.patternSeq=(this.patternSeq||0)+1),defs=createSVG('defs'),pattern=createSVG('pattern',{id:patternId,width:7,height:7,patternUnits:'userSpaceOnUse',patternTransform:'rotate(35)'});
         pattern.append(createSVG('rect',{width:7,height:7,fill:zoneColor,'fill-opacity':.1}),createSVG('line',{x1:0,y1:0,x2:0,y2:7,stroke:zoneColor,'stroke-opacity':.35}));defs.append(pattern);layer.append(defs);
-        layer.append(createSVG('rect',{'data-zone':object.id||'',x:tx.x(bounds.start),y:tx.y(bounds.high),width:Math.max(1,tx.x(bounds.end)-tx.x(bounds.start)),height:Math.max(1,tx.y(bounds.low)-tx.y(bounds.high)),fill:`url(#${patternId})`,stroke:zoneColor,'stroke-width':selected?2:1,'stroke-dasharray':selected?'':'4 2'}),createSVG('text',{'data-zone-title':object.id||'',x:Math.max(plot.x+4,tx.x(bounds.start)+4),y:Math.max(plot.y+12,tx.y(bounds.high)+12),fill:zoneColor,'font-size':10},object.name||TYPES[object.zone_type]||'区域'));
-      }else if(object.kind==='horizontal'){const point=object.points[0];layer.append(createSVG('line',{x1:plot.x,y1:tx.y(point.price),x2:plot.x+plot.w,y2:tx.y(point.price),stroke:color,'stroke-width':(selected?width+1:width)/2,'stroke-dasharray':dash}),createSVG('text',{x:plot.x+5,y:tx.y(point.price)-4,fill:color,'font-size':10},`${object.name||'水平线'} ${priceLabel(point.price,this.tick)}`));
-      }else if(object.kind==='segment'&&object.points.length===2){const [a,b]=this.objectPoints(object),right=Math.max(a.x,b.x),label=priceLabel(object.points[0].price,this.tick),labelWidth=label.length*6.5,x=right+labelWidth+8<=plot.x+plot.w?right+6:Math.min(right,plot.x+plot.w)-labelWidth;layer.append(createSVG('line',{'data-price-segment':object.id||'',x1:a.x,y1:a.y,x2:b.x,y2:a.y,stroke:color,'stroke-width':(selected?width+1:width)/2,'stroke-dasharray':dash}),createSVG('text',{'data-segment-price':object.id||'',x,y:a.y-5,fill:color,'font-size':11},label));
-      }else if(object.kind==='text'){const point=object.points[0],left=object.text_side==='left';layer.append(createSVG('circle',{cx:tx.x(point.time),cy:tx.y(point.price),r:3,fill:color}),createSVG('text',{x:tx.x(point.time)+(left?-7:7),y:tx.y(point.price)+4,'text-anchor':left?'end':'start',fill:color,'font-size':12,'paint-order':'stroke',stroke:'#0d1115','stroke-width':3},object.name||'文本'));
-      }else{let points=this.objectPoints(object);if(['trend','reference'].includes(object.kind)&&points.length>=2)points=infiniteSegment(points[0],points[1],plot);layer.append(createSVG('polyline',{'data-wave-line':isForecast(object)?object.id:'',points:points.map(point=>`${point.x},${point.y}`).join(' '),fill:'none',stroke:color,'stroke-width':selected?width+1:width,'stroke-dasharray':dash}));if(['path','wave'].includes(object.kind)){object.points.forEach((point,index)=>{const x=tx.x(point.time),y=tx.y(point.price),active=selected&&this.selectedAnchor===index;layer.append(createSVG('circle',{'data-wave-node':isForecast(object)?point.id:'','data-wave-index':index,'data-node-selected':String(active),cx:x,cy:y,r:active?10:7,fill:active?'#fff3a3':'#171b20',stroke:active?'#ffffff':color,'stroke-width':active?2.5:1.2}),createSVG('text',{x,y:y+3,'text-anchor':'middle',fill:active?'#151719':color,'font-size':9,'font-weight':600},point.label||index+1));});}else{const point=object.points[0];layer.append(createSVG('text',{x:tx.x(point.time)+4,y:tx.y(point.price)-6,fill:color,'font-size':10},object.name||(object.kind==='trend'?'趋势线':'参考线')));}}
+        layer.append(createSVG('rect',{'data-zone':object.id||'',x:tx.x(bounds.start),y:tx.y(bounds.high),width:Math.max(1,tx.x(bounds.end)-tx.x(bounds.start)),height:Math.max(1,tx.y(bounds.low)-tx.y(bounds.high)),fill:`url(#${patternId})`,stroke:zoneColor,'stroke-width':selected?2:1,'stroke-dasharray':selected?'':'4 2'}),this.nameText(object,zoneColor,{'data-zone-title':object.id||''}));
+      }else if(object.kind==='horizontal'){const point=object.points[0];layer.append(createSVG('line',{x1:plot.x,y1:tx.y(point.price),x2:plot.x+plot.w,y2:tx.y(point.price),stroke:color,'stroke-width':(selected?width+1:width)/2,'stroke-dasharray':dash}),this.nameText(object,color),createSVG('text',{'data-layer-price':object.id||'',x:plot.x+10+this.nameLabel(object).width,y:tx.y(point.price)-4,fill:color,'font-size':10},priceLabel(point.price,this.tick)));
+      }else if(object.kind==='segment'&&object.points.length===2){const [a,b]=this.objectPoints(object),right=Math.max(a.x,b.x),label=priceLabel(object.points[0].price,this.tick),labelWidth=label.length*6.5,x=right+labelWidth+8<=plot.x+plot.w?right+6:Math.min(right,plot.x+plot.w)-labelWidth;layer.append(createSVG('line',{'data-price-segment':object.id||'',x1:a.x,y1:a.y,x2:b.x,y2:a.y,stroke:color,'stroke-width':(selected?width+1:width)/2,'stroke-dasharray':dash}),createSVG('text',{'data-segment-price':object.id||'',x,y:a.y-5,fill:color,'font-size':11},label));if(this.nameLabel(object))layer.append(this.nameText(object,color));
+      }else if(object.kind==='text'){const point=object.points[0],left=object.text_side==='left';layer.append(createSVG('circle',{cx:tx.x(point.time),cy:tx.y(point.price),r:3,fill:color}),this.nameText(object,color,{'paint-order':'stroke',stroke:'#0d1115','stroke-width':3}));
+      }else{let points=this.objectPoints(object);if(['trend','reference'].includes(object.kind)&&points.length>=2)points=infiniteSegment(points[0],points[1],plot);layer.append(createSVG('polyline',{'data-wave-line':isForecast(object)?object.id:'',points:points.map(point=>`${point.x},${point.y}`).join(' '),fill:'none',stroke:color,'stroke-width':selected?width+1:width,'stroke-dasharray':dash}));if(['path','wave'].includes(object.kind)){object.points.forEach((point,index)=>{const x=tx.x(this.pointTime(point)),y=tx.y(point.price),active=selected&&this.selectedAnchor===index;layer.append(createSVG('circle',{'data-wave-node':isForecast(object)?point.id:'','data-wave-index':index,'data-node-selected':String(active),cx:x,cy:y,r:active?10:7,fill:active?'#fff3a3':'#171b20',stroke:active?'#ffffff':color,'stroke-width':active?2.5:1.2}),createSVG('text',{x,y:y+3,'text-anchor':'middle',fill:active?'#151719':color,'font-size':9,'font-weight':600},point.label||index+1));});}else{const point=object.points[0];layer.append(this.nameText(object,color));}}
       if(selected&&!object.locked&&!['path','wave','zone'].includes(object.kind))for(const point of object.points)layer.append(createSVG('circle',{'data-object-anchor':object.id,'data-anchor-index':object.points.indexOf(point),cx:tx.x(point.time),cy:tx.y(point.price),r:4,fill:'#11161b',stroke:'#f4d35e','stroke-width':1.4}));
       if(selected&&opacity*periodOpacity<.5)this.drawSelectionAffordance(parent,object);
     }
@@ -389,5 +462,5 @@
       layer.append(outline);
     }
   }
-  return{isForecast,dailyRange,rangeBars,fitVisiblePrice,candleWidth,wavePoints,Chart,timestamp,snap,priceNumber,zoneBounds,transform,fitView,zoomView,segmentDistance,infiniteSegment,editPathPoints,pathPeriodOpacity,visibleOnPeriod,priceLabel,mergePending,pendingAfterAck,adoptRemoteConflicts,validStopSide,planLevelStatus,planLevelGeometry,hitPlanLevel,beginLevelDrag,moveLevelDrag,levelCommit,PLAN_FIELDS,INTERVAL,TYPES};
+  return{isForecast,timeScale,resolvePointTime,anchorPoint,preserveView,dailyRange,rangeBars,fitVisiblePrice,candleWidth,wavePoints,Chart,timestamp,snap,priceNumber,zoneBounds,transform,fitView,zoomView,segmentDistance,infiniteSegment,editPathPoints,pathPeriodOpacity,visibleOnPeriod,priceLabel,mergePending,pendingAfterAck,adoptRemoteConflicts,validStopSide,planLevelStatus,planLevelGeometry,hitPlanLevel,beginLevelDrag,moveLevelDrag,levelCommit,PLAN_FIELDS,INTERVAL,TYPES};
 }));

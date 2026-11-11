@@ -97,6 +97,21 @@ def _json_value(value, depth=0):
     raise ValueError("内容不是有效的计划数据")
 
 
+def validate_chart_anchor(anchor):
+    """Optional source-candle coordinates; null explicitly restores absolute-time positioning."""
+    if anchor is None:
+        return
+    if not isinstance(anchor, dict) or set(anchor) != {"period", "base_time", "offset"}:
+        raise ValueError("图表锚定须包含来源周期、基准K线时间与柱位偏移")
+    if anchor["period"] not in ("day", "m30", "m3"):
+        raise ValueError("图表锚定周期无效")
+    base, offset = anchor["base_time"], anchor["offset"]
+    if not _finite(base) or not 0 <= base <= 253402300799000 or base % 1 != 0:
+        raise ValueError("图表基准K线时间须为有效毫秒整数")
+    if not _finite(offset) or not 0 <= offset <= 10000:
+        raise ValueError("图表柱位偏移须为0到10000之间的有限数值")
+
+
 def validate_plan(raw):
     """Validate a partial draft without inventing missing premises or risk values."""
     if not isinstance(raw, dict):
@@ -180,6 +195,8 @@ def validate_plan(raw):
                     or not 0 <= point["time"] <= 253402300799000
                     or not _finite(point.get("price")) or point["price"] <= 0):
                 raise ValueError("锚点时间须为毫秒时间戳，价格须为有限正数")
+            if "chart_anchor" in point:
+                validate_chart_anchor(point["chart_anchor"])
         if obj["kind"] == "segment":
             if len(points) != 2 or points[0]["price"] != points[1]["price"] or points[0]["time"] == points[1]["time"]:
                 raise ValueError("水平线段须有两个等价、不同时间的端点")

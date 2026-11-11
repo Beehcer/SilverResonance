@@ -40,7 +40,7 @@ _board_demo_store = board_demo.SharedPlanStore(os.path.join(user_settings.app_di
 _structure_store = outlook_store.OutlookStore(os.path.join(user_settings.app_dir(), "state", "outlook_state.json"))
 _mock_structure_store = outlook_store.OutlookStore()
 _workspace_store = workspace_store.WorkspaceStore(os.path.join(user_settings.app_dir(), "state", "workspace.json"))
-_workspace_market = WorkspaceMarketCache()
+_workspace_market = WorkspaceMarketCache(allowed_symbols=lambda: [preset["symbol"] for preset in symbols.PRESETS])
 _workspace_quote_lock = threading.Lock()
 _workspace_live_quotes = {}
 
@@ -1447,6 +1447,75 @@ def _serial_rows(df):
     return rows
 
 
+class _WorkspaceSerialReader:
+    """Accumulate SDK changes; materialize only changed tails when history agrees."""
+    fields = ("datetime", "open", "high", "low", "close", "volume", "open_oi", "close_oi")
+
+    def __init__(self, api, cache):
+        import numpy as np
+        self.np, self.api, self.cache = np, api, cache
+        self.subscriptions = _KlineSubscriptions(api)
+        self.dirty = set()
+        self.matrices = {}
+
+    def subscribe_requested(self):
+        for symbol in self.cache.requested():
+            for period in (86400, 1800, 180):
+                key = (symbol, period)
+                if key in self.subscriptions.serials:
+                    continue
+                try:
+                    self.subscriptions.get(symbol, period)
+                except Exception:
+                    self.cache.mark_failed(symbol, period)
+                finally:
+                    # get_kline_serial may pump updates internally. Conservatively
+                    # recheck existing frames rather than lose those changes.
+                    self.dirty.update(self.subscriptions.serials)
+
+    def observe(self, received):
+        changed = False
+        if received:
+            for key, serial in self.subscriptions.serials.items():
+                if self.api.is_changing(serial):
+                    self.dirty.add(key)
+                    changed = True
+        return changed
+
+    def refresh(self, connected):
+        if not connected:
+            return
+        np = self.np
+        for key, serial in self.subscriptions.serials.items():
+            if key not in self.dirty and key in self.matrices and self.cache.mark_checked(*key):
+                continue
+            try:
+                columns = {field: np.asarray(serial[field]) for field in self.fields if field in serial}
+                count = len(columns["close"])
+                if not count or not np.isfinite(columns["close"][-1]):
+                    raise ValueError("当前K线行情尚未可用")
+                empty = np.zeros(count)
+                matrix = np.column_stack([columns.get(field, empty) for field in self.fields])
+                previous = self.matrices.get(key)
+                same_window = (previous is not None and previous.shape == matrix.shape
+                               and np.array_equal(previous[-2:, 0], matrix[-2:, 0], equal_nan=True)
+                               and np.array_equal(previous[:-2], matrix[:-2], equal_nan=True))
+                updated = False
+                if same_window:
+                    tail = _serial_rows({field: column[-2:] for field, column in columns.items()})
+                    updated = self.cache.update_tail(*key, tail)
+                if not updated:
+                    updated = self.cache.cache(*key, _serial_rows(serial))
+                if not updated:
+                    raise ValueError("行情尚未可用")
+                self.matrices[key] = matrix
+                self.dirty.discard(key)
+            except Exception:
+                # Neither a failed conversion nor disconnect can renew evidence.
+                self.cache.mark_failed(*key)
+                self.dirty.add(key)
+
+
 def _cache_workspace_quotes(quotes):
     """Quote-list prices are independent of expensive legacy radar analysis."""
     checked = time.time() * 1000
@@ -1467,12 +1536,12 @@ def _workspace_tqsdk_session(api, notifications):
     """Production uses the same SDK session, quotes plus requested chart periods.
 
     Desktop radar/scoring and its state dumps are not workspace dependencies.
-    Pump provider notifications on every update; materialize full chart history
-    at most once a second so tick bursts cannot monopolize the Python process.
+    Pump provider notifications on every update; retain visited symbols and
+    update their changed tails at most once a second.
     """
     codes = [preset["symbol"] for preset in symbols.PRESETS]
     quotes = dict(zip(codes, api.get_quote_list(codes)))
-    subscriptions = _KlineSubscriptions(api)
+    reader = _WorkspaceSerialReader(api, _workspace_market)
     _cache_workspace_quotes(quotes)
     _set_state(connected=True, connection_status="unknown", error=None)
     _set_boot("ready", 100, "真实报价已连接，图表按查看品种加载")
@@ -1480,23 +1549,19 @@ def _workspace_tqsdk_session(api, notifications):
     while True:
         # get() reuses each (contract, period); adding a viewer never opens a
         # second SDK session or subscribes large histories for all other codes.
-        for symbol in _workspace_market.requested():
-            for period in (86400, 1800, 180):
-                try:
-                    subscriptions.get(symbol, period)
-                except Exception:
-                    pass  # An unavailable period remains loading/stale.
+        reader.subscribe_requested()
         try:
             received = api.wait_update(deadline=time.time() + 1)
         except TimeoutError:
             received = False
+        chart_changed = reader.observe(received)
         changed = bool(received and (any(api.is_changing(quote, ["last_price", "datetime"])
-                                        for quote in quotes.values()) or subscriptions.market_changed()))
+                                        for quote in quotes.values()) or chart_changed))
         _note_feed_poll(received=received, notifications=notifications.get_notifies(), market_changed=changed)
         _cache_workspace_quotes(quotes)
         now = time.monotonic()
         if now >= next_charts:
-            _workspace_market.refresh(lambda symbol, period: _serial_rows(subscriptions.get(symbol, period)))
+            reader.refresh(get_state().get("connected") is True)
             # Schedule from completion, not from the previous tick: slow history
             # conversion must not create a catch-up loop that starves HTTP work.
             next_charts = time.monotonic() + 1
@@ -2116,12 +2181,12 @@ def _workspace_symbols_provider():
             for preset in symbols.PRESETS]
 
 
-def _workspace_market_provider(symbol):
+def _workspace_market_provider(symbol, history_token=None):
     preset = symbols.find(symbol)
     if not preset:
         raise ValueError("未知实际合约")
     state = get_state()
-    market = _workspace_market.snapshot(symbol, preset, state, simulated=config.MOCK_MODE)
+    market = _workspace_market.snapshot(symbol, preset, state, simulated=config.MOCK_MODE, history_token=history_token)
     market["setup_required"] = state.get("boot_phase") == "need_config"
     if market["setup_required"]:
         market["message"] = "主机尚未配置行情来源 · 主机可打开 /setup 完成配置，协作成员无需行情账号"
@@ -2157,7 +2222,8 @@ def _workspace_quotes_provider():
 
 workspace_api.register_workspace(app, _workspace_store, _workspace_market_provider,
                                  _workspace_symbols_provider, workspace_rules.rule_manifest,
-                                 workspace_rules.evaluate_plan, _workspace_quotes_provider)
+                                 workspace_rules.evaluate_plan, _workspace_quotes_provider,
+                                 market_incremental_provider=_workspace_market_provider)
 
 
 def _open_browser_later():

@@ -13,7 +13,7 @@ const clone=value=>JSON.parse(JSON.stringify(value));
 // replaced. These helpers are single-line declarations in the workspace bundle.
 function helper(name){
   const line=source.split(/\r?\n/).find(line=>new RegExp('^  (?:async )?function '+name+'\\(').test(line));
-  assert.ok(line,`Missing workspace helper ${name}`);return line;
+  assert.ok(line,`Missing workspace helper ${name}`);if(line.trimEnd().endsWith('}'))return line;const start=source.indexOf(line),end=source.indexOf('\n  }',start);assert.ok(end>=0);return source.slice(start,end+4);
 }
 function harness(overrides={}){
   const saved={revision:1,notes:'A',objects:[]},state={session:{user:{id:'me'}},symbol:'SHFE.rb2701',board:'first',plan:clone(saved),saved:clone(saved),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false};
@@ -25,7 +25,7 @@ function harness(overrides={}){
     storageSet:(key,value)=>{storage.set('test:'+key,JSON.stringify(value));return true;},
     storageGet:(key,fallback)=>storage.has('test:'+key)?JSON.parse(storage.get('test:'+key)):fallback,
     hasPending:pending=>M.hasPending(pending??state.pending),emptyPending:M.empty,
-    defaultPlan:()=>({notes:'',objects:[]}),fillPlan:()=>{},fillPlanQuietly:()=>{},planMeta:()=>{},renderObjects:()=>{},renderEvaluation:()=>{},renderSyncStatus:()=>{},
+    rememberCurrentDocument:()=>{},defaultPlan:()=>({notes:'',objects:[]}),fillPlan:()=>{},fillPlanQuietly:()=>{},planMeta:()=>{},renderObjects:()=>{},renderEvaluation:()=>{},renderSyncStatus:()=>{},
     shownPlan:()=>state.plan,flush:async()=>{calls.flush++;},notice:value=>calls.notices.push(value),
     setUnavailable:()=>{},saveViews:()=>{calls.savedViews++;},sendPresence:()=>{},presenceSender:{reset:()=>{}},
     setTimeout:callback=>{callback();return 1;},
@@ -104,7 +104,7 @@ test('bulk deletion waits for unlocks but never deletes a peer layer arriving du
   const h=harness();h.load('hasUnsettledLock');h.load('deleteAll');h.state.generation=1;
   h.state.saved.objects=[{id:'mine',locked:true}];h.state.plan.objects=[{id:'mine',locked:false}];
   h.context.ensureSaved=async()=>{h.state.plan.objects.push({id:'peer',locked:false});return true;};h.context.recordHistory=()=>{};h.context.dirty=()=>{};
-  await h.context.deleteAll();assert.equal(h.state.plan.objects.length,1);assert.equal(h.state.plan.objects[0].id,'peer');
+  await h.context.deleteAll({document:h.context.documentKey(),generation:h.state.generation,ids:['mine']});assert.equal(h.state.plan.objects.length,1);assert.equal(h.state.plan.objects[0].id,'peer');
 });
 
 test('unconfirmed commit prevents switching when reconnection cannot complete',async()=>{

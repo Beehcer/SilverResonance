@@ -26,7 +26,7 @@
     const index=object.points.findIndex(p=>(p.id||String(p.time)+':'+String(p.price))===id);if(index<0)return{error:'该点已被协作者删除。'};
     const number=field==='time'?Date.parse(value):Number(value);
     if(!['time','price'].includes(field)||!Number.isFinite(number)||field==='price'&&!positive(value)||field==='time'&&number<0)return{error:'请填写有效时间与正价格。'};
-    const points=object.points.map((p,i)=>i===index?{...p,[field]:number}:{...p});return{patch:{points}};
+    const points=object.points.map((p,i)=>i===index?{...p,[field]:number,...(field==='time'&&p.chart_anchor?{chart_anchor:null}:{})}:{...p});return{patch:{points}};
   }
   return{propertyPatch,nodePatch,opacity,opacityPatch};
 }));
