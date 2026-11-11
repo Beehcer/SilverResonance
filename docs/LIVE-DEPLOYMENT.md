@@ -8,9 +8,9 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261111-0acec4651567`，运行代码提交 `e45770d`，包含 `c2cd0f7` 与 `9998c46`。
+- 源码版本：`/opt/SilverResonance/releases/20261111-18018c00fe94`，运行代码提交 `48b09b4`，包含此前协作与行情热修。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261111-0acec4651567`。
+- 镜像：`silver-resonance:20261111-18018c00fe94`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
@@ -22,7 +22,15 @@
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
 
-## 本次更新与验收
+## 20:20 不透明度更新
+
+发布 `20261111-18018c00fe94`，代码 `48b09b4`：全部8类用户绘图支持0%–100%不透明度；图层滑杆与数值即时编辑，顶部可设新绘图默认值，计划模式可调入场/止损及计划参考区域。周期映射与用户不透明度相乘，全透明图层仍能选中恢复。见 [绘图不透明度](DRAWING-OPACITY.md)。
+
+更新前备份 `/var/backups/SilverResonance/20261111-18018c00fe94/data-before-update.tgz`，旧发布 `20261111-0acec4651567` 保留。20:20:37重新核对16主力，容器healthy、零重启、无OOM。静态资源版本 `20261111-14`，已有页面须刷新加载新控件。
+
+公网不透明度专项双会话验收通过：8类图层及计划线、0与35%更新、并发改属性/浪点、重新进入、协作预览、非法值拒绝。一次SSE通知0.635秒；独立QA `aa11fe84eaf61f00` 已清空归档，用户默认计划未变。公网HTML包含5个新控件，相关5个JS的内容哈希与本地一致。测试使用当前进程直连域名、gzip与12秒超时。
+
+## 下午协作热修与验收
 
 本次发布修复右键图层菜单/删除、开仓计划未落点时 Esc 退出、1234 双击完成与同步提示，以及同时拖动同一浪线时保留伙伴的节点修改。新增菜粕、鸡蛋、苹果、PTA；2026-11-11 14:39:50 经唯一真实行情连接重新核对全部16个主力合约。新增四个实际代码为 `CZCE.RM701`、`DCE.jd2612`、`CZCE.AP701`、`CZCE.TA701`，不是日历推测月份。
 
@@ -49,7 +57,7 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261111-0acec4651567
+export SILVER_RELEASE=20261111-18018c00fe94
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
