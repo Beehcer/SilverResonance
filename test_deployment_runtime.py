@@ -54,10 +54,12 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(user_settings.app_dir(), str(Path(user_settings.__file__).parent))
 
     def test_check_has_no_application_import_or_market_connection(self):
-        with patch.object(runtime.importlib.util, "find_spec", return_value=object()), \
+        with patch("workspace_backup.start_workspace_backup") as backup_start, \
+                patch.object(runtime.importlib.util, "find_spec", return_value=object()), \
                 patch.object(runtime.importlib, "import_module") as imported:
             self.assertEqual(runtime.run_server(runtime.parse_args(["--check"])), 0)
             imported.assert_not_called()
+            backup_start.assert_not_called()
         self.assertTrue((self.directory / "state").is_dir())
         self.assertEqual(list((self.directory / "state").iterdir()), [])
 
@@ -122,6 +124,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_feed_starts_once_after_listener_and_stops_monitor_on_shutdown(self):
         module = self.module()
+        module._workspace_store = types.SimpleNamespace(path=self.directory / "state" / "workspace.json")
         order = []
         module.start_data_thread.side_effect = lambda: order.append("feed")
         server = Mock()
@@ -134,12 +137,19 @@ class RuntimeTests(unittest.TestCase):
             order.append("bind")
             return server
         waitress = types.SimpleNamespace(create_server=listener)
+        backups = Mock()
+        def start_backups(source):
+            self.assertEqual(source, module._workspace_store.path)
+            order.append("backup")
+            return backups
         with patch.object(runtime, "check_runtime", return_value=self.directory), \
                 patch.object(runtime, "prepare_application", return_value=module), \
+                patch("workspace_backup.start_workspace_backup", side_effect=start_backups), \
                 patch.dict(sys.modules, {"waitress": waitress}):
             self.assertEqual(runtime.run_server(runtime.parse_args(["--behind-proxy"])), 0)
-        self.assertEqual(order, ["bind", "feed", "serve"])
+        self.assertEqual(order, ["bind", "backup", "feed", "serve"])
         module.start_data_thread.assert_called_once()
+        backups.stop.assert_called_once()
         server.close.assert_called_once()
 
     def test_dead_feed_exits_but_idle_alive_feed_does_not(self):

@@ -45,6 +45,7 @@ RUNTIME_PY_FILES = (
     "trading.py",
     "user_settings.py",
     "workspace_api.py",
+    "workspace_backup.py",
     "workspace_market.py",
     "workspace_rules.py",
     "workspace_store.py",
@@ -84,6 +85,7 @@ DEPLOY_FILES = (
     "deploy/nginx-workspace.conf.example",
     "deploy/README.md",
     "docs/DEPLOYMENT.md",
+    "docs/WORKSPACE_BACKUP.md",
 )
 
 REQUIRED_FILES = tuple(sorted(RUNTIME_PY_FILES + ASSET_FILES + DEPLOY_FILES))

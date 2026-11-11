@@ -205,7 +205,10 @@ def run_server(args):
                                expose_tracebacks=False,
                                clear_untrusted_proxy_headers=not args.behind_proxy)
         stop = threading.Event()
+        backups = None
         try:
+            from workspace_backup import start_workspace_backup
+            backups = start_workspace_backup(runtime._workspace_store.path)
             runtime.start_data_thread()
             watchdog = threading.Thread(target=watch_feed, args=(runtime, stop),
                                         name="market-liveness", daemon=True)
@@ -214,6 +217,8 @@ def run_server(args):
             server.run()
         finally:
             stop.set()
+            if backups:
+                backups.stop()
             server.task_dispatcher.shutdown(timeout=5)
             server.close()
     return 0
