@@ -1,0 +1,43 @@
+name: silver-resonance
+services:
+  workspace:
+    image: silver-resonance:${SILVER_RELEASE:?Set SILVER_RELEASE to an immutable commit tag}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        PIP_INDEX_URL: ${SILVER_PIP_INDEX_URL:-https://pypi.org/simple}
+    # Target server is Linux. Host networking preserves 127.0.0.1 as the only
+    # trusted proxy and avoids trusting Docker bridge addresses or all clients.
+    network_mode: host
+    init: true
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 128
+    environment:
+      SILVER_DATA_DIR: /var/lib/SilverResonance
+      SILVER_RULES_PATH: /etc/SilverResonance/trading-system.md
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: /var/lib/SilverResonance
+        target: /var/lib/SilverResonance
+      - type: bind
+        source: /etc/SilverResonance/trading-system.md
+        target: /etc/SilverResonance/trading-system.md
+        read_only: true
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

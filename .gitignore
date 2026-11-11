@@ -9,6 +9,8 @@ state/workspace.json.lock
 state/workspace-preview.json
 state/workspace-preview.json.lock
 state/trading_state.json
+state/outlook_state.json
 
 # Personal market-data credentials stay on this machine.
 /user_config.json
+/.runtime.lock

@@ -1,0 +1,7 @@
+-r requirements.txt
+waitress==3.0.2
+# Match the application packages already verified against the desktop feed.
+tqsdk==3.10.1
+flask==3.1.3
+pandas==3.0.3
+akshare==1.19.1
