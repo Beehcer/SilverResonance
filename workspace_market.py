@@ -151,12 +151,28 @@ class WorkspaceMarketCache:
         fresh = (connected and all(item["checked_recent"] for item in freshness.values())
                  and freshness["m3"]["changed_recent"] and main_covers_trigger and day_current)
         last = periods["m3"][-1] if periods["m3"] else None
+        # A successful read of unchanged bars is not a new market quote. Keep
+        # planning available while distinguishing this from a failed refresh.
+        if simulated:
+            feed_status, message = "mock", "模拟行情 · 不产生实盘开仓许可"
+        elif not connected:
+            feed_status, message = "disconnected", "行情连接已断开 · 已有K线仍可用于编写计划"
+        elif not all(item["available"] for item in freshness.values()):
+            feed_status, message = "loading", "真实行情已连接 · 正在加载各周期K线"
+        elif not all(item["checked_recent"] for item in freshness.values()):
+            feed_status, message = "stale", "行情刷新未确认 · 保留已有K线与计划"
+        elif not main_covers_trigger or not day_current:
+            feed_status, message = "aligning", "各周期行情尚未对齐 · 暂用于观察与计划"
+        elif fresh:
+            feed_status, message = "live", "真实行情更新中"
+        else:
+            feed_status, message = "idle", "真实行情已连接 · 暂无新报价，可查看K线与编写计划"
         return {
             "symbol": symbol, "name": preset.get("name", symbol),
             "tick": preset.get("tick"), "tick_value": preset.get("tick_value"),
             "price": last["close"] if last else None, "source": "mock" if simulated else "live",
             "fresh": bool(fresh), "connected": connected, "as_of": iso(now),
+            "feed_status": feed_status,
             "quote_at": freshness["m3"]["quote_at"], "periods": periods, "freshness": freshness,
-            "message": ("模拟行情 · 不产生实盘开仓许可" if simulated else
-                        "行情可用于核对" if fresh else "行情未就绪或已过期 · 仅观察，不提示开仓"),
+            "message": message,
         }

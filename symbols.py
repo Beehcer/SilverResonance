@@ -9,8 +9,9 @@
   - SHFE rb / ss          : 1月 / 5月 / 10月 切换
   - SHFE bu               : 6月 / 9月 / 12月 切换
   - SHFE sp               : 5月 / 9月 切换
-  - DCE  m / jm           : 1月 / 5月 / 9月 切换
-  - CZCE SA / FG / CF / MA: 1月 / 5月 / 9月 切换
+  - DCE  m / jm / jd      : 1月 / 5月 / 9月 切换
+  - CZCE SA / FG / CF / MA / RM / TA: 1月 / 5月 / 9月 切换
+  - CZCE AP              : 1月 / 5月 / 10月 切换
 
 日历规则只作为离线兜底，不代表交易所当前真实主力。
 """
@@ -59,7 +60,15 @@ _TEMPLATES = [
     ("m",  "DCE",  "m",  "豆粕",   1.0,  10.0, (1, 5, 9)),
     ("jm", "DCE",  "jm", "焦煤",   0.5,  30.0, (1, 5, 9)),
     ("MA", "CZCE", "MA", "甲醇",   1.0,  10.0, (1, 5, 9)),
+    ("RM", "CZCE", "RM", "菜粕",   1.0,  10.0, (1, 5, 9)),
+    ("jd", "DCE",  "jd", "鸡蛋",   1.0,  10.0, (1, 5, 9)),
+    ("AP", "CZCE", "AP", "苹果",   1.0,  10.0, (1, 5, 10)),
+    ("TA", "CZCE", "TA", "PTA",    2.0,  10.0, (1, 5, 9)),
 ]
+
+# 扩充品种前的缓存固定为以上前 12 项；仅兼容这个已发布版本，
+# 不把任意残缺列表当成有效缓存。新增项仍等待行情线程核实真实主力。
+_LEGACY_CACHE_SIZE = 12
 
 
 def _next_rollover(rot_months, today=None):
@@ -177,9 +186,11 @@ def _load_cached(now):
         if fetched.utcoffset() != timedelta(hours=8) or not timedelta(0) <= now - fetched <= _CACHE_MAX_AGE:
             return None
         rows = data["presets"]
-        if not isinstance(rows, list) or len(rows) != len(_TEMPLATES):
+        if not isinstance(rows, list) or len(rows) not in (_LEGACY_CACHE_SIZE, len(_TEMPLATES)):
             return None
-        return [_validated_preset(row, template, now) for row, template in zip(rows, _TEMPLATES)]
+        validated = [_validated_preset(row, template, now) for row, template in zip(rows, _TEMPLATES)]
+        # 不重写缓存、延长缓存有效期或把日历占位保存成已核验主力。
+        return validated + _build_presets(now.date())[len(rows):]
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
         return None
 

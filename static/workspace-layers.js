@@ -76,6 +76,9 @@
       const drag=this.element('button','layer-drag','⋮⋮'),main=this.element('button','layer-main'),title=this.element('span','layer-name'),meta=this.element('small','layer-provenance'),peer=this.element('small','layer-peer');
       const locate=this.element('button','layer-locate','⌖'),visibility=this.element('button','object-visibility layer-visibility'),lock=this.element('button','object-visibility layer-lock');
       for(const button of[drag,main,locate,visibility,lock])button.type='button';main.append(title,meta,peer);row.append(drag,main,locate,visibility,lock);
+      const context=event=>{event.preventDefault();event.stopPropagation();this.callbacks.context?.(id,event);};
+      row.addEventListener('contextmenu',context);
+      row.addEventListener('keydown',event=>{if(event.key==='ContextMenu'||event.key==='F10'&&event.shiftKey&&!event.ctrlKey&&!event.altKey&&!event.metaKey)context(event);});
       main.addEventListener('click',()=>this.callbacks.select?.(id));
       locate.addEventListener('click',()=>this.callbacks.locate?.(id));
       visibility.addEventListener('click',()=>{const object=this.object(id);if(object&&!object.locked)this.callbacks.update?.(id,{visible:object.visible===false});});

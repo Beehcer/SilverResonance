@@ -31,7 +31,7 @@ function harness(overrides={}){
     setTimeout:callback=>{callback();return 1;},
     ...overrides,
   });
-  for(const name of ['documentKey','draftKey','persistDraft'])vm.runInContext(helper(name),context);
+  for(const name of ['documentKey','draftKey','persistDraft','drawingCharts','finishDrawings'])vm.runInContext(helper(name),context);
   return{context,state,storage,elements,calls,load:name=>vm.runInContext(helper(name),context),key:()=>`test:draft:me:${state.symbol}:${state.board}`};
 }
 
@@ -66,6 +66,45 @@ test('document switching waits for an outstanding commit even with no ordinary d
   const h=harness();h.load('ensureSaved');h.state.outbox={id:'unknown'};
   h.context.flush=async()=>{h.calls.flush++;h.state.outbox=null;};
   assert.equal(await h.context.ensureSaved(),true);assert.equal(h.calls.flush,1);
+});
+
+test('switching commits an unfinished valid forecast before checking saved state',async()=>{
+  const h=harness();h.load('ensureSaved');let finished=0;
+  h.context.charts.m30={path:[{},{}],finishPath(){finished++;this.path=[];h.state.dirty=true;}};
+  h.context.flush=async()=>{h.calls.flush++;h.state.dirty=false;};
+  assert.equal(await h.context.ensureSaved(),true);assert.equal(finished,1);assert.equal(h.calls.flush,1);
+});
+
+test('Escape cancels plan placement before a chart ever receives focus or a point',()=>{
+  const h=harness();h.load('cancelActiveTool');h.state.quickTool='planned-entry';h.state.active='m30';h.state.quickSequence=true;h.state.levelPreview={field:'planned_entry_price',price:100};
+  let cancelled=0,focused=0;h.context.charts.m30={tool:'planned-entry',path:[],cancelGesture(){cancelled++;},host:{focus(){focused++;}}};
+  h.context.setQuickTool=tool=>{h.state.quickTool=tool;h.state.quickSequence=false;h.state.levelPreview=null;h.context.charts.m30.tool='select';};h.context.renderWaveTools=()=>{};
+  const original=clone(h.state.plan);
+  assert.equal(h.context.cancelActiveTool(),true);assert.equal(h.state.quickTool,null);assert.equal(h.state.quickSequence,false);assert.equal(h.state.levelPreview,null);assert.equal(cancelled,1);assert.equal(focused,1);assert.deepEqual(h.state.plan,original);assert.equal(h.calls.flush,0);
+  assert.equal(h.context.cancelActiveTool(),false);
+});
+
+test('deleting immediately after unlocking waits for the lock mutation before removing the layer',async()=>{
+  const h=harness();h.load('hasUnsettledLock');h.load('deleteObject');h.state.generation=1;
+  h.state.saved.objects=[{id:'zone',locked:true}];h.state.plan.objects=[{id:'zone',locked:false}];let release,recorded=0;
+  h.context.ensureSaved=()=>new Promise(resolve=>{release=resolve;});h.context.recordHistory=()=>recorded++;h.context.dirty=()=>{};
+  const deletion=h.context.deleteObject('zone');assert.equal(h.state.plan.objects.length,1);assert.equal(recorded,0);
+  h.state.saved.objects[0].locked=false;release(true);await deletion;
+  assert.equal(h.state.plan.objects.length,0);assert.equal(recorded,1);assert.equal(h.calls.flush,1);
+});
+
+test('a pending lock acknowledgement also gates deletion and a peer lock is respected afterward',async()=>{
+  const h=harness();h.load('hasUnsettledLock');h.load('deleteObject');h.state.generation=1;
+  h.state.plan.objects=[{id:'zone',locked:false}];h.state.saved.objects=[{id:'zone',locked:false}];h.state.outbox={pending:{object_edits:[{id:'zone',changes:{locked:true}}]}};
+  let settled=0;h.context.ensureSaved=async()=>{settled++;h.state.plan.objects[0].locked=true;return true;};
+  await h.context.deleteObject('zone');assert.equal(settled,1);assert.equal(h.state.plan.objects.length,1);assert.match(h.calls.notices[0],/伙伴已锁定/);
+});
+
+test('bulk deletion waits for unlocks but never deletes a peer layer arriving during the wait',async()=>{
+  const h=harness();h.load('hasUnsettledLock');h.load('deleteAll');h.state.generation=1;
+  h.state.saved.objects=[{id:'mine',locked:true}];h.state.plan.objects=[{id:'mine',locked:false}];
+  h.context.ensureSaved=async()=>{h.state.plan.objects.push({id:'peer',locked:false});return true;};h.context.recordHistory=()=>{};h.context.dirty=()=>{};
+  await h.context.deleteAll();assert.equal(h.state.plan.objects.length,1);assert.equal(h.state.plan.objects[0].id,'peer');
 });
 
 test('unconfirmed commit prevents switching when reconnection cannot complete',async()=>{

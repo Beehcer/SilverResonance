@@ -200,6 +200,25 @@ test('pointer rendering coalesces into one animation frame',()=>{
   }finally{globalThis.requestAnimationFrame=previous;}
 });
 
+test('feed status changes redraw unchanged bars and separate idle from disconnection',()=>{
+  const {chart}=chartHarness(),bars=[{dt:'2026-11-11T11:27:00+08:00',open:100,high:102,low:98,close:101}],previous=global.document;
+  let renders=0;chart.render=()=>renders++;
+  const market={tick:1,source:'live',fresh:false,feed_status:'idle',periods:{m3:bars}};
+  chart.setData(market,chart.plan,true);const initial=renders;
+  chart.setData({...market,feed_status:'disconnected'},chart.plan);
+  assert.ok(renders>initial);
+  const makeNode=tag=>({tag,attrs:{},style:{},setAttribute(k,v){this.attrs[k]=v;},append(){},replaceChildren(){}});
+  try{
+    for(const [status,label] of [['idle','已连接 · 暂无新报价'],['disconnected','连接中断']]){
+      const created=[];chart.svg=makeNode('svg');chart.market={...market,feed_status:status};
+      global.document={createElementNS(ns,tag){const node=makeNode(tag);created.push(node);return node;}};
+      C.Chart.prototype.render.call(chart);
+      assert.ok(created.some(node=>node.textContent===label));
+      assert.ok(!created.some(node=>node.textContent==='行情未就绪'));
+    }
+  }finally{global.document=previous;}
+});
+
 test('snapping locks time to the candle center and price to the nearest OHLC anchor',()=>{
   const{chart}=chartHarness();chart.bars=[{time:40,open:100,high:104,low:96,close:102}];
   const value=chart.toValue({x:chart.tx.x(40)+5,y:chart.tx.y(104)+8});
@@ -259,6 +278,36 @@ test('right clicking a plan line reports its exact field instead of a drawing ob
   assert.deepEqual(events.context[0][2],{field:'stop_price'});
   chart.contextMenu(pointer(100,chart.tx.y(100)));
   assert.deepEqual(events.context[1][2],{field:'planned_entry_price'});
+});
+
+test('right press opens the object menu before SVG replacement and the later native event does not retarget it',()=>{
+  const{chart,node,host,events,pointer}=chartHarness({objects:[{id:'label',kind:'text',period:'m3',text_side:'left',name:'左侧文字',points:[{time:60,price:104}]}]});
+  const target={closest:selector=>selector==='[data-chart-object]'?{getAttribute:()=> 'label'}:null};
+  const event={...pointer(150,chart.tx.y(104)),button:2,type:'pointerdown',timeStamp:100,target};
+  node.listeners.pointerdown(event);
+  assert.equal(events.context[0][0],'label');assert.equal(chart.drag,null);assert.equal(chart.selectedAnchor,null);
+  host.listeners.contextmenu({...event,type:'contextmenu',timeStamp:130,target:null});
+  assert.equal(events.context.length,1);
+  host.listeners.contextmenu({...event,type:'contextmenu',timeStamp:1500,target:null});
+  assert.equal(events.context.length,2);assert.equal(events.context[1][0],null);
+});
+
+test('visible drawing labels select their actual layer even outside line geometry or near plan levels',()=>{
+  for(const kind of ['text','horizontal','segment','trend','zone','wave']){
+    const{chart,events,pointer}=chartHarness();
+    chart.plan.objects=[{id:kind,kind,period:'m3',points:[{time:50,price:102},{time:60,price:104}]}];
+    const target={closest:selector=>selector==='[data-chart-object]'?{getAttribute:()=>kind}:null};
+    chart.contextMenu({...pointer(100,chart.tx.y(95)),target});
+    assert.equal(events.context[0][0],kind);
+  }
+});
+
+test('forecast right-click wins at a plan-line crossing and clears a previously highlighted point',()=>{
+  const{chart,events,pointer}=chartHarness();chart.plan.objects=[{id:'wave',kind:'wave',period:'m3',points:[{time:30,price:98},{time:60,price:102}]}];chart.selectedAnchor=1;
+  chart.contextMenu(pointer(chart.tx.x(45),chart.tx.y(100)));
+  assert.equal(events.context[0][0],'wave');assert.equal(chart.selectedAnchor,null);
+  chart.tool='trend';chart.contextMenu(pointer(100,chart.tx.y(95)));
+  assert.equal(events.context[1][2].field,'stop_price');
 });
 
 test('plan paths keep free coordinates instead of snapping to candle OHLC',()=>{
@@ -475,6 +524,58 @@ test('two pointer clicks still insert once when SVG redraw replaces the native d
   chart.doubleClick({...at,timeStamp:1160});assert.equal(object.points.length,3);
 });
 
+test('new forecast completes on two close pointer presses even when native double click is lost and detail resets',()=>{
+  for(const kind of ['wave','path'])for(const detail of [0,1]){
+    const{chart,pointer}=chartHarness({objects:[]}),added=[],drafts=[];
+    chart.callbacks.draftChanged=draft=>drafts.push(draft);
+    chart.callbacks.add=object=>{assert.equal(chart.path.length,0);added.push(object);chart.plan.objects=[{...object,id:'saved'}];chart.setTool('select');};
+    chart.callbacks.update=()=>assert.fail('Trailing native double click must not edit the just-created forecast');
+    chart.setTool(kind);
+    const points=[[70,80],[150,150],[230,90],[310,140]];
+    points.forEach(([x,y],index)=>{const event={...pointer(x,y),detail,timeStamp:1000+index*800};chart.down(event);chart.up(event);});
+    assert.equal(chart.path.length,4);assert.equal(added.length,0);
+    const last={...pointer(313,142),detail,timeStamp:3550};chart.down(last);chart.up(last);
+    assert.equal(added.length,1);assert.equal(added[0].kind,kind);assert.equal(added[0].points.length,4);
+    assert.equal(added[0].points[3].price,chart.toValue({x:310,y:140},false,kind==='wave').price);
+    if(kind==='wave')assert.deepEqual(added[0].points.map(p=>p.label),['1','2','3','4']);
+    assert.equal(chart.path.length,0);assert.deepEqual(drafts.filter(d=>d.count).map(d=>d.count),[1,2,3,4]);
+    assert.deepEqual(drafts.at(-1),{period:'m3',count:0});
+    chart.doubleClick({...last,timeStamp:3560,detail:2});assert.equal(added.length,1);assert.equal(chart.plan.objects[0].points.length,4);
+  }
+});
+
+test('forecast completion requires both the timing and distance thresholds',()=>{
+  const{chart,pointer}=chartHarness({objects:[]}),added=[];chart.callbacks.add=object=>added.push(object);chart.setTool('wave');
+  for(const[x,y,stamp]of[[80,80,1000],[180,150,1100],[180,150,1700],[190,150,1800]])chart.down({...pointer(x,y),detail:1,timeStamp:stamp});
+  assert.equal(added.length,0);assert.equal(chart.path.length,4);
+  chart.keydown({key:'Enter',preventDefault(){}});assert.equal(added.length,1);assert.equal(added[0].points.length,3);assert.equal(chart.path.length,0);
+});
+
+test('finishing clears the draft before callbacks so synchronous tool changes cannot save it twice',()=>{
+  const{chart}=chartHarness({objects:[]}),added=[],drafts=[];chart.tool='wave';chart.path=[{time:20,price:100},{time:40,price:105}];
+  chart.callbacks.draftChanged=draft=>drafts.push(draft);
+  chart.callbacks.add=object=>{added.push(object);assert.equal(chart.path.length,0);assert.equal(drafts.at(-1).count,0);assert.equal(chart.finishPath(),false);chart.setTool('select');};
+  assert.equal(chart.finishPath(),true);assert.equal(chart.finishPath(),false);assert.equal(added.length,1);assert.equal(chart.tool,'select');
+});
+
+test('forecast cancel, Escape and tool reset discard local drafts and publish the cleared count',()=>{
+  for(const action of ['cancel','escape','tool']){
+    const{chart,pointer}=chartHarness({objects:[]}),drafts=[];chart.callbacks.add=()=>assert.fail('Cancel must not save a forecast');chart.callbacks.draftChanged=draft=>drafts.push(draft);chart.setTool('wave');
+    chart.down({...pointer(80,80),timeStamp:1000});chart.down({...pointer(200,150),timeStamp:1800});
+    if(action==='cancel')assert.equal(chart.cancelPath(),true);
+    else if(action==='escape')chart.keydown({key:'Escape',preventDefault(){}});
+    else chart.setTool('horizontal');
+    assert.equal(chart.path.length,0);assert.equal(chart.lastDrawingClick,null);assert.deepEqual(drafts.at(-1),{period:'m3',count:0});
+    assert.equal(chart.cancelPath(),false);
+  }
+});
+
+test('double clicking only the first forecast point cannot create a degenerate shared object',()=>{
+  const{chart,pointer}=chartHarness({objects:[]});chart.callbacks.add=()=>assert.fail('A single point is not a shared forecast');chart.setTool('wave');
+  const at=pointer(80,80);chart.down({...at,timeStamp:1000,detail:1});chart.down({...at,timeStamp:1150,detail:1});chart.doubleClick({...at,timeStamp:1160});
+  assert.equal(chart.path.length,1);assert.equal(chart.finishPath(),false);chart.cancelPath();assert.equal(chart.path.length,0);
+});
+
 test('double clicking a node removes exactly that point and never deletes the entire two-point line',()=>{
   for(const kind of ['wave','path']){
     const{chart,pointer}=chartHarness({objects:[]});
@@ -545,8 +646,8 @@ test('zones use the chosen color in title, border and hatch; horizontal strokes 
     chart.drawObject(layer,{id:'z',kind:'zone',zone_type:'danger',color:'#00ff00',points:[{time:20,price:107},{time:70,price:97}]});
     const flatten=n=>[n,...n.children.flatMap(flatten)],all=flatten(layer);
     assert.equal(all.find(n=>n.attrs['data-zone']==='z').attrs.stroke,'#00ff00');assert.equal(all.find(n=>n.attrs['data-zone-title']==='z').attrs.fill,'#00ff00');assert.equal(all.find(n=>n.tag==='line').attrs.stroke,'#00ff00');
-    const horizontal=make('g');chart.drawObject(horizontal,{id:'h',kind:'horizontal',width:2,points:[{time:10,price:100}]});assert.equal(Number(horizontal.children[0].attrs['stroke-width']),1);
-    const segment=make('g');chart.drawObject(segment,{id:'s',kind:'segment',width:2,points:[{time:10,price:100},{time:60,price:100}]});assert.equal(Number(segment.children[0].attrs.x2),chart.tx.x(60));assert.equal(Number(segment.children[0].attrs['stroke-width']),1);assert.ok(segment.children.some(n=>n.attrs['data-segment-price']==='s'));
+    const horizontal=make('g');chart.drawObject(horizontal,{id:'h',kind:'horizontal',width:2,points:[{time:10,price:100}]});assert.equal(Number(horizontal.children[0].children[0].attrs['stroke-width']),1);
+    const segment=make('g');chart.drawObject(segment,{id:'s',kind:'segment',width:2,points:[{time:10,price:100},{time:60,price:100}]});assert.equal(Number(segment.children[0].children[0].attrs.x2),chart.tx.x(60));assert.equal(Number(segment.children[0].children[0].attrs['stroke-width']),1);assert.ok(segment.children[0].children.some(n=>n.attrs['data-segment-price']==='s'));
   }finally{global.document=previous;}
 });
 

@@ -24,6 +24,7 @@ class WorkspaceMarketTests(unittest.TestCase):
         two = self.cache.snapshot("TWO", self.preset, {"connected": True})
         self.assertEqual((one["price"], two["price"]), (101, 201))
         self.assertTrue(one["fresh"])
+        self.assertEqual(one["feed_status"], "live")
         bars = one["periods"]["m30"]
         self.assertEqual(timestamp(bars[-2]["closed_at"]), timestamp(bars[-2]["dt"])+1800)
         self.assertFalse(bars[-1]["closed"])
@@ -38,12 +39,31 @@ class WorkspaceMarketTests(unittest.TestCase):
         value = self.cache.snapshot("ONE", self.preset, {"connected": True})
         self.assertFalse(value["fresh"])
         self.assertTrue(value["freshness"]["m30"]["checked_recent"])
+        self.assertEqual(value["feed_status"], "idle")
+        self.assertIn("编写计划", value["message"])
+        self.assertEqual(value["quote_at"], iso(self.now - 25))
+
+    def test_failed_read_is_not_reported_as_idle(self):
+        self.populate("ONE")
+        self.cache.request("ONE")
+        self.now += 25
+        def failing_read(symbol, period):
+            raise ConnectionError("unavailable")
+        self.cache.refresh(failing_read)
+        value = self.cache.snapshot("ONE", self.preset, {"connected": True})
+        self.assertEqual(value["feed_status"], "stale")
+        self.assertFalse(value["fresh"])
+        self.assertTrue(value["periods"]["m3"])
 
     def test_missing_daily_and_disconnection_block_ready(self):
         self.cache.cache("ONE", 180, self.bars(180))
-        self.assertFalse(self.cache.snapshot("ONE", self.preset, {"connected": True})["fresh"])
+        missing = self.cache.snapshot("ONE", self.preset, {"connected": True})
+        self.assertFalse(missing["fresh"])
+        self.assertEqual(missing["feed_status"], "loading")
         self.populate("ONE")
-        self.assertFalse(self.cache.snapshot("ONE", self.preset, {"connected": False})["fresh"])
+        disconnected = self.cache.snapshot("ONE", self.preset, {"connected": False})
+        self.assertFalse(disconnected["fresh"])
+        self.assertEqual(disconnected["feed_status"], "disconnected")
 
     def test_invalid_prices_and_expired_requests(self):
         self.cache.request("ONE")
@@ -64,6 +84,7 @@ class WorkspaceMarketTests(unittest.TestCase):
         self.assertTrue(result["freshness"]["m30"]["checked_recent"])
         self.assertFalse(result["freshness"]["m30"]["covers_trigger"])
         self.assertFalse(result["fresh"])
+        self.assertEqual(result["feed_status"], "aligning")
 
     def test_history_correction_does_not_refresh_current_quote(self):
         self.populate("ONE")

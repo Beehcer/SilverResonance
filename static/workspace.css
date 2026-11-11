@@ -63,3 +63,6 @@
 
 .app-rail .cases-entry{margin-top:auto;margin-bottom:5px;flex-shrink:0;color:#e9c952;border-top:1px solid #39424b;background:#1c242b}
 .app-rail .cases-entry:hover,.app-rail .cases-entry:focus-visible{background:#373523;outline:1px solid #c5a43c}
+.active-symbol{max-width:100%;flex-wrap:wrap}#market-stamp{white-space:normal;overflow-wrap:anywhere}
+
+.drawing-draft{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid #625521;background:#272718;color:#f0ce54;flex:none}.drawing-draft button{border:1px solid #625521;background:#35331e;white-space:nowrap}.drawing-draft small{color:#b7aa7a}.object-context-menu button:disabled{cursor:default}

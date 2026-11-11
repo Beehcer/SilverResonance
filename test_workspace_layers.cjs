@@ -1,6 +1,46 @@
 const test=require('node:test'),assert=require('node:assert/strict'),L=require('./static/workspace-layers.js');
 const ids=items=>items.map(item=>item.id);
 function apply(objects,changes){return objects.map(object=>({...object,...changes.find(change=>change.id===object.id)?.patch}));}
+function contextHarness(){
+  class Element extends EventTarget{
+    constructor(){super();this.children=[];this.dataset={};this.attributes={};}
+    append(...nodes){this.children.push(...nodes);}
+    replaceChildren(...nodes){this.children=nodes;}
+    before(){}
+    setAttribute(key,value){this.attributes[key]=value;}
+  }
+  const document={createElement:()=>new Element()},list=new Element(),calls=[];list.ownerDocument=document;
+  const controller=new L.Controller({list,callbacks:{context:(id,event)=>calls.push({id,event}),select:()=>assert.fail('Menu routing must not invoke a different selection callback.')}});
+  return{controller,calls};
+}
+function dispatch(node,type,values={}){const event=new Event(type,{bubbles:true,cancelable:true});Object.assign(event,values);const accepted=node.dispatchEvent(event);return{event,accepted};}
+
+test('layer contextmenu listener routes the clicked row rather than the previously selected layer',()=>{
+  const{controller,calls}=contextHarness();controller.objects=[{id:'selected'},{id:'clicked'}];controller.selected='selected';
+  const row=controller.row('clicked').row,{event,accepted}=dispatch(row,'contextmenu',{button:2,clientX:325,clientY:171});
+  assert.equal(accepted,false);assert.equal(event.defaultPrevented,true);assert.equal(calls.length,1);
+  assert.equal(calls[0].id,'clicked');assert.equal(calls[0].event,event);assert.equal(event.target,row);
+  assert.equal(controller.selected,'selected');
+});
+test('hidden and locked layers still expose their own contextual actions',()=>{
+  const{controller,calls}=contextHarness();
+  controller.objects=[{id:'hidden',visible:false},{id:'locked',locked:true},{id:'both',visible:false,locked:true}];
+  for(const object of controller.objects){const{event}=dispatch(controller.row(object.id).row,'contextmenu',{button:2});assert.equal(event.defaultPrevented,true);}
+  assert.deepEqual(calls.map(call=>call.id),['hidden','locked','both']);
+  assert.deepEqual(controller.objects,[{id:'hidden',visible:false},{id:'locked',locked:true},{id:'both',visible:false,locked:true}]);
+});
+test('Shift F10 and the context menu key use the same layer handler and suppress native menus',()=>{
+  const{controller,calls}=contextHarness(),row=controller.row('keyboard').row;
+  for(const keys of[{key:'F10',shiftKey:true},{key:'ContextMenu'}]){
+    const{event,accepted}=dispatch(row,'keydown',keys);assert.equal(accepted,false);assert.equal(event.defaultPrevented,true);
+    assert.equal(calls.at(-1).id,'keyboard');assert.equal(calls.at(-1).event,event);
+  }
+  assert.equal(calls.length,2);
+  for(const keys of[{key:'F10'},{key:'F10',shiftKey:true,ctrlKey:true},{key:'Delete'},{key:'ArrowUp'}]){
+    const{event,accepted}=dispatch(row,'keydown',keys);assert.equal(accepted,true);assert.equal(event.defaultPrevented,false);
+  }
+  assert.equal(calls.length,2);
+});
 test('controller takes over only its drawing list and removes the template empty placeholder',()=>{
   const document={createElement(){return{children:[],append(...nodes){this.children.push(...nodes);},setAttribute(){},addEventListener(){}};}};
   const planRow={textContent:'开仓计划'},placeholder={textContent:'还没有手工标记'};
