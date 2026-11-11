@@ -8,13 +8,13 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261111-52af178a7141`。
+- 源码版本：`/opt/SilverResonance/releases/20261111-0acec4651567`，运行代码提交 `e45770d`，包含 `c2cd0f7` 与 `9998c46`。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261111-52af178a7141`。
+- 镜像：`silver-resonance:20261111-0acec4651567`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
-- 运行覆盖配置：`/etc/SilverResonance/compose.runtime.yaml`，注入 `TZ=CST-8`，使基本面更新时刻按北京时间计算。
+- 运行覆盖配置：`/etc/SilverResonance/compose.runtime.yaml`，注入 `TZ=CST-8`，内存上限 1280MiB。
 - 当前站点配置：`/www/server/panel/vhost/nginx/resonance.cg-x.com.conf`。已按用户要求去掉密码验证；当前站点配置优先于发布包内最初的认证模板。
 - 证书引用现有 `blog.ipao.tv` 目录的通配证书，保留原续期方式。
 - Nginx 对 K 线 JSON 和静态资源启用压缩，协作事件流保持不压缩且不缓冲。
@@ -22,17 +22,26 @@
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
 
-## 已完成验收
+## 本次更新与验收
+
+本次发布修复右键图层菜单/删除、开仓计划未落点时 Esc 退出、1234 双击完成与同步提示，以及同时拖动同一浪线时保留伙伴的节点修改。新增菜粕、鸡蛋、苹果、PTA；2026-11-11 14:39:50 经唯一真实行情连接重新核对全部16个主力合约。新增四个实际代码为 `CZCE.RM701`、`DCE.jd2612`、`CZCE.AP701`、`CZCE.TA701`，不是日历推测月份。
+
+生产入口改为16品种轻量报价和按查看请求加载三周期K线，不再运行该页面不使用的旧雷达评分、全局指标和结构落盘。保留日线180、30分钟6000、3分钟10000根订阅长度；上市历史不足时返回实际可用根数。SDK连接只有一个，图表全历史快照最多每秒转换一次，浏览器行情仍按5秒刷新。未宣称逐笔行情推送或所有协作已达到Figma体验。
 
 - 公网 HTTPS 无凭据访问 200；两个全新匿名会话测试通过。
 - 黄金、白银、螺纹三个周期真实行情均可用；主力合约来源为实际行情连接。
 - 绘图、区域颜色、标题、备注、浪点拖拽及插入删除、序号更新、鼠标、拖拽预览和视角协作通过。
-- 无凭据完整验收 13 项全部通过，事件通知实测约 1.7 秒。
+- 无凭据完整验收原13项加同浪线并发改点、删除与插点合并，共14项全部通过；本次直连公网事件通知实测1.226秒，这是单次观测，不是延迟承诺。
 - 缺少 CSRF 与跨源写请求均被拒绝，默认计划在验收前后保持一致。
-- 两轮验收仅使用独立 QA 画板，结束后已清空并归档。
-- 验收时为午间休市，三个品种最后报价参考为 11:30、3 分钟末根 11:27。验证了真实连接及 K 线加载，尚未在本次验收中观察午后连续跳价。
+- 验收仅使用独立 QA 画板，结束后已清空并归档；最终画板 `fd33c0b6411b32f8`。
+- 午后验收黄金、白银、螺纹均 `live/fresh=true`，末根3分钟K为14:45；服务器内同时确认PTA三周期可用。
+- 本地前端158项通过；Python174项执行，171项通过、3项因Windows不支持相应符号链接场景跳过。
+- 首轮验收出现过12秒超时；发现验收进程使用Windows系统代理。最终仅对验收子进程临时直连此域名，保留12秒超时与所有断言，未修改用户代理配置。经代理的用户线路仍可能增加延迟。
+- 更新后浏览器自动化读取超时，未取得最终版界面截图；本次线上验证依据双会话HTTP/SSE验收，不冒充完整浏览器端操作复验。右键和Esc已有本地浏览器验收记录。
 
-验收后三品种订阅时容器约716 MiB / 1 GiB，无 OOM、无重启。更多同时订阅品种仍需继续观察资源。
+热修后多品种验收过程中容器观测约439MiB / 1.25GiB，健康、零重启、无OOM。完整历史转换仍会消耗CPU，多用户容量及P95延迟尚未压测。更多协作差距与验收目标见 [在线即时协作审计](REALTIME-COLLABORATION-AUDIT.md)。
+
+更新前私有数据备份：`/var/backups/SilverResonance/20261111-0acec4651567/data-before-update.tgz`；前一发布 `20261111-43542a9c5cc2` 和最初发布 `20261111-52af178a7141` 镜像保留。部署未覆盖真实计划及账号配置，未更改其他站点。
 
 ## 维护命令
 
@@ -40,7 +49,7 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261111-52af178a7141
+export SILVER_RELEASE=20261111-0acec4651567
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
