@@ -30,11 +30,17 @@ import outlook_store
 import trading
 import trade_plan
 import plan_board_demo as board_demo
+import workspace_rules
+import workspace_store
+import workspace_api
+from workspace_market import WorkspaceMarketCache, data_length_for_period
 
 _trading_store = trading.TradingStore(os.path.join(user_settings.app_dir(), "state", "trading_state.json"))
 _board_demo_store = board_demo.SharedPlanStore(os.path.join(user_settings.app_dir(), "state", "plan_board_demo.json"))
 _structure_store = outlook_store.OutlookStore(os.path.join(user_settings.app_dir(), "state", "outlook_state.json"))
 _mock_structure_store = outlook_store.OutlookStore()
+_workspace_store = workspace_store.WorkspaceStore(os.path.join(user_settings.app_dir(), "state", "workspace.json"))
+_workspace_market = WorkspaceMarketCache()
 
 
 def _resource_dir():
@@ -46,6 +52,18 @@ def _resource_dir():
 
 app = Flask(__name__, template_folder=os.path.join(_resource_dir(), "templates"),
             static_folder=os.path.join(_resource_dir(), "static"))
+
+
+@app.before_request
+def _isolate_legacy_local_tools():
+    """Shared browsers use workspace APIs, isolated from the host's ledger/setup."""
+    if request.path in ("/", "/workspace") or request.path.startswith(("/api/workspace/", "/static/")):
+        return None
+    local = request.remote_addr in ("127.0.0.1", "::1", None)
+    forwarded = bool(request.headers.get("Forwarded") or request.headers.get("X-Forwarded-For"))
+    if not local or forwarded:
+        return jsonify(status="error", message="此页面仅供主机管理，请使用共享工作台。"), 403
+    return None
 
 # 返回给前端画图的最大K线根数
 CHART_BARS = 60
@@ -1205,12 +1223,109 @@ def _invert_bars(bars):
 _MOCK_PATTERN = {"SHFE.ag2608": "bottom", "SHFE.rb2610": "top", "DCE.jm2609": "bottom"}
 
 
+def _mock_trading_times(count, period, now):
+    now = int(now or time.time())
+    local = datetime.fromtimestamp(now, timezone(timedelta(hours=8)))
+    days = max(30, int(count * period / 9000) + 30)
+    first_day = local.date() - timedelta(days=days)
+    stamps = []
+    sessions = ((9, 0, 10, 15), (10, 30, 11, 30), (13, 30, 15, 0), (21, 0, 23, 0))
+    for offset in range(days + 1):
+        day = first_day + timedelta(days=offset)
+        if day.weekday() >= 5:
+            continue
+        for start_h, start_m, end_h, end_m in sessions:
+            start = int(datetime(day.year, day.month, day.day, start_h, start_m,
+                                 tzinfo=timezone(timedelta(hours=8))).timestamp())
+            end = int(datetime(day.year, day.month, day.day, end_h, end_m,
+                               tzinfo=timezone(timedelta(hours=8))).timestamp())
+            for stamp in range(start, end, period):
+                if stamp <= now:
+                    stamps.append(stamp)
+    return stamps[-count:]
+
+
+def _mock_timestamped_series(base, period, drift, vol, now=None, count=None):
+    length = count or config.KLINE_LENGTH
+    if length <= 1000:
+        rows = _mock_series(base, length, drift, vol)
+    else:
+        rows = []
+        price = base
+        oi = 200000
+        for index in range(length):
+            target = base * (1 + .035 * math.sin(index / 300))
+            open_price = price
+            price += (target - price) * .006 + random.uniform(-vol, vol)
+            close = price
+            high = max(open_price, close) + random.uniform(0, vol)
+            low = min(open_price, close) - random.uniform(0, vol)
+            oi_delta = int((close - open_price) * 200 + random.uniform(-400, 400))
+            oi += oi_delta
+            rows.append({"open": round(open_price, 1), "high": round(high, 1),
+                         "low": round(low, 1), "close": round(close, 1),
+                         "volume": int(abs(close-open_price)*300 + random.uniform(200, 1500)),
+                         "oi": oi_delta})
+    times = _mock_trading_times(len(rows), period, now)
+    for index, row in enumerate(rows):
+        row["dt"] = datetime.fromtimestamp(times[index], timezone.utc).isoformat()
+    return rows
+
+
+def _mock_aggregate_series(series, period):
+    grouped = []
+    group_dt = None
+    for bar in series:
+        stamp = datetime.fromisoformat(bar["dt"]).timestamp()
+        if period == 86400:
+            day = datetime.fromtimestamp(stamp, timezone(timedelta(hours=8))).date().isoformat()
+            current_dt = day + "T00:00:00+08:00"
+        else:
+            current_dt = datetime.fromtimestamp(int(stamp // period) * period, timezone.utc).isoformat()
+        if current_dt != group_dt:
+            grouped.append({"dt": current_dt, "open": bar["open"], "high": bar["high"],
+                            "low": bar["low"], "close": bar["close"],
+                            "volume": bar.get("volume", 0), "oi": bar.get("oi", 0)})
+            group_dt = current_dt
+        else:
+            grouped[-1].update(high=max(grouped[-1]["high"], bar["high"]),
+                               low=min(grouped[-1]["low"], bar["low"]), close=bar["close"],
+                               volume=grouped[-1]["volume"] + bar.get("volume", 0),
+                               oi=bar.get("oi", grouped[-1]["oi"]))
+    return grouped[-data_length_for_period(period):]
+
+
+def _mock_continuous_series(series, drift, vol, advance=False):
+    if not series:
+        return _mock_series(2500, config.KLINE_LENGTH, drift, vol)
+    if advance:
+        last_dt = series[-1].get("dt")
+        previous_dt = series[-2].get("dt") if len(series) > 1 else None
+        step = ((datetime.fromisoformat(last_dt) - datetime.fromisoformat(previous_dt)).total_seconds()
+                if last_dt and previous_dt else None)
+        series.pop(0)
+        rows = _mock_series(series[-1]["close"], 1, drift, vol)
+        if last_dt and step:
+            rows[0]["dt"] = (datetime.fromisoformat(last_dt) + timedelta(seconds=step)).isoformat()
+        series.extend(rows)
+        return series
+    last = series[-1]
+    close = round(max(vol, last["close"] + drift * .12 + random.uniform(-vol, vol) * .35), 1)
+    last.update(close=close, high=round(max(last["high"], last["open"], close), 1),
+                low=round(min(last["low"], last["open"], close), 1),
+                volume=int(abs(close - last["open"]) * 300 + random.uniform(200, 1500)),
+                oi=last["oi"] + int((close - last["open"]) * 20 + random.uniform(-30, 30)))
+    return series
+
+
 def _mock_loop():
     """模拟全部预设品种：聚焦品种走完整面板管线，全部品种出全局快照。"""
     _set_boot("loading", 60, "生成模拟数据…")
     _set_state(connected=True, connection_status="simulated", error=None)
     phase = 0.0
     first = True
+    workspace_series = {}
+    workspace_ticks = {}
     while True:
         _note_feed_poll(received=True)
         # 用正弦让方向周期性在多/空/震荡之间切换，便于看灯变化
@@ -1267,6 +1382,23 @@ def _mock_loop():
                                     "resonance": result["resonance"]},
                      focus_trigger={"direction": result["direction"],
                                     "trigger_ok": result["legs"]["trigger"]["ok"]})
+        for sym in _workspace_market.requested():
+            i = idx_of.get(sym, 0)
+            volatility = max(1, (2500 + i * 900) * .0004)
+            series = workspace_series.get(sym)
+            if not series:
+                series = _mock_timestamped_series(2500 + i * 900, 180,
+                                                  math.sin(phase + i * 1.3) * .5, volatility,
+                                                  count=86400)
+                workspace_series[sym] = series
+            workspace_ticks[sym] = workspace_ticks.get(sym, 0) + 1
+            _mock_continuous_series(series, math.sin(phase + i * 1.3) * .6,
+                                    volatility, advance=workspace_ticks[sym] % 12 == 0)
+
+        def workspace_bar_getter(sym, period):
+            return _mock_aggregate_series(workspace_series[sym], period)
+
+        _workspace_market.refresh(workspace_bar_getter, simulated=True)
         _dump_signals_state()
         if first:
             _set_boot("ready", 100, "就绪")
@@ -1284,7 +1416,7 @@ class _KlineSubscriptions:
     def get(self, sym, period):
         key = (sym, period)
         if key not in self.serials:
-            self.serials[key] = self.api.get_kline_serial(sym, period, config.KLINE_LENGTH)
+            self.serials[key] = self.api.get_kline_serial(sym, period, data_length_for_period(period))
         return self.serials[key]
 
     def market_changed(self):
@@ -1425,6 +1557,13 @@ def _tqsdk_loop():
             # 提前登记焦点30m/3m及查看过的周期；warmup不足也不能挡住图表刷新。
             for period in _requested_chart_periods():
                 serial(focus, period)
+            # Each member can inspect their own contract; never mutate the legacy focus.
+            for workspace_symbol in _workspace_market.requested():
+                for workspace_period in (86400, 1800, 180):
+                    try:
+                        serial(workspace_symbol, workspace_period)
+                    except Exception:
+                        pass  # The unavailable period remains visibly unavailable.
             # deadline超时返回False，不代表断网/休市；SDK自己恢复断开的连接。
             try:
                 received = api.wait_update(deadline=time.time() + 5)
@@ -1433,6 +1572,7 @@ def _tqsdk_loop():
             _note_feed_poll(received=received, notifications=notifications.get_notifies(),
                             market_changed=bool(received and subscriptions.market_changed()))
             _refresh_focus_charts(focus, lambda s, p: to_list(serial(s, p)))
+            _workspace_market.refresh(lambda s, p: to_list(serial(s, p)))
             if not get_state().get("connected"):
                 continue
             kt_list, kf_list, kg_list = to_list(kt), to_list(kf), to_list(kg)
@@ -1522,6 +1662,12 @@ def start_data_thread():
 
 # ---------------- 路由 ----------------
 @app.route("/")
+@app.route("/workspace")
+def workspace_index():
+    return render_template("workspace.html")
+
+
+@app.route("/monitor")
 def index():
     # 未配置 → 去配置页
     if not user_settings.is_configured():
@@ -1904,15 +2050,58 @@ def api_fundamentals():
     return jsonify({"symbol": sym, "meta": fundamentals.meta(), **fundamentals.get(sym)})
 
 
+def _workspace_symbols_provider():
+    return [{key: preset[key] for key in ("symbol", "name", "tick", "tick_value") if key in preset}
+            for preset in symbols.PRESETS]
+
+
+def _workspace_market_provider(symbol):
+    preset = symbols.find(symbol)
+    if not preset:
+        raise ValueError("未知实际合约")
+    state = get_state()
+    market = _workspace_market.snapshot(symbol, preset, state, simulated=config.MOCK_MODE)
+    market["setup_required"] = state.get("boot_phase") == "need_config"
+    if market["setup_required"]:
+        market["message"] = "主机尚未配置行情来源 · 主机可打开 /setup 完成配置，协作成员无需行情账号"
+    return market
+
+
+def _workspace_quotes_provider():
+    """Read the existing radar cache; do not open extra large chart subscriptions."""
+    result = []
+    state = get_state()
+    for preset in symbols.PRESETS:
+        symbol = preset["symbol"]
+        with _outlook_lock:
+            data = _outlook_data.get((symbol, 180)) or _outlook_data.get((symbol, 1800))
+            rows = (data or {}).get("bars") or []
+            last = dict(rows[-1]) if rows else None
+            checked = (data or {}).get("updated")
+        result.append({"symbol": symbol, "price": last.get("close") if last else None,
+                       "tick": preset.get("tick"), "at": checked * 1000 if checked else None,
+                       "source": "mock" if config.MOCK_MODE else "live",
+                       "connected": bool(state.get("connected")), "bar_time": last.get("dt") if last else None})
+    return result
+
+
+workspace_api.register_workspace(app, _workspace_store, _workspace_market_provider,
+                                 _workspace_symbols_provider, workspace_rules.rule_manifest,
+                                 workspace_rules.evaluate_plan, _workspace_quotes_provider)
+
+
 def _open_browser_later():
     time.sleep(1.0)
     try:
-        webbrowser.open(f"http://{config.HOST}:{config.PORT}")
+        browser_host = "127.0.0.1" if config.HOST == "0.0.0.0" else config.HOST
+        webbrowser.open(f"http://{browser_host}:{config.PORT}")
     except Exception:  # noqa: BLE001
         pass
 
 
 if __name__ == "__main__":
+    if "--share" in sys.argv:
+        config.HOST = "0.0.0.0"
     apply_user_settings()
     # 已配置 → 直接起行情线程；未配置 → 等用户在配置页提交后再起
     if user_settings.is_configured():
