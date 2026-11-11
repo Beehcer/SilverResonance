@@ -8,9 +8,9 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261111-18018c00fe94`，运行代码提交 `48b09b4`，包含此前协作与行情热修。
+- 源码版本：`/opt/SilverResonance/releases/20261111-513838bcd042`，运行代码提交 `741a887`，包含后台缓存、跨盘锚定、文本双击和删除二次确认。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261111-18018c00fe94`。
+- 镜像：`silver-resonance:20261111-513838bcd042`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
@@ -21,6 +21,21 @@
 - 依赖快照：`/opt/SilverResonance/staging/dependencies.lock.txt`。
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
+
+## 22:05 夜盘更新
+
+用户再次明确授权“推送线上吧”后发布 `20261111-513838bcd042`，运行代码 `741a887`。包含已看品种后台更新、完整历史增量传输、直接拖拽排序及收藏置顶、Ctrl+S与非编辑区拖选拦截、开盘浪点锚定与小周期缩放、图上文本双击实时编辑、全部删除二次确认。行为与旧线兼容边界见 [本轮说明](WORKSPACE-BACKGROUND-AND-ANCHORS.md)。
+
+发布包48个白名单文件，SHA-256 `513838bcd0428c7ba1411573a0330285a034c3c9dc05937f9442c3d4d19939e4`。先完成服务器镜像构建和无行情连接的配置检查，再停写备份、切换；保留原1280MiB运行配置、公开免密码访问和其他站点。备份 `/var/backups/SilverResonance/20261111-513838bcd042/data-before-update.tgz`；前一版本 `20261111-18018c00fe94` 保留用于回退。未改写已有浪线或默认计划。
+
+- 22:05:53由唯一行情连接重新核对16个主力合约；新容器healthy、零重启、无OOM。
+- 公网工作台无凭据访问200；17个静态资源内容哈希与发布包一致，HTML包含新版本15资源与二次确认入口。
+- 公网螺纹→黄金→螺纹读取均验证末两根增量；螺纹完整历史180/2343/10000，黄金180/4448/10000。22:07两者均live、fresh、connected，螺纹报价时间从22:07:12推进至22:07:18。
+- 独立双会话验证点位锚定、横纵并发编辑、插入删除、协作预览、非法半坐标拒绝及旧客户端兼容；QA板 `30cad1696493986c` 已清空归档，默认计划前后相同。本次SSE观测1.051秒，不是延迟承诺。
+- 本地356项JavaScript、149项工作台Python测试通过；另时效及发布检查通过，3项Windows符号链接场景跳过。图上双击、删除确认、拖拽排序及缩放有本地浏览器验收。
+- 本轮线上浏览器工具读取超时，未取得线上截图；公网验收依据实际HTTP/SSE与资源哈希，不声称完成线上浏览器逐项交互复验。
+
+既有页面不会被强制刷新。右下角显示“已同步”后刷新一次，加载新版前端；未完成绘制请先结束当前画线。
 
 ## 20:20 不透明度更新
 
@@ -57,7 +72,7 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261111-18018c00fe94
+export SILVER_RELEASE=20261111-513838bcd042
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
