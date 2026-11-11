@@ -41,6 +41,8 @@ _structure_store = outlook_store.OutlookStore(os.path.join(user_settings.app_dir
 _mock_structure_store = outlook_store.OutlookStore()
 _workspace_store = workspace_store.WorkspaceStore(os.path.join(user_settings.app_dir(), "state", "workspace.json"))
 _workspace_market = WorkspaceMarketCache()
+_workspace_quote_lock = threading.Lock()
+_workspace_live_quotes = {}
 
 
 def _resource_dir():
@@ -1423,6 +1425,83 @@ class _KlineSubscriptions:
         return any(self.api.is_changing(serial) for serial in self.serials.values())
 
 
+def _serial_rows(df):
+    """Read a subscribed SDK frame without changing its retained history."""
+    rows = []
+    opens, highs = df["open"].tolist(), df["high"].tolist()
+    lows, closes = df["low"].tolist(), df["close"].tolist()
+    volumes = df["volume"].tolist() if "volume" in df else [0] * len(closes)
+    open_ois = df["open_oi"].tolist() if "open_oi" in df else [0] * len(closes)
+    close_ois = df["close_oi"].tolist() if "close_oi" in df else [0] * len(closes)
+    timestamps = df["datetime"].tolist()
+    for o, h, low, c, v, ooi, coi, stamp in zip(opens, highs, lows, closes, volumes, open_ois, close_ois, timestamps):
+        if math.isnan(c):
+            continue
+        volume = 0 if isinstance(v, float) and math.isnan(v) else int(v)
+        oi_delta = 0
+        if not (isinstance(coi, float) and math.isnan(coi)) and not (isinstance(ooi, float) and math.isnan(ooi)):
+            oi_delta = int(coi - ooi)
+        rows.append({"open": float(o), "high": float(h), "low": float(low), "close": float(c),
+                     "volume": volume, "oi": oi_delta,
+                     "dt": datetime.fromtimestamp(int(stamp) / 1e9, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")})
+    return rows
+
+
+def _cache_workspace_quotes(quotes):
+    """Quote-list prices are independent of expensive legacy radar analysis."""
+    checked = time.time() * 1000
+    snapshot = {}
+    for symbol, quote in quotes.items():
+        price = getattr(quote, "last_price", None)
+        valid = (isinstance(price, (int, float)) and not isinstance(price, bool)
+                 and math.isfinite(price) and price > 0)
+        stamp = getattr(quote, "datetime", None)
+        snapshot[symbol] = {"price": float(price) if valid else None,
+                            "at": checked, "bar_time": stamp if isinstance(stamp, str) and stamp else None}
+    with _workspace_quote_lock:
+        _workspace_live_quotes.clear()
+        _workspace_live_quotes.update(snapshot)
+
+
+def _workspace_tqsdk_session(api, notifications):
+    """Production uses the same SDK session, quotes plus requested chart periods.
+
+    Desktop radar/scoring and its state dumps are not workspace dependencies.
+    Pump provider notifications on every update; materialize full chart history
+    at most once a second so tick bursts cannot monopolize the Python process.
+    """
+    codes = [preset["symbol"] for preset in symbols.PRESETS]
+    quotes = dict(zip(codes, api.get_quote_list(codes)))
+    subscriptions = _KlineSubscriptions(api)
+    _cache_workspace_quotes(quotes)
+    _set_state(connected=True, connection_status="unknown", error=None)
+    _set_boot("ready", 100, "真实报价已连接，图表按查看品种加载")
+    next_charts = 0.0
+    while True:
+        # get() reuses each (contract, period); adding a viewer never opens a
+        # second SDK session or subscribes large histories for all other codes.
+        for symbol in _workspace_market.requested():
+            for period in (86400, 1800, 180):
+                try:
+                    subscriptions.get(symbol, period)
+                except Exception:
+                    pass  # An unavailable period remains loading/stale.
+        try:
+            received = api.wait_update(deadline=time.time() + 1)
+        except TimeoutError:
+            received = False
+        changed = bool(received and (any(api.is_changing(quote, ["last_price", "datetime"])
+                                        for quote in quotes.values()) or subscriptions.market_changed()))
+        _note_feed_poll(received=received, notifications=notifications.get_notifies(), market_changed=changed)
+        _cache_workspace_quotes(quotes)
+        now = time.monotonic()
+        if now >= next_charts:
+            _workspace_market.refresh(lambda symbol, period: _serial_rows(subscriptions.get(symbol, period)))
+            # Schedule from completion, not from the previous tick: slow history
+            # conversion must not create a catch-up loop that starves HTTP work.
+            next_charts = time.monotonic() + 1
+
+
 def _note_feed_poll(received=False, notifications=(), market_changed=False):
     """SDK事件泵存活、业务更新和行情连接通知是三个独立证据。"""
     now = time.time()
@@ -1495,6 +1574,10 @@ def _tqsdk_loop():
                 f"请在配置页改成当前主力合约（如 SHFE.ag2510），或核对代码格式。原始信息：{e}"
             )
 
+        if app.config.get("WORKSPACE_PRODUCTION"):
+            _workspace_tqsdk_session(api, notifications)
+            return
+
         _set_boot("loading", 60, "正在拉取K线…")
         # K线订阅缓存：(品种,周期)->serial。切换组合/品种/查看多周期时复用，避免重复订阅。
         # 订阅数估算：全局层 12品种×3周期=36 条（聚焦品种的与全局复用同key），
@@ -1509,29 +1592,7 @@ def _tqsdk_loop():
         kg = serial(focus, combo["trigger"])
         _set_state(connected=True, connection_status="unknown", error=None, combo=combo["key"])
 
-        def to_list(df):
-            # 过滤未生成的NaN行，返回 OHLC + 成交量 + 持仓量变化(CCL)
-            rows = []
-            opens = df["open"].tolist()
-            highs = df["high"].tolist()
-            lows = df["low"].tolist()
-            closes = df["close"].tolist()
-            volumes = df["volume"].tolist() if "volume" in df else [0] * len(closes)
-            open_ois = df["open_oi"].tolist() if "open_oi" in df else [0] * len(closes)
-            close_ois = df["close_oi"].tolist() if "close_oi" in df else [0] * len(closes)
-            timestamps = df["datetime"].tolist()
-            for o, h, low, c, v, ooi, coi, ts in zip(opens, highs, lows, closes, volumes, open_ois, close_ois, timestamps):
-                if math.isnan(c):
-                    continue
-                vol = 0 if (isinstance(v, float) and math.isnan(v)) else int(v)
-                oi_delta = 0
-                if not (isinstance(coi, float) and math.isnan(coi)) and not (isinstance(ooi, float) and math.isnan(ooi)):
-                    oi_delta = int(coi - ooi)
-                rows.append({"open": float(o), "high": float(h),
-                             "low": float(low), "close": float(c),
-                             "volume": vol, "oi": oi_delta,
-                             "dt": datetime.fromtimestamp(int(ts) / 1e9, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")})
-            return rows
+        to_list = _serial_rows
 
         first = True
         wait_start = time.time()
@@ -2071,6 +2132,15 @@ def _workspace_quotes_provider():
     """Read the existing radar cache; do not open extra large chart subscriptions."""
     result = []
     state = get_state()
+    if app.config.get("WORKSPACE_PRODUCTION"):
+        with _workspace_quote_lock:
+            cached = {key: dict(value) for key, value in _workspace_live_quotes.items()}
+        return [{"symbol": preset["symbol"], "tick": preset.get("tick"),
+                 "price": cached.get(preset["symbol"], {}).get("price"),
+                 "at": cached.get(preset["symbol"], {}).get("at"),
+                 "bar_time": cached.get(preset["symbol"], {}).get("bar_time"),
+                 "source": "live", "connected": bool(state.get("connected"))}
+                for preset in symbols.PRESETS]
     for preset in symbols.PRESETS:
         symbol = preset["symbol"]
         with _outlook_lock:

@@ -232,6 +232,29 @@
       else{this.selected=null;this.selectedAnchor=null;this.callbacks.select?.(null);this.followLatest=false;this.drag={kind:'pan',origin:point,view:{...this.view},pointerId:event.pointerId};}this.render();
     }
     scheduleRender(){if(this.renderFrame)return;const frame=globalThis.requestAnimationFrame;if(!frame){this.render();return;}this.renderFrame=frame(()=>{this.renderFrame=null;this.render();});}
+    objectDragPreview(drag){
+      const current=this.plan.objects?.find(object=>object.id===drag.object.id);
+      if(!current||current.locked||current.kind!==drag.object.kind||!drag.value||!drag.point)return null;
+      const value={...drag.value},dt=value.time-drag.origin.time,dp=value.price-drag.origin.price;
+      if(drag.anchor===null){
+        // Replay this gesture on the latest geometry instead of restoring its starting snapshot.
+        const zoneDelta=current.kind==='zone'?Math.max(dp,this.tick-Math.min(...current.points.map(point=>point.price))):dp;
+        return{...current,points:current.points.map(anchor=>({...anchor,time:['zone','segment'].includes(current.kind)?Math.max(0,Math.round(this.tx.time(this.tx.x(anchor.time)+drag.point.x-drag.start.x))):Math.max(0,anchor.time+dt),price:current.kind==='zone'?anchor.price+zoneDelta:isForecast(current)?Math.max(Number.EPSILON,anchor.price+dp):snap(Math.max(this.tick,anchor.price+dp),this.tick)}))};
+      }
+      const original=drag.object.points[drag.anchor];
+      // Stable IDs survive peer insertions/deletions. Legacy forecasts use an exact, unique anchor match.
+      const matches=current.points.map((point,index)=>({point,index})).filter(({point})=>point.time===original?.time&&point.price===original?.price);
+      const index=original?.id?current.points.findIndex(point=>point.id===original.id):isForecast(current)?(matches.length===1?matches[0].index:-1):drag.anchor;
+      if(index<0||!current.points[index])return null;
+      if(current.kind==='segment'){
+        const other=current.points[1-index];if(!other)return null;
+        const otherX=this.tx.x(other.time),direction=Math.sign(drag.point.x-otherX)||Math.sign(current.points[index].time-other.time)||1;
+        if(Math.abs(drag.point.x-otherX)<3)value.time=Math.max(0,Math.round(this.tx.time(otherX+direction*3)));
+        value.price=current.points[0].price;
+      }
+      this.selectedAnchor=index;
+      return{...current,points:current.points.map((anchor,i)=>i===index?{...anchor,...value}:anchor)};
+    }
     move(event){
       if(!this.view||!this.tx)return;const point=this.point(event);this.crosshair=point;if(this.period==='day'){const range=!this.drag&&this.tool==='select'?this.dayAt(point):null,key=range?.label||null;if(key!==this.hoverDayKey){this.hoverDayKey=key;this.callbacks.hoverDay?.(range);}}if(!this.drag&&['planned-entry','planned-stop'].includes(this.tool)){const inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h;this.placementPreview=inside?{field:this.tool==='planned-entry'?'planned_entry_price':'stop_price',price:this.toValue(point,false).price}:null;this.callbacks.previewLevel?.(this.placementPreview?.field||null,this.placementPreview?.price||null);}
       if(this.drag){const drag=this.drag;
@@ -240,7 +263,7 @@
         else if(drag.kind==='place-level'){drag.price=this.toValue(point,false).price;this.callbacks.previewLevel?.(drag.field,drag.price);}
         else if(drag.kind==='new-zone'||drag.kind==='new-line')drag.point=this.toValue(point);
         else if(drag.kind==='new-segment')drag.point={time:this.toValue(point,false).time,price:drag.origin.price};
-        else if(drag.kind==='object'){const value=this.toValue(point,drag.anchor!==null&&!['path','wave','segment'].includes(drag.object.kind),isForecast(drag.object)),dt=value.time-drag.origin.time,dp=value.price-drag.origin.price;drag.moved=drag.moved||Math.hypot(point.x-drag.start.x,point.y-drag.start.y)>=3;if(drag.moved){this.lastPathClick=null;this.lastTitleClick=null;}if(drag.object.kind==='segment'&&Number.isInteger(drag.anchor)){const other=drag.object.points[1-drag.anchor],otherX=this.tx.x(other.time),direction=Math.sign(point.x-otherX)||Math.sign(drag.object.points[drag.anchor].time-other.time)||1;if(Math.abs(point.x-otherX)<3)value.time=Math.max(0,Math.round(this.tx.time(otherX+direction*3)));}if(drag.moved&&!this.plan.objects?.find(o=>o.id===drag.object.id)?.locked)drag.preview={...drag.object,points:drag.object.points.map((anchor,index)=>drag.anchor===null?{...anchor,time:['zone','segment'].includes(drag.object.kind)?Math.max(0,Math.round(this.tx.time(this.tx.x(anchor.time)+point.x-drag.start.x))):Math.max(0,anchor.time+dt),price:drag.object.kind==='zone'?anchor.price+Math.max(dp,this.tick-Math.min(...drag.object.points.map(p=>p.price))):isForecast(drag.object)?Math.max(Number.EPSILON,anchor.price+dp):snap(Math.max(this.tick,anchor.price+dp),this.tick)}:index===drag.anchor?{...anchor,...value,...(drag.object.kind==='segment'?{price:drag.object.points[0].price}:{})}:anchor)};}
+        else if(drag.kind==='object'){drag.value=this.toValue(point,drag.anchor!==null&&!['path','wave','segment'].includes(drag.object.kind),isForecast(drag.object));drag.point={...point};drag.moved=drag.moved||Math.hypot(point.x-drag.start.x,point.y-drag.start.y)>=3;if(drag.moved){this.lastPathClick=null;this.lastTitleClick=null;drag.preview=this.objectDragPreview(drag);}}
       }
       const drag=this.drag,isLevel=drag&&['plan-level','place-level'].includes(drag.kind),overControl=!drag&&this.tool==='select'?this.hitPathControl(point):null;this.hoverLevel=!drag&&this.tool==='select'?hitPlanLevel(point,this.levelGeometry(),this.plot,this.host.clientWidth)?.field:null;
       this.snapPreview=drag?.kind==='new-line'||drag?.kind==='object'&&Number.isInteger(drag.anchor)&&['trend','reference'].includes(drag.object.kind)||!drag&&['trend','reference','horizontal'].includes(this.tool)?this.snapTarget(point):null;
@@ -255,7 +278,7 @@
       else if(drag.kind==='new-zone'){if(Math.abs(drag.origin.price-drag.point.price)>=this.tick&&Math.abs(drag.origin.time-drag.point.time)>INTERVAL[this.period]/4)this.callbacks.add?.({kind:'zone',name:'危险区',zone_type:'danger',effect:'block',direction:'both',period:this.period,points:[drag.origin,drag.point]});}
       else if(drag.kind==='new-line'){if(Math.hypot(drag.origin.time-drag.point.time,drag.origin.price-drag.point.price)>0)this.callbacks.add?.({kind:drag.lineKind,name:drag.lineKind==='trend'?'趋势线':'参考线',period:'all',points:[drag.origin,drag.point],color:'#f1c40f',line_style:drag.lineKind==='reference'?'dashed':'solid'});}
       else if(drag.kind==='new-segment'){if(Math.abs(this.tx.x(drag.origin.time)-this.tx.x(drag.point.time))>=3)this.callbacks.add?.({kind:'segment',name:'水平线段',period:this.period,points:[drag.origin,drag.point]});}
-      else if(drag.kind==='object'&&drag.moved&&drag.preview&&!this.plan.objects?.find(o=>o.id===drag.object.id)?.locked)this.callbacks.update?.(drag.object.id,{points:drag.preview.points});this.render();
+      else if(drag.kind==='object'&&drag.moved){const preview=this.objectDragPreview(drag);if(preview)this.callbacks.update?.(drag.object.id,{points:preview.points});}this.render();
       this.snapPreview=null;const point=this.point(event),inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h;this.clearPresence(inside?this.toValue(point,false,true):null);
     }
     editPathAtHit(hit,point){if(!isForecast(hit?.object))return;this.selected=hit.object.id;this.selectedAnchor=hit.anchor;this.callbacks.select?.(hit.object.id,hit.anchor);if(Number.isInteger(hit.anchor))this.deleteSelection();else if(Number.isInteger(hit.segment))this.insertWavePoint(hit.object.id,point,hit.segment);}

@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');
 const {test}=require('node:test');
 const C=require('./static/workspace-chart.js');
+const M=require('./static/workspace-merge.js');
 
 test('blank price remains unknown and invalid numeric values never become prices',()=>{
   for(const value of ['', '  ', null, undefined, 'bad', Infinity, NaN, 0, -1]) assert.equal(C.priceNumber(value),null);
@@ -663,5 +664,77 @@ test('dragging any zone corner or its body keeps its size across compressed sess
     chart.move(pointer(point.x+120,point.y-16));chart.up(pointer(point.x+120,point.y-16));
     const after=chart.objectPoints(zone);assert.ok(Math.abs((after[1].x-after[0].x)-width)<.001);assert.ok(Math.abs((after[1].y-after[0].y)-height)<1e-8);
     assert.ok(Math.abs(after[0].x-original[0].x-120)<.001);assert.ok(Math.abs(zone.points[0].price-zone.points[1].price-8.23)<1e-8);
+  }
+});
+
+test('forecast drag commits only the grabbed ID after peer edits, insertion and deletion',()=>{
+  for(const kind of ['wave','path'])for(const timing of ['before-move','after-last-move']){
+    const points=[{id:'a',time:20,price:100},{id:'b',time:40,price:105},{id:'c',time:60,price:99},{id:'d',time:80,price:104}];
+    const{chart,pointer}=chartHarness({objects:[{id:'w',kind,period:'m3',points:C.wavePoints(points)}]});
+    chart.selected='w';let local;
+    chart.callbacks.update=(id,patch)=>{local=structuredClone(chart.plan);Object.assign(local.objects.find(object=>object.id===id),patch);};
+    const x=chart.tx.x(40),y=chart.tx.y(105);chart.down(pointer(x,y));assert.equal(chart.drag.anchor,1);
+    if(timing==='after-last-move')chart.move(pointer(x+16,y+10));
+    const remote=structuredClone(chart.plan),wave=remote.objects[0];wave.name='Peer title';wave.color='#00cc88';
+    wave.points[0].price=101;wave.points.splice(1,0,{id:'peer-insert',time:30,price:102});wave.points=wave.points.filter(point=>point.id!=='d');wave.points=C.wavePoints(wave.points);
+    chart.setPlan(remote);
+    if(timing==='before-move')chart.move(pointer(x+16,y+10));
+    chart.up(pointer(x+16,y+10));
+    assert.ok(local,`${kind}: ${timing}`);const pending=M.diff(remote,local),edit=pending.object_edits[0];
+    assert.deepEqual(edit.node_updates,[{id:'b',changes:{time:44,price:104}}]);
+    assert.deepEqual(edit.node_inserts,[]);assert.deepEqual(edit.node_deletes,[]);assert.deepEqual(edit.changes,{});
+    const saved=M.apply(remote,pending).objects[0];assert.deepEqual(saved.points.map(point=>point.id),['a','peer-insert','b','c']);
+    assert.deepEqual(saved.points.map(point=>point.label),['1','2','3','4']);assert.equal(saved.points[0].price,101);assert.equal(saved.name,'Peer title');assert.equal(saved.color,'#00cc88');
+    assert.equal(chart.selectedAnchor,2);
+  }
+});
+
+test('peer deletion or lock during node drag never recreates the point or object',()=>{
+  for(const change of ['delete-node','delete-object','lock-object']){
+    const{chart,pointer}=chartHarness({objects:[{id:'w',kind:'wave',period:'m3',points:C.wavePoints([{id:'a',time:20,price:100},{id:'b',time:40,price:105},{id:'c',time:60,price:99}])}]});
+    let updates=0;chart.callbacks.update=()=>updates++;
+    const x=chart.tx.x(40),y=chart.tx.y(105);chart.down(pointer(x,y));chart.move(pointer(x+16,y+10));
+    const remote=structuredClone(chart.plan);
+    if(change==='delete-node')remote.objects[0].points=C.wavePoints(remote.objects[0].points.filter(point=>point.id!=='b'));
+    else if(change==='delete-object')remote.objects=[];else remote.objects[0].locked=true;
+    chart.setPlan(remote);chart.up(pointer(x+16,y+10));
+    assert.equal(updates,0,change);assert.equal(M.hasPending(M.diff(remote,chart.plan)),false);
+  }
+});
+
+test('whole-line drag replays displacement on the latest peer geometry',()=>{
+  for(const kind of ['trend','reference']){
+    const{chart,pointer}=chartHarness({objects:[{id:'line',kind,period:'m3',points:[{time:20,price:105},{time:80,price:95}]}]});
+    let local;chart.callbacks.update=(id,patch)=>{local=structuredClone(chart.plan);Object.assign(local.objects[0],patch);};
+    const x=chart.tx.x(50),y=chart.tx.y(100);chart.down(pointer(x,y));assert.equal(chart.drag.anchor,null);chart.move(pointer(x+16,y+10));
+    const remote=structuredClone(chart.plan);remote.objects[0].points[1]={time:84,price:96};remote.objects[0].color='#00ff00';chart.setPlan(remote);
+    chart.up(pointer(x+16,y+10));
+    const saved=M.apply(remote,M.diff(remote,local)).objects[0];assert.deepEqual(saved.points,[{time:24,price:104},{time:88,price:95}]);assert.equal(saved.color,'#00ff00');
+  }
+});
+
+test('segment endpoint drag preserves the latest peer price and other endpoint',()=>{
+  const{chart,pointer}=chartHarness({objects:[{id:'s',kind:'segment',period:'m3',points:[{time:20,price:100},{time:60,price:100}]}]});
+  chart.selected='s';let local;chart.callbacks.update=(id,patch)=>{local=structuredClone(chart.plan);Object.assign(local.objects[0],patch);};
+  const x=chart.tx.x(60),y=chart.tx.y(100);chart.down(pointer(x,y));assert.equal(chart.drag.anchor,1);chart.move(pointer(x+40,y-30));
+  const remote=structuredClone(chart.plan);remote.objects[0].points=[{time:25,price:103},{time:60,price:103}];chart.setPlan(remote);chart.up(pointer(x+40,y-30));
+  assert.deepEqual(M.apply(remote,M.diff(remote,local)).objects[0].points,[{time:25,price:103},{time:70,price:103}]);
+});
+
+test('zone and segment body drags preserve latest dimensions across compressed sessions',()=>{
+  for(const kind of ['zone','segment']){
+    const{chart,pointer}=chartHarness({objects:[]});chart.tick=1;
+    chart.bars=[{time:1000000},{time:1180000},{time:1360000},{time:9000000},{time:9180000}];
+    chart.view={start:1000000,end:9360000,min:90,max:115};chart.tx=C.transform(chart.view,chart.plot,chart.bars,'m3');
+    chart.plan.objects=[{id:'shape',kind,period:'m3',points:[{time:1180000,price:107},{time:1360000,price:kind==='zone'?99:107}]}];
+    const points=chart.objectPoints(chart.plan.objects[0]),x=(points[0].x+points[1].x)/2,y=(points[0].y+points[1].y)/2;
+    let local;chart.callbacks.update=(id,patch)=>{local=structuredClone(chart.plan);Object.assign(local.objects[0],patch);};
+    chart.down(pointer(x,y));assert.equal(chart.drag.anchor,null);chart.move(pointer(x+120,y-16));
+    const remote=structuredClone(chart.plan);remote.objects[0].points[1].time=1540000;remote.objects[0].points.forEach(point=>point.price+=2);chart.setPlan(remote);
+    const before=chart.objectPoints(remote.objects[0]);chart.up(pointer(x+120,y-16));
+    const saved=M.apply(remote,M.diff(remote,local)).objects[0],after=chart.objectPoints(saved);
+    for(let i=0;i<2;i++){assert.ok(Math.abs(after[i].x-before[i].x-120)<.001);assert.equal(saved.points[i].price,remote.objects[0].points[i].price+2);}
+    assert.ok(Math.abs((after[1].x-after[0].x)-(before[1].x-before[0].x))<.001);
+    assert.equal(saved.points[0].price-saved.points[1].price,remote.objects[0].points[0].price-remote.objects[0].points[1].price);
   }
 });
