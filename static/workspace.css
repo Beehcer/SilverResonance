@@ -60,3 +60,6 @@
 .object-row.layer-row>.layer-drag{flex:0 0 16px;min-width:16px;padding:3px 0;text-align:center}
 .object-list .layer-main{display:block;padding:6px 4px}
 .object-list .layer-main small{white-space:normal;line-height:1.4;margin-top:3px}
+
+.app-rail .cases-entry{margin-top:auto;margin-bottom:5px;flex-shrink:0;color:#e9c952;border-top:1px solid #39424b;background:#1c242b}
+.app-rail .cases-entry:hover,.app-rail .cases-entry:focus-visible{background:#373523;outline:1px solid #c5a43c}
