@@ -8,9 +8,9 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261111-513838bcd042`，运行代码提交 `741a887`，包含后台缓存、跨盘锚定、文本双击和删除二次确认。
+- 源码版本：`/opt/SilverResonance/releases/20261111-911550dc55a2`，运行代码提交 `5e7fb97`，包含首次预览、重新打开缓存、新K追加更新和协作文件读取加速。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261111-513838bcd042`。
+- 镜像：`silver-resonance:20261111-911550dc55a2`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
@@ -21,6 +21,19 @@
 - 依赖快照：`/opt/SilverResonance/staging/dependencies.lock.txt`。
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
+
+## 22:57 首次切换与重新打开加速
+
+发布 `20261111-911550dc55a2`，运行代码 `f8b50f1` / `ab89252` / `5e7fb97`。49文件白名单包 SHA-256 `911550dc55a2f8a2a291990d9fc9b0af787342b3fa5ce4b0c2112a4e7dfb3aa0`；备份 `/var/backups/SilverResonance/20261111-911550dc55a2/data-before-update.tgz`（91742字节），前版 `20261111-513838bcd042` 保留。详情见 [首次切换说明](WORKSPACE-FAST-SWITCH.md)。
+
+- 唯一行情连接在22:57:04重新核对16合约，容器healthy、零重启、无OOM；最终观测525.3MiB / 1.25GiB。
+- 18个静态资源哈希与发布包一致，资源版本16；公开入口200。已有页面自行刷新后加载新预览缓存。
+- 公网螺纹近期预览56.95ms、完整历史322.06ms、增量86.74ms、计划84.20ms、评审123.44ms；rb→au→rb复访增量35.72–44.13ms。都是单轮请求实测，非浏览器P95或1秒保证。
+- 黄金服务器首次订阅经过6次有界检查后完整历史到齐（约数秒）；最后一次full请求217.65ms不能当作总冷启动耗时。完整历史为日180 / 30分4449 / 3分10000，真实且fresh。
+- 23:00→23:03真实黄金跨K验证：增量39.12ms，day/m30只传2根，m3传3根、移除头部1根，保留完整10000根；没有回退全历史下载。
+- 独立双会话锚点与并发编辑、增删点、协作预览、旧客户端兼容通过；QA板 `b635e83cc8b63a6f` 已清空归档，默认计划前后相同。SSE通知单次1.255秒。
+- 本地393项JS测试通过，另补重连时序1项通过；相关Python187项通过（含173子测试），打包及行情时效34项通过、3项Windows场景跳过。Waitress测试停止线程时出现一次Windows socket关闭告警，接口断言通过。
+- 本地浏览器验证首次切螺纹、刷新后近期缓存、完整历史补齐及恢复编辑，未见页面错误。公网浏览器自动化导航超时，因此线上结果依据HTTP、SSE和实际跨K检查，不冒充浏览器首屏计时。
 
 ## 22:05 夜盘更新
 
@@ -72,7 +85,7 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261111-513838bcd042
+export SILVER_RELEASE=20261111-911550dc55a2
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
