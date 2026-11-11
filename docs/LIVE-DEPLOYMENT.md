@@ -8,9 +8,9 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261111-911550dc55a2`，运行代码提交 `5e7fb97`，包含首次预览、重新打开缓存、新K追加更新和协作文件读取加速。
+- 源码版本：`/opt/SilverResonance/releases/20261111-220714b18594`，运行代码提交 `dbcec3e`，包含顶部固定提醒，以及首次预览、重开缓存和新K追加更新。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261111-911550dc55a2`。
+- 镜像：`silver-resonance:20261111-220714b18594`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
@@ -21,6 +21,18 @@
 - 依赖快照：`/opt/SilverResonance/staging/dependencies.lock.txt`。
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
+
+## 23:13 顶部固定提醒
+
+按用户盘面跳闪反馈，将普通状态提示移入已有35px顶栏的固定占位区，提示不再占用图表上方一行。长内容单行省略、悬停查看全文；相同文本不重复重写，保留无障碍播报。跟随视角、草稿恢复等包含操作按钮的功能面板保持原行为。
+
+发布 `20261111-220714b18594`，代码 `dbcec3e`，资源版本17；49文件包 SHA-256 `220714b1859447b0bdaccc5c8effc5209e709b1cd230b59527a037dba7529685`。前版 `20261111-911550dc55a2` 和私有备份 `/var/backups/SilverResonance/20261111-220714b18594/data-before-update.tgz` 保留。23:13:10重新核对16合约，容器healthy、零重启、无OOM。
+
+- 本地浏览器1280×720：提示隐藏、出现、再次隐藏三个状态，30分钟图均为top=213、height=455，顶栏35px，图表没有位移；截图 `backtest/fixed-header-notice-acceptance.png` 为本地模拟验收。
+- 394项JS测试通过；打包检查13项通过、3项Windows场景跳过（另19子测试通过）。
+- 公网页面200，18静态资源与包哈希一致，HTML含唯一顶部通知区及版本17。
+- 发布后只读6类行情协议检查通过：螺纹日180 / 30分2344 / 3分10000、黄金180 / 4450 / 10000；螺纹已到休市状态idle，黄金live，完整历史和增量仍正常。
+- 只读回验不修改用户计划；本轮无需重跑同一后端版本的写入验收。此前22:57发布的独立双会话协作和23:03实际跨K追加结果见下文。
 
 ## 22:57 首次切换与重新打开加速
 
@@ -85,7 +97,7 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261111-911550dc55a2
+export SILVER_RELEASE=20261111-220714b18594
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
