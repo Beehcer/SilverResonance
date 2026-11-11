@@ -80,3 +80,15 @@ input,textarea,select,[contenteditable=""],[contenteditable=true],[contenteditab
 .quote-dragging{opacity:.45}
 .quote-entry.quote-drop-before{box-shadow:inset 0 2px #d4a72c}
 .quote-entry.quote-drop-after{box-shadow:inset 0 -2px #d4a72c}
+
+/* Keep transient connection notices inside the existing, fixed-height header. */
+.terminal-header{flex:0 0 var(--top);min-height:var(--top);max-height:var(--top);max-width:100vw;gap:10px;overflow:hidden}
+.terminal-header>.terminal-brand,.terminal-header>.workspace-title{flex:none;white-space:nowrap}
+.terminal-notice-slot{flex:1 1 0;min-width:0;height:24px;overflow:hidden}
+.terminal-notice-slot>.terminal-notice{display:block;width:100%;height:24px;margin:0;padding:3px 8px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px}
+.terminal-header-actions{flex:0 0 auto;margin-left:0;white-space:nowrap}
+.terminal-header-actions>button,.terminal-header-actions>.live-dot{flex:none}
+.terminal-header-actions>.members-button{max-width:clamp(64px,16vw,220px);overflow:hidden;text-overflow:ellipsis}
+.terminal-header-actions>#connection-status{display:inline-block;width:7em;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:950px){.terminal-header>.workspace-title{display:none}.terminal-header{gap:7px}.terminal-notice-slot>.terminal-notice{padding-inline:5px}}
+@media(max-width:600px){.terminal-header>.terminal-brand>span{display:none}.terminal-header{gap:5px;padding-inline:5px}.terminal-header-actions{gap:1px}.terminal-header-actions>button{padding-inline:4px}.terminal-header-actions>.members-button{max-width:76px}.terminal-header-actions>#connection-status{width:6em;font-size:11px}}

@@ -62,7 +62,7 @@
   function fmtTime(value){const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
   function toInputTime(value){if(!value)return'';const d=new Date(value);if(!Number.isFinite(d.getTime()))return'';return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
   function money(value){return typeof value==='number'&&Number.isFinite(value)?value.toLocaleString('zh-CN',{maximumFractionDigits:2}):'—';}
-  function notice(message){$('notice').textContent=message||'';$('notice').hidden=!message;}
+  function notice(message){const node=$('notice'),text=String(message||'');if(node.textContent!==text)node.textContent=text;node.title=text;node.hidden=!text;}
   function expandPanel(id){const panel=$(id);if(panel)panel.open=true;}
   function shownPlan(){if(state.market?.partial)return defaultPlan();let plan={...(state.plan||{})};if(state.planFormDirty)for(const key of state.planFormFields||[])if(['planned_entry_price','stop_price'].includes(key))plan[key]=C.priceNumber($('plan-form').elements[key].value);if(state.levelPreview)plan={...plan,[state.levelPreview.field]:state.levelPreview.price};const direction=T.directionOf(plan);return direction?{...plan,direction}:plan;}
   function drawingCharts(){return Object.values(charts).filter(chart=>chart.path?.length);}
