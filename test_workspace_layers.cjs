@@ -110,3 +110,65 @@ test('all-period legacy objects never invent an origin and changed display perio
   assert.match(L.provenance({kind:'trend',period:'all',source_period:'day'},'m30').text,/日线绘制.*全周期/);
   const info=L.provenanceInfo({kind:'zone',period:'m30',source_period:'day'},'m30');assert.equal(info.originPeriod,'day');assert.equal(info.drawingPeriod,'m30');assert.match(info.detail,/最初在日线.*现位于30分/);
 });
+
+function scopedHarness(){
+  class Element extends EventTarget{
+    constructor(tag){super();this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.parentElement=null;this.value='';this.clientHeight=0;const classes=new Set();this.classList={add:value=>classes.add(value),remove:value=>classes.delete(value),contains:value=>classes.has(value),toggle(value,on){if(on??!classes.has(value))classes.add(value);else classes.delete(value);}};}
+    append(...nodes){for(const node of nodes){node.remove();node.parentElement=this;this.children.push(node);}}
+    replaceChildren(...nodes){for(const node of this.children)node.parentElement=null;this.children=[];this.append(...nodes);}
+    insertBefore(node,target){if(node===target)return;node.remove();const at=target?this.children.indexOf(target):this.children.length;assert.ok(at>=0);this.children.splice(at,0,node);node.parentElement=this;}
+    remove(){if(!this.parentElement)return;const children=this.parentElement.children,index=children.indexOf(this);if(index>=0)children.splice(index,1);this.parentElement=null;}
+    before(){}
+    contains(node){return node===this||this.children.some(child=>child.contains(node));}
+    get firstElementChild(){return this.children[0]||null;}
+    get nextElementSibling(){if(!this.parentElement)return null;return this.parentElement.children[this.parentElement.children.indexOf(this)+1]||null;}
+    setAttribute(key,value){this.attributes[key]=value;}
+    getBoundingClientRect(){return{top:0,bottom:40,height:40};}
+  }
+  const document={createElement:tag=>new Element(tag)},list=new Element('div'),calls=[];list.ownerDocument=document;
+  const callbacks=Object.fromEntries(['select','locate','context','update','reorder'].map(kind=>[kind,(...args)=>calls.push({kind,args})]));
+  return{controller:new L.Controller({list,callbacks}),list,calls,objects:[{id:'a',kind:'text',period:'m30',name:'A'},{id:'b',kind:'text',period:'m30',name:'B'},{id:'c',kind:'text',period:'m3',name:'C'}]};
+}
+
+test('changing document scope discards rows, filters, and active drag state even when layer IDs recur',()=>{
+  const{controller,list,objects}=scopedHarness();controller.update({scope:'A:1',objects});const old=controller.rows.get('a');
+  controller.search.value='A';dispatch(controller.search,'input');controller.periodSelect.value='m30';dispatch(controller.periodSelect,'change');
+  dispatch(old.row,'dragstart');old.row.dataset.drop='before';assert.equal(controller.dragged,'a');assert.equal(controller.query,'A');
+  controller.update({scope:'B:2',objects:objects.map(object=>({...object,name:'另一板 '+object.name})),selected:'a'});
+  assert.equal(controller.scope,'B:2');assert.equal(controller.dragged,null);assert.equal(controller.query,'');assert.equal(controller.filter,'all');assert.equal(controller.search.value,'');assert.equal(controller.periodSelect.value,'all');
+  assert.equal(old.row.parentElement,null);assert.equal(old.row.classList.contains('dragging'),false);assert.equal(old.row.dataset.drop,undefined);assert.notEqual(controller.rows.get('a').row,old.row);assert.equal(list.children.length,3);assert.equal(controller.rows.get('a').row.classList.contains('selected'),true);
+});
+
+test('detached row listeners cannot select, edit, locate, reorder or reopen menus after A to B to A',()=>{
+  const{controller,objects,calls}=scopedHarness();controller.update({scope:'A',objects});const old=controller.rows.get('a');
+  controller.update({scope:'B',objects});controller.update({scope:'A',objects});assert.equal(controller.scope,'A','even reuse of a caller scope must not revive old closures');
+  for(const button of [old.main,old.locate,old.visibility,old.lock])dispatch(button,'click');
+  assert.equal(dispatch(old.row,'contextmenu').event.defaultPrevented,true);dispatch(old.row,'keydown',{key:'ContextMenu'});dispatch(old.row,'keydown',{key:'F10',shiftKey:true});dispatch(old.drag,'keydown',{key:'Home'});
+  assert.equal(dispatch(old.row,'dragstart').event.defaultPrevented,true);dispatch(old.row,'dragover',{clientY:0});dispatch(old.row,'drop');dispatch(old.row,'dragend');
+  assert.deepEqual(calls,[]);assert.equal(controller.dragged,null);assert.deepEqual(objects.map(object=>object.name),['A','B','C']);assert.equal(controller.rows.get('a').row.parentElement,controller.list);
+});
+
+test('late drag events from a detached scope cannot consume or cancel a new document drag',()=>{
+  const{controller,objects,calls}=scopedHarness();controller.update({scope:'A:1',objects});const old=controller.rows.get('b');controller.update({scope:'B:2',objects});
+  const source=controller.rows.get('a'),target=controller.rows.get('b');dispatch(source.row,'dragstart');dispatch(target.row,'dragover',{clientY:0});assert.equal(target.row.dataset.drop,'before');
+  dispatch(old.row,'dragover',{clientY:39});dispatch(old.row,'drop');dispatch(old.row,'dragend');dispatch(old.row,'dragleave',{relatedTarget:null});
+  assert.equal(controller.dragged,'a');assert.equal(target.row.dataset.drop,'before');assert.equal(source.row.classList.contains('dragging'),true);assert.deepEqual(calls,[]);
+  dispatch(target.row,'drop');assert.equal(controller.dragged,null);assert.deepEqual(calls,[{kind:'reorder',args:[[{id:'a',patch:{z_index:1.5}}]]}]);
+});
+
+test('current scope callbacks still work for visibility, locks, menus, location and keyboard ordering',()=>{
+  const{controller,objects,calls}=scopedHarness();controller.update({scope:'live:7',objects});const row=controller.rows.get('a');
+  dispatch(row.main,'click');dispatch(row.locate,'click');dispatch(row.visibility,'click');dispatch(row.lock,'click');dispatch(row.row,'contextmenu');dispatch(row.drag,'keydown',{key:'Home'});
+  assert.deepEqual(calls.map(call=>call.kind),['select','locate','update','update','context','reorder']);assert.deepEqual(calls[0].args,['a']);assert.deepEqual(calls[2].args,['a',{visible:false}]);assert.deepEqual(calls[3].args,['a',{locked:true}]);assert.deepEqual(calls.at(-1).args,[[{id:'a',patch:{z_index:3}}]]);
+});
+
+test('same scope and omitted optional scopes preserve cached row identity and existing filters',()=>{
+  const{controller,objects,calls}=scopedHarness();controller.update({objects});const legacy=controller.rows.get('a');controller.update({objects});assert.equal(controller.rows.get('a'),legacy);dispatch(legacy.main,'click');assert.equal(calls.length,1);
+  controller.update({scope:'A:1',objects});const scoped=controller.rows.get('a');controller.search.value='A';dispatch(controller.search,'input');controller.update({scope:'A:1',objects:objects.map(object=>({...object,note:'updated'}))});assert.equal(controller.rows.get('a'),scoped);assert.equal(controller.query,'A');
+  controller.update({objects});assert.equal(controller.scope,'A:1');assert.equal(controller.rows.get('a'),scoped);assert.equal(controller.query,'A');dispatch(scoped.main,'click');assert.equal(calls.length,2);
+});
+
+test('destroyed controllers reject all remaining row callbacks instead of editing a recreated sidebar',()=>{
+  const{controller,objects,calls}=scopedHarness();controller.update({scope:'A:1',objects});const old=controller.rows.get('a');controller.destroy();
+  dispatch(old.main,'click');dispatch(old.locate,'click');dispatch(old.visibility,'click');dispatch(old.lock,'click');dispatch(old.row,'contextmenu');dispatch(old.drag,'keydown',{key:'Home'});assert.equal(dispatch(old.row,'dragstart').event.defaultPrevented,true);dispatch(old.row,'drop');dispatch(old.row,'dragend');assert.deepEqual(calls,[]);assert.equal(controller.rows.size,0);
+});

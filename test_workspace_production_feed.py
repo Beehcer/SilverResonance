@@ -1,7 +1,9 @@
 """Production-only SDK routing; fake provider, no login or durable user writes."""
+import asyncio
 import copy
 import math
 import sys
+import threading
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -31,6 +33,14 @@ class FakeAPI:
         self.changed = False
         self.notifications = []
         self.observed = []
+        self.loop = asyncio.new_event_loop()
+        owner.addCleanup(self.loop.close)
+
+    def create_task(self, coroutine):
+        return self.loop.create_task(coroutine)
+
+    def is_serial_ready(self, serial):
+        return True
 
     def get_quote_list(self, codes):
         self.quote_calls.append(list(codes))
@@ -53,6 +63,7 @@ class FakeAPI:
         return self.changed
 
     def wait_update(self, **kwargs):
+        self.loop.run_until_complete(asyncio.sleep(0))
         self.observed.append(app.get_state())
         if not self.steps:
             raise Finished()
@@ -348,6 +359,135 @@ class ProductionFeedTests(unittest.TestCase):
         reader.refresh(True)
         self.assertEqual(self.cache.snapshot(code, self.presets[0], {"connected": True})["price"], 103)
         self.assertEqual(len(api.calls), 6)
+
+    def test_cold_subscriptions_run_only_inside_same_sdk_loop_and_once(self):
+        code = self.presets[0]["symbol"]
+        self.cache.request(code)
+        api = FakeAPI(self, [])
+        reader = app._WorkspaceSerialReader(api, self.cache)
+        owner_thread = threading.get_ident()
+        observed = []
+        original_get = api.get_kline_serial
+        def require_sdk_loop(*args):
+            self.assertIs(asyncio.get_running_loop(), api.loop)
+            self.assertEqual(threading.get_ident(), owner_thread)
+            observed.append(args)
+            return original_get(*args)
+        with patch.object(api, "get_kline_serial", side_effect=require_sdk_loop):
+            reader.schedule_requested()
+            reader.schedule_requested()
+            self.assertEqual(observed, [])
+            api.loop.run_until_complete(asyncio.sleep(0))
+            reader.schedule_requested()
+            api.loop.run_until_complete(asyncio.sleep(0))
+        self.assertEqual(observed, [(code, 86400, 180), (code, 1800, 6000), (code, 180, 10000)])
+
+    def test_cold_partial_rows_cannot_become_fresh_while_warm_symbols_continue(self):
+        warm, api, reader = self.reader()
+        cold = self.presets[1]["symbol"]
+        self.cache.request(cold)
+        reader.schedule_requested()
+        api.loop.run_until_complete(asyncio.sleep(0))
+        cold_frame_ids = {id(frame) for (symbol, _), frame in api.frames.items() if symbol == cold}
+        self.now += 2
+        api.frames[(warm, 180)]["close"][-1] = 103
+        with patch.object(api, "is_serial_ready", side_effect=lambda frame: id(frame) not in cold_frame_ids):
+            reader.refresh(True)
+        warm_snapshot = self.cache.snapshot(warm, self.presets[0], {"connected": True})
+        pending = self.cache.snapshot(cold, self.presets[1], {"connected": True})
+        self.assertEqual(warm_snapshot["price"], 103)
+        self.assertTrue(warm_snapshot["fresh"])
+        self.assertEqual(pending["feed_status"], "loading")
+        self.assertFalse(pending["fresh"])
+        self.assertTrue(all(not rows for rows in pending["periods"].values()))
+        self.assertTrue(all(info["checked_at"] is None for info in pending["freshness"].values()))
+        # Ready later, without a new login, new subscription or lost history.
+        reader.refresh(True)
+        ready = self.cache.snapshot(cold, self.presets[1], {"connected": True})
+        self.assertEqual([len(ready["periods"][p]) for p in ("day", "m30", "m3")], [180, 6000, 10000])
+        self.assertTrue(ready["fresh"])
+        self.assertEqual(len(api.calls), 6)
+
+    def test_subscription_failure_retries_only_missing_period_without_false_ready(self):
+        code = self.presets[0]["symbol"]
+        self.cache.request(code)
+        api = FakeAPI(self, [])
+        reader = app._WorkspaceSerialReader(api, self.cache)
+        original_get = api.get_kline_serial
+        attempts = []
+        def flaky(*args):
+            attempts.append(args)
+            if args[1] == 1800 and sum(call[1] == 1800 for call in attempts) == 1:
+                raise ConnectionError("fixture subscription failure")
+            return original_get(*args)
+        with patch.object(api, "get_kline_serial", side_effect=flaky), \
+                patch.object(self.cache, "mark_failed", wraps=self.cache.mark_failed) as failed:
+            reader.schedule_requested()
+            api.loop.run_until_complete(asyncio.sleep(0))
+            reader.refresh(True)
+            failed.assert_any_call(code, 1800)
+            pending = self.cache.snapshot(code, self.presets[0], {"connected": True})
+            self.assertFalse(pending["fresh"])
+            self.assertEqual(pending["period_counts"]["m30"], 0)
+            reader.schedule_requested()
+            api.loop.run_until_complete(asyncio.sleep(0))
+            reader.refresh(True)
+        self.assertEqual([call[1] for call in attempts], [86400, 1800, 180, 1800])
+        self.assertTrue(self.cache.snapshot(code, self.presets[0], {"connected": True})["fresh"])
+
+    def test_sdk_scheduler_failure_is_not_swallowed_or_left_pending(self):
+        code = self.presets[0]["symbol"]
+        self.cache.request(code)
+        api = FakeAPI(self, [])
+        reader = app._WorkspaceSerialReader(api, self.cache)
+        with patch.object(api, "create_task", side_effect=RuntimeError("fixture loop unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "loop unavailable"):
+                reader.schedule_requested()
+        self.assertIsNone(reader.subscription_task)
+        reader.schedule_requested()
+        api.loop.run_until_complete(asyncio.sleep(0))
+        self.assertEqual(len(api.calls), 3)
+
+    def test_completed_subscription_task_error_is_surfaced_before_replacement(self):
+        code = self.presets[0]["symbol"]
+        self.cache.request(code)
+        api = FakeAPI(self, [])
+        reader = app._WorkspaceSerialReader(api, self.cache)
+        with patch.object(reader, "subscribe_requested", side_effect=RuntimeError("fixture async failure")):
+            reader.schedule_requested()
+            api.loop.run_until_complete(asyncio.sleep(0))
+        with self.assertRaisesRegex(RuntimeError, "async failure"):
+            reader.schedule_requested()
+        self.assertIsNone(reader.subscription_task)
+        self.assertEqual(api.calls, [])
+        reader.schedule_requested()
+        api.loop.run_until_complete(asyncio.sleep(0))
+        self.assertEqual(len(api.calls), 3)
+
+    def test_cancelled_subscription_task_retries_missing_periods_only(self):
+        code, api, reader = self.reader()
+        cold = self.presets[1]["symbol"]
+        self.cache.request(cold)
+        reader.schedule_requested()
+        reader.subscription_task.cancel()
+        api.loop.run_until_complete(asyncio.sleep(0))
+        reader.schedule_requested()
+        api.loop.run_until_complete(asyncio.sleep(0))
+        reader.schedule_requested()
+        self.assertEqual(len(api.calls), 6)
+        self.assertEqual(len(set(api.calls)), 6)
+
+    def test_lost_serial_readiness_cannot_refresh_an_unchanged_warm_cache(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.now += 30
+        with patch.object(api, "is_serial_ready", return_value=False):
+            reader.refresh(True)
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        self.assertEqual(after["periods"], before["periods"])
+        self.assertEqual(after["feed_status"], "stale")
+        self.assertFalse(after["fresh"])
+        self.assertEqual(after["freshness"]["m3"]["checked_at"], before["freshness"]["m3"]["checked_at"])
 
 
 if __name__ == "__main__":

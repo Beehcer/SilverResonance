@@ -15,8 +15,8 @@ function helper(name){
 }
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 function market(symbol,token='token-'+symbol,price=101){
-  const bars=Array.from({length:4},(_,i)=>({dt:new Date(1700000000000+i*180000).toISOString(),open:100,high:110,low:90,close:price,volume:0,oi:0}));
-  return{symbol,name:symbol,history_token:token,incremental:false,period_counts:{day:4,m30:4,m3:4},periods:{day:copy(bars),m30:copy(bars),m3:copy(bars)},price,fresh:true,connected:true,source:'live',feed_status:'live'};
+  const periods=Object.fromEntries(Object.entries(C.INTERVAL).map(([period,step])=>[period,Array.from({length:4},(_,i)=>({dt:new Date(1700000000000+i*step).toISOString(),open:100,high:110,low:90,close:price,volume:0,oi:0}))]));
+  return{symbol,name:symbol,history_token:token,incremental:false,period_counts:{day:4,m30:4,m3:4},periods,price,fresh:true,connected:true,source:'live',feed_status:'live'};
 }
 function plan(symbol,board='',revision=1){return{symbol,board_id:board,revision,title:'Plan '+board,objects:[],notes:'',enabled:true,rule_version:'r1'};}
 function harness(){
@@ -33,7 +33,7 @@ function harness(){
     throw new Error('Unexpected request '+url.pathname);
   };
   const context=vm.createContext({
-    state,M,E,T,C,clone:copy,WorkspaceMarketPreview:MarketPreview,marketPreview:new MarketPreview.Store({indexedDB:null}),WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),
+    state,M,E,T,C,clone:copy,WorkspaceMarketPreview:MarketPreview,marketPreview:new MarketPreview.Store({indexedDB:null}),WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),readRequests:new Set(),
     $,charts,PREFIX:'test:',PERIODS:{day:'日线',m30:'30分钟',m3:'3分钟'},Date,Promise,Map,Set,URL,URLSearchParams,AbortController,
     navigator:{onLine:true},document:{hidden:false,activeElement:null},location:{href:'https://example.test/workspace',hostname:'example.test'},history:{replaceState(){}},
     fetch:async(url,options)=>{const request={url,...options};calls.network.push(request);const data=await responder(request);return{ok:true,status:200,json:async()=>data};},
@@ -46,7 +46,7 @@ function harness(){
     connectEvents:()=>{calls.events++;},recoverableDraft:()=>null,loadBoards:async()=>{},
     flush:async()=>{calls.flush++;},
   });
-  const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','batchCharts','preloadSavedMarket','paintOpeningPreview','loadOpeningMarket','applyActiveMarket','api','refreshMarket','refreshBackground','documentKey','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
+  const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','batchCharts','preloadSavedMarket','paintOpeningPreview','loadOpeningMarket','applyActiveMarket','api','refreshMarket','refreshBackground','documentKey','currentPlan','marketComplete','cancelObsoleteReads','renderLoadState','closeObjectContext','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
   for(const name of names)vm.runInContext(helper(name),context);
   return{context,state,calls,elements,storage,charts,$,respond:fn=>{responder=fn;},seed:value=>context.marketCache.accept(value.symbol,value,context.marketCache.begin(value.symbol))};
 }
@@ -98,14 +98,14 @@ test('invalid full retry is bounded and does not corrupt the previously rendered
   await assert.rejects(h.context.refreshMarket(A),/未能对齐/);assert.equal(h.calls.network.length,2);assert.equal(h.context.marketRequests.size,0);assert.deepEqual(h.context.marketCache.get(A),base);
 });
 
-test('hidden-page background work only refreshes visited contracts and is limited to two concurrent workers',async()=>{
+test('hidden-page background work only refreshes visited contracts using one sequential worker',async()=>{
   const h=harness();h.context.document.hidden=true;h.state.visitedSymbols=new Set([A,B,D,'CZCE.AP701']);
   const pending=[],requested=[];let active=0,max=0;h.respond(request=>{const url=new URL(request.url,'https://example.test'),symbol=url.searchParams.get('symbol');requested.push(symbol);active++;max=Math.max(max,active);const wait=deferred();pending.push({wait,symbol});return wait.promise.finally(()=>active--);});
-  const background=h.context.refreshBackground();await tick();assert.equal(h.calls.network.length,2);assert.equal(h.state.backgroundRefreshing,true);
-  await h.context.refreshBackground();assert.equal(h.calls.network.length,2);
-  pending[0].wait.resolve({market:market(pending[0].symbol)});await tick();assert.equal(h.calls.network.length,3);
-  for(const item of pending.slice(1))item.wait.resolve({market:market(item.symbol)});await background;
-  assert.equal(max,2);assert.deepEqual(new Set(requested),new Set([B,D,'CZCE.AP701']));assert.equal(h.state.backgroundRefreshing,false);assert.equal(h.calls.paints.length,0);
+  const background=h.context.refreshBackground();await tick();assert.equal(h.calls.network.length,1);assert.equal(h.state.backgroundRefreshing,true);
+  await h.context.refreshBackground();assert.equal(h.calls.network.length,1);
+  pending[0].wait.resolve({market:market(pending[0].symbol)});await tick();assert.equal(h.calls.network.length,2);
+  pending[1].wait.resolve({market:market(pending[1].symbol)});await tick();assert.equal(h.calls.network.length,3);pending[2].wait.resolve({market:market(pending[2].symbol)});await background;
+  assert.equal(max,1);assert.deepEqual(new Set(requested),new Set([B,D,'CZCE.AP701']));assert.equal(h.state.backgroundRefreshing,false);assert.equal(h.calls.paints.length,0);
 });
 
 test('inactive plans use their own explicit board scope while same-contract charts stay shared',async()=>{
@@ -119,10 +119,10 @@ test('inactive plans use their own explicit board scope while same-contract char
 
 test('changing session epoch stops queued background work and prevents an old plan from repopulating the new document cache',async()=>{
   const h=harness();h.state.visitedSymbols=new Set([A]);for(const symbol of [B,D,'CZCE.AP701'])h.context.cacheDocument(symbol,'night',plan(symbol,'night'));
-  const pending=[];h.respond(()=>{const wait=deferred();pending.push(wait);return wait.promise;});const background=h.context.refreshBackground();await tick();assert.equal(pending.length,2);
+  const pending=[];h.respond(()=>{const wait=deferred();pending.push(wait);return wait.promise;});const background=h.context.refreshBackground();await tick();assert.equal(pending.length,1);
   h.state.cacheEpoch++;h.state.session={user:{id:'other'}};h.context.documentCache.clear();h.state.backgroundRefreshing=false;
-  pending[0].resolve({plan:plan(B,'night',7)});pending[1].resolve({plan:plan(D,'night',7)});await background;
-  assert.equal(h.calls.network.length,2);assert.equal(h.context.documentCache.size,0);assert.equal(h.state.backgroundRefreshing,false);
+  pending[0].resolve({plan:plan(B,'night',7)});await background;
+  assert.equal(h.calls.network.length,1);assert.equal(h.context.documentCache.size,0);assert.equal(h.state.backgroundRefreshing,false);
 });
 
 test('switch intent waits for an outstanding commit instead of clearing dirty data or starting target requests',async()=>{
@@ -175,8 +175,8 @@ test('an obsolete switch or poll cannot repopulate shared documents after a sess
 test('queued background jobs skip contracts dropped from the visited set or newly made active',async()=>{
   const h=harness(),pending=[];h.state.visitedSymbols=new Set([A,B,D,'CZCE.AP701','CZCE.TA701']);
   h.respond(request=>{const symbol=new URL(request.url,'https://example.test').searchParams.get('symbol'),wait=deferred();pending.push({symbol,wait});return wait.promise;});
-  const task=h.context.refreshBackground();await tick();assert.equal(pending.length,2);h.state.visitedSymbols.delete('CZCE.AP701');h.state.symbol='CZCE.TA701';
-  for(const item of pending)item.wait.resolve({market:market(item.symbol)});await task;assert.equal(h.calls.network.length,2);
+  const task=h.context.refreshBackground();await tick();assert.equal(pending.length,1);h.state.visitedSymbols.delete('CZCE.AP701');h.state.symbol='CZCE.TA701';
+  pending[0].wait.resolve({market:market(pending[0].symbol)});await tick();assert.equal(pending.length,2);assert.equal(pending[1].symbol,D);pending[1].wait.resolve({market:market(D)});await task;assert.equal(h.calls.network.length,2);
 });
 
 test('opening a contract pins it and retains only the sixteen most recently visited contracts',async()=>{
@@ -233,4 +233,59 @@ test('a failed full download can recover through polling while the partial view 
 test('completing full history resumes a draft that could not flush during the preview',()=>{
   const h=harness();h.state.market={...market(A),partial:true,fresh:false};h.state.loading=true;h.state.planReady=true;h.state.pending.fields={notes:'kept draft'};h.state.outbox={id:'pending'};
   h.context.applyActiveMarket(market(A));assert.equal(h.state.loading,false);assert.equal(h.calls.flush,1);
+});
+
+test('receivePlan ignores wrong symbol or board even with a higher revision and an outstanding outbox',()=>{
+  for(const outbox of [null,{id:'pending-save'}])for(const incoming of [plan(B,'night',99),plan(A,'other',99),{revision:99,objects:[]},null]){
+    const h=harness(),baseline=plan(A,'night',3);h.state.board='night';h.state.plan={...baseline,notes:'local draft'};h.state.saved=copy(baseline);h.state.revision=3;h.state.pending=M.diff(baseline,h.state.plan);h.state.dirty=true;h.state.outbox=outbox;h.state.queuedRemote=plan(A,'night',4);
+    const before=copy(h.state),beforePaints=h.calls.paints.length;h.context.receivePlan(incoming);
+    assert.deepEqual(copy(h.state),before);assert.equal(h.calls.paints.length,beforePaints);assert.equal(h.calls.notices.length,0);
+  }
+});
+
+test('acceptPlan rejects a foreign cached document before clearing local selection, edits or revision',()=>{
+  const h=harness();h.state.selected='local-layer';h.state.plan.objects=[{id:'local-layer',kind:'text',name:'本机计划'}];h.state.pending=M.diff(h.state.saved,h.state.plan);h.state.dirty=true;const before=copy(h.state);
+  for(const incoming of [plan(B,'',99),plan(A,'other',99)])h.context.acceptPlan(incoming,true);
+  assert.deepEqual(copy(h.state),before);assert.equal(h.calls.paints.length,0);
+});
+
+test('same-document remote revisions merge pending notes and only matching plans can queue behind a save',()=>{
+  const h=harness(),baseline=plan(A,'night',3);h.state.board='night';h.state.plan={...baseline,notes:'本地正在编辑'};h.state.saved=copy(baseline);h.state.revision=3;h.state.pending=M.diff(baseline,h.state.plan);h.state.dirty=true;
+  const peer={...baseline,revision:4,notes:'伙伴备注',objects:[{id:'peer',kind:'text',name:'伙伴第一行\n伙伴第二行'}]};h.context.receivePlan(peer);
+  assert.equal(h.state.revision,4);assert.equal(h.state.saved.notes,'伙伴备注');assert.equal(h.state.plan.notes,'本地正在编辑');assert.deepEqual(h.state.plan.objects,peer.objects);assert.equal(h.state.dirty,true);assert.equal(h.state.evaluation,null);
+  h.state.outbox={id:'in-flight'};h.context.receivePlan({...peer,revision:5});assert.equal(h.state.queuedRemote.revision,5);assert.equal(h.state.revision,4);
+  h.context.receivePlan(plan(B,'night',100));assert.equal(h.state.queuedRemote.revision,5);assert.equal(h.state.queuedRemote.symbol,A);
+});
+
+test('a full response with any missing timeframe keeps drawing locked until all three histories arrive',()=>{
+  for(const missing of ['day','m30','m3']){
+    const h=harness(),incomplete=market(A);h.state.loading=true;h.state.planReady=true;incomplete.periods[missing]=[];incomplete.period_counts[missing]=0;
+    h.context.applyActiveMarket(incomplete);assert.equal(h.state.loading,true,missing);assert.equal(h.calls.flush,0);assert.equal(h.$('market-loading').hidden,false);assert.match(h.$('market-loading-detail').textContent,/等待/);
+    h.context.applyActiveMarket(market(A));assert.equal(h.state.loading,false);assert.equal(h.$('market-loading').hidden,true);
+  }
+});
+
+test('valid plan polling recovery clears the stale plan-load error and removes its loading overlay',async()=>{
+  const h=harness();h.state.planLoadFailed=true;h.state.planLoadError='先前的计划读取超时';h.state.planReady=true;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,false);assert.equal(h.$('market-loading').dataset.error,'true');
+  await h.context.poll();
+  assert.equal(h.state.planLoadFailed,false);assert.equal(h.state.planLoadError,null);assert.equal(h.state.planReady,true);assert.equal(h.state.revision,1,'same revision is still a successful retry');assert.equal(h.$('market-loading').hidden,true);assert.equal(h.$('market-loading').dataset.error,'false');
+});
+
+test('a wrong-document plan polling response cannot dismiss an existing plan-load failure',async()=>{
+  for(const foreign of [plan(B,'',99),plan(A,'other',99)]){
+    const h=harness();h.state.planLoadFailed=true;h.state.planLoadError='需要重试原计划';h.state.planReady=true;const before=copy(h.state.plan);
+    h.respond(request=>request.url.includes('/plans/')?{plan:foreign}:request.url.includes('/market?')?{market:market(A)}:request.url.includes('/review?')?{evaluation:{status:'waiting'},plan_revision:1}:{quotes:[]});
+    await h.context.poll();h.context.renderLoadState();
+    assert.equal(h.state.planLoadFailed,true);assert.equal(h.state.planLoadError,'需要重试原计划');assert.deepEqual(h.state.plan,before);assert.equal(h.state.revision,1);assert.equal(h.$('market-loading').hidden,false);assert.equal(h.$('market-loading').dataset.error,'true');assert.equal(h.context.documentCache.size,0);
+  }
+});
+
+
+test('releasing space after switching cannot restore the old contract drawing draft',async()=>{
+  const h=harness();h.state.spaceTool={m30:{tool:'wave',path:[{time:1,price:100},{time:2,price:110}]}};
+  h.seed(market(B));h.context.cacheDocument(B,'',plan(B));await h.context.switchSymbol(B);
+  assert.equal(h.state.spaceTool,null);
+  let keyup;h.context.document.addEventListener=(name,handler)=>{if(name==='keyup')keyup=handler;};
+  vm.runInContext(source.split(/\r?\n/).find(line=>line.includes("document.addEventListener('keyup'")),h.context);
+  keyup({code:'Space'});assert.equal(h.charts.m30.path.length,0);assert.notEqual(h.charts.m30.tool,'wave');assert.equal(h.state.symbol,B);
 });

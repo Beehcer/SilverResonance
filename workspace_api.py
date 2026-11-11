@@ -15,6 +15,9 @@ from workspace_store import (AuthenticationError, PermissionError, RevisionConfl
 
 COOKIE_NAME = "workspace_session"
 MAX_REQUEST_BYTES = 128 * 1024
+EVENT_RECHECK_SECONDS = 1
+EVENT_HEARTBEAT_SECONDS = 5
+EVENT_STREAM_SECONDS = 120
 
 
 def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None,
@@ -293,24 +296,31 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     @bp.get("/events")
     @authenticated
     def events():
-        symbol = selected_key(symbol_requested())
+        symbol = symbol_requested()
+        board = request.args.get("board", "")
+        scope = board_key(symbol, board)
         token = g.workspace_token
         @stream_with_context
         def generate():
             yield "retry: 500\n\n"
             previous = None
             revision, next_plan_check, next_ping = 0, 0, 0
-            deadline = time.monotonic() + 25
+            checked_marker = None
+            deadline = time.monotonic() + EVENT_STREAM_SECONDS
             while time.monotonic() < deadline:
                 now = time.monotonic()
+                # Capture before reading: a concurrent commit/cursor update must
+                # either be included below or make wait_for_events return now.
+                marker = store.event_marker(scope)
                 try:
-                    if now >= next_plan_check:
-                        if not store.authenticate(token):
+                    if now >= next_plan_check or checked_marker != marker[0]:
+                        revision = store.event_state(token, scope)
+                        if revision is None:
                             return
-                        plan = store.plan(symbol)
-                        revision = plan["revision"] if plan else 0
-                        next_plan_check = now + 1
-                    payload = json.dumps({"revision": revision, "presence": store.presence(symbol)},
+                        checked_marker = marker[0]
+                        next_plan_check = now + EVENT_RECHECK_SECONDS
+                    payload = json.dumps({"symbol": symbol, "board": board, "revision": revision,
+                                          "presence": store.presence(scope)},
                                          ensure_ascii=False, separators=(",", ":"))
                 except WorkspaceError:
                     yield 'event: unavailable\ndata: {"status":"unavailable"}\n\n'
@@ -318,11 +328,12 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
                 if payload != previous:
                     yield "event: workspace\ndata: " + payload + "\n\n"
                     previous = payload
-                    next_ping = now + 5
+                    next_ping = now + EVENT_HEARTBEAT_SECONDS
                 elif now >= next_ping:
                     yield ": keep-alive\n\n"
-                    next_ping = now + 5
-                time.sleep(.05)
+                    next_ping = now + EVENT_HEARTBEAT_SECONDS
+                store.wait_for_events(scope, marker,
+                                      min(next_plan_check, next_ping, deadline) - time.monotonic())
         response = Response(generate(), mimetype="text/event-stream")
         response.headers["X-Accel-Buffering"] = "no"
         return response

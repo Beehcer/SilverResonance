@@ -1457,6 +1457,36 @@ class _WorkspaceSerialReader:
         self.subscriptions = _KlineSubscriptions(api)
         self.dirty = set()
         self.matrices = {}
+        self.subscription_task = None
+
+    def schedule_requested(self):
+        """Create serials inside the same SDK event loop, without blocking it.
+
+        TqApi.get_kline_serial waits for initial history only when its loop is
+        not running. Its public create_task API lets all requested periods begin
+        loading together while the regular wait_update pump keeps warm symbols
+        and connection notifications moving. No extra SDK/thread is created.
+        """
+        if self.subscription_task is not None:
+            if not self.subscription_task.done():
+                return
+            completed, self.subscription_task = self.subscription_task, None
+            # TQSDK also forwards managed-task errors through wait_update, but
+            # explicitly consume the result before replacing our reference.
+            # A cancelled task may retry only subscriptions still missing.
+            if not completed.cancelled():
+                completed.result()
+        if not any((symbol, period) not in self.subscriptions.serials
+                   for symbol in self.cache.requested() for period in (86400, 1800, 180)):
+            return
+        async def subscribe():
+            self.subscribe_requested()
+        coroutine = subscribe()
+        try:
+            self.subscription_task = self.api.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            raise
 
     def subscribe_requested(self):
         for symbol in self.cache.requested():
@@ -1487,9 +1517,13 @@ class _WorkspaceSerialReader:
             return
         np = self.np
         for key, serial in self.subscriptions.serials.items():
-            if key not in self.dirty and key in self.matrices and self.cache.mark_checked(*key):
-                continue
             try:
+                # A non-blocking subscription may have partial rows before the
+                # SDK completes initialization. Never qualify that as fresh.
+                if not self.api.is_serial_ready(serial):
+                    raise ValueError("当前周期历史行情尚未就绪")
+                if key not in self.dirty and key in self.matrices and self.cache.mark_checked(*key):
+                    continue
                 columns = {field: np.asarray(serial[field]) for field in self.fields if field in serial}
                 count = len(columns["close"])
                 if not count or not np.isfinite(columns["close"][-1]):
@@ -1562,7 +1596,7 @@ def _workspace_tqsdk_session(api, notifications):
     while True:
         # get() reuses each (contract, period); adding a viewer never opens a
         # second SDK session or subscribes large histories for all other codes.
-        reader.subscribe_requested()
+        reader.schedule_requested()
         try:
             received = api.wait_update(deadline=time.time() + 1)
         except TimeoutError:

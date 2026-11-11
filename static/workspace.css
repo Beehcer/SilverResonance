@@ -92,3 +92,15 @@ input,textarea,select,[contenteditable=""],[contenteditable=true],[contenteditab
 .terminal-header-actions>#connection-status{display:inline-block;width:7em;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:950px){.terminal-header>.workspace-title{display:none}.terminal-header{gap:7px}.terminal-notice-slot>.terminal-notice{padding-inline:5px}}
 @media(max-width:600px){.terminal-header>.terminal-brand>span{display:none}.terminal-header{gap:5px;padding-inline:5px}.terminal-header-actions{gap:1px}.terminal-header-actions>button{padding-inline:4px}.terminal-header-actions>.members-button{max-width:76px}.terminal-header-actions>#connection-status{width:6em;font-size:11px}}
+
+/* Loading feedback floats over the chart without changing its geometry. */
+.chart-grid{position:relative}
+.market-loading{position:absolute;z-index:18;top:64px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;width:max-content;max-width:calc(100% - 32px);padding:14px 18px;border:1px solid #425865;border-radius:6px;background:rgba(18,29,37,.96);box-shadow:0 5px 24px #0006;pointer-events:auto}
+.market-loading strong{color:#e1edf5;font-size:13px}.market-loading p{margin:5px 0 0;color:#9db4c4;font-size:12px;line-height:1.6;white-space:pre-line}
+.market-loading[data-error=true]{border-color:#a27a2d}.market-loading[data-error=true] .loading-spinner{animation:none;border-color:#ba913d}
+.loading-spinner{flex:none;width:18px;height:18px;border:2px solid #425865;border-top-color:#f1c40f;border-radius:50%;animation:market-spin 1s linear infinite}
+@keyframes market-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.loading-spinner{animation:none}}
+#object-content-label{grid-column:1/-1}#object-content{line-height:1.6;white-space:pre-wrap;min-height:100px;resize:vertical}
+.chart-text-editor textarea,textarea.chart-title-editor{flex:1;min-width:0;resize:none;line-height:16px;white-space:pre;overflow:auto;font:12px/16px Arial,sans-serif}
+.layer-name{white-space:pre-line;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}

@@ -22,6 +22,13 @@
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const positive = value => finite(value) && value > 0;
   const text = (value, limit) => typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, limit) : '';
+  const objectName = (kind, value) => {
+    if (typeof value !== 'string') return '';
+    const normalized = value.replace(/\r\n?/g, '\n');
+    return kind === 'text'
+      ? Array.from(normalized.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')).slice(0, 2000).join('')
+      : text(normalized.replace(/\n/g, ' '), 80);
+  };
   const validColor = value => typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : COLORS.red;
   let sequence = 0;
 
@@ -55,7 +62,7 @@
     if (!points) return null;
     return {
       id: text(raw.id, 100) || makeId(), kind: raw.kind, points,
-      name: text(raw.name, 80), color: validColor(raw.color),
+      name: objectName(raw.kind, raw.name), color: validColor(raw.color),
       width: Math.max(1, Math.min(6, Math.round(finite(raw.width) ? raw.width : 2))),
       line_style: raw.line_style === 'dashed' ? 'dashed' : 'solid',
       extend: raw.extend === true, visible: raw.visible !== false,

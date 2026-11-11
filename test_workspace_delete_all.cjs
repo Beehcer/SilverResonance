@@ -10,15 +10,16 @@ function helper(name){
   const start=source.indexOf(line),end=source.indexOf('\n  }',start);assert.ok(end>=0);return source.slice(start,end+4);
 }
 function harness(objects=[{id:'a',locked:false},{id:'b',locked:false},{id:'locked',locked:true}]){
-  const state={symbol:'SHFE.rb2701',board:'night',generation:7,plan:{objects:copy(objects),planned_entry_price:3030,stop_price:3040,notes:'keep notes'},saved:{objects:copy(objects)},selected:'a',outbox:null};
-  const calls={shown:0,focused:[],history:0,dirty:0,flush:0,saves:0},elements=new Map();
-  const $=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',focus:()=>calls.focused.push(id)});return elements.get(id);};
+  const state={symbol:'SHFE.rb2701',board:'night',generation:7,plan:{symbol:'SHFE.rb2701',board_id:'night',objects:copy(objects),planned_entry_price:3030,stop_price:3040,notes:'keep notes'},saved:{symbol:'SHFE.rb2701',board_id:'night',objects:copy(objects)},selected:'a',outbox:null};
+  const calls={shown:0,focused:[],history:0,dirty:0,flush:0,saves:0,panels:[],updates:[]},elements=new Map();
+  const $=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',style:{},listeners:{},focus:()=>calls.focused.push(id),addEventListener(type,callback){this.listeners[type]=callback;},querySelector:selector=>$(id+':'+selector),getBoundingClientRect:()=>({width:180,height:240,left:0,top:0})});return elements.get(id);};
   // Native dialogs keep returnValue when reopened or dismissed with Escape.
   // The production helpers, not this test double, must reset it.
   const dialog={open:false,returnValue:'',showModal(){this.open=true;calls.shown++;}};elements.set('delete-all-dialog',dialog);
   const charts={day:{selected:'a',selectedAnchor:1},m30:{selected:'a',selectedAnchor:1},m3:{selected:'a',selectedAnchor:1}};
-  const context=vm.createContext({state,$,charts,recordHistory:()=>calls.history++,dirty:()=>calls.dirty++,flush:()=>calls.flush++,ensureSaved:async()=>{calls.saves++;return true;}});
-  for(const name of ['documentKey','hasUnsettledLock','requestDeleteAll','finishDeleteAll','deleteAll'])vm.runInContext(helper(name),context);
+  const context=vm.createContext({state,$,charts,innerWidth:1000,innerHeight:700,notice:()=>{},selectObject:id=>{state.selected=id;},openPanel:id=>calls.panels.push(id),updateObject:(id,patch)=>calls.updates.push({id,patch:copy(patch)}),recordHistory:()=>calls.history++,dirty:()=>calls.dirty++,flush:()=>calls.flush++,ensureSaved:async()=>{calls.saves++;return true;}});
+  for(const name of ['documentKey','currentPlan','hasUnsettledLock','requestDeleteAll','finishDeleteAll','deleteAll','deleteObject','clearLevel','clearOpenPlan','closeObjectContext','objectContext'])vm.runInContext(helper(name),context);
+  const menuListener=source.split(/\r?\n/).find(line=>line.startsWith("  $('object-context-menu').addEventListener('click'"));assert.ok(menuListener);vm.runInContext(menuListener,context);
   function close(value){if(value!==undefined)dialog.returnValue=value;dialog.open=false;return context.finishDeleteAll();}
   return{state,calls,dialog,charts,context,$,close};
 }
@@ -111,4 +112,38 @@ test('both bulk-delete entry points route through confirmation and the native di
   assert.match(template,/<dialog\b[^>]*\bid="delete-all-dialog"[^>]*>[\s\S]*?<form\b[^>]*\bmethod="dialog"[^>]*>/);
   assert.match(template,/<button[^>]*id="cancel-delete-all"[^>]*value="cancel"/);
   assert.match(template,/<button[^>]*id="confirm-delete-all"[^>]*value="confirm"/);
+});
+
+test('all destructive helpers refuse a loaded plan from another symbol or board even with matching object IDs',async()=>{
+  for(const foreign of [{symbol:'CZCE.RM701',board_id:'night'},{symbol:'SHFE.rb2701',board_id:'other'}]){
+    const h=harness();Object.assign(h.state.plan,foreign);const before=copy(h.state.plan);
+    await h.context.deleteObject('a');h.context.clearLevel('planned_entry_price');h.context.clearOpenPlan();h.context.requestDeleteAll();await h.context.deleteAll({document:h.context.documentKey(),generation:h.state.generation,ids:['a','b']});
+    assert.deepEqual(h.state.plan,before);assert.equal(h.calls.history,0);assert.equal(h.calls.dirty,0);assert.equal(h.calls.flush,0);assert.equal(h.calls.shown,0);
+  }
+});
+
+test('single-layer deletion changes only the current plan target and retains sibling and locked layers',async()=>{
+  const h=harness(),otherPlan={...copy(h.state.plan),board_id:'other'},otherBefore=copy(otherPlan);await h.context.deleteObject('a');
+  assert.deepEqual(h.state.plan.objects.map(object=>object.id),['b','locked']);assert.deepEqual(otherPlan,otherBefore);assert.equal(h.state.plan.planned_entry_price,3030);assert.equal(h.state.plan.stop_price,3040);assert.equal(h.state.plan.notes,'keep notes');assert.equal(h.calls.history,1);assert.equal(h.calls.flush,1);
+  await h.context.deleteObject('locked');assert.deepEqual(h.state.plan.objects.map(object=>object.id),['b','locked']);assert.equal(h.calls.flush,1);
+});
+
+test('waiting for unlock acknowledgement cannot delete a recurring ID after switching A to B to A',async()=>{
+  const h=harness([{id:'a',locked:false}]);h.state.saved.objects[0].locked=true;let release;h.context.ensureSaved=()=>new Promise(resolve=>release=resolve);
+  const deletion=h.context.deleteObject('a');assert.equal(h.calls.history,0);h.state.board='other';h.state.generation++;h.state.plan={...copy(h.state.plan),board_id:'other'};h.state.board='night';h.state.generation++;h.state.plan={...copy(h.state.plan),board_id:'night',notes:'新进入的计划'};const before=copy(h.state.plan);release(true);await deletion;
+  assert.deepEqual(h.state.plan,before);assert.equal(h.calls.history,0);assert.equal(h.calls.flush,0);
+});
+
+test('a menu opened before A to B to A cannot delete, change, or expose actions on the new document',async()=>{
+  for(const action of ['hide','lock','delete','delete-plan','delete-all','properties','layers']){
+    const h=harness();h.context.objectContext('a',{clientX:100,clientY:100});assert.equal(h.state.contextGeneration,7);assert.equal(h.$('object-context-menu').hidden,false);
+    h.state.board='other';h.state.generation++;h.state.plan={...copy(h.state.plan),board_id:'other'};h.state.board='night';h.state.generation++;h.state.plan={...copy(h.state.plan),board_id:'night'};const before=copy(h.state.plan);
+    h.$('object-context-menu').listeners.click({target:{closest:()=>({dataset:{contextAction:action},disabled:false})}});await Promise.resolve();
+    assert.deepEqual(h.state.plan,before,action);assert.equal(h.calls.history,0,action);assert.equal(h.calls.flush,0,action);assert.equal(h.calls.shown,0,action);assert.deepEqual(h.calls.updates,[],action);assert.deepEqual(h.calls.panels,[],action);assert.equal(h.state.contextObject,null);assert.equal(h.state.contextGeneration,null);assert.equal(h.$('object-context-menu').hidden,true);
+  }
+});
+
+test('a newly opened current-document menu still deletes its clicked layer and resets captured context',async()=>{
+  const h=harness();h.context.objectContext('b',{clientX:100,clientY:100});h.$('object-context-menu').listeners.click({target:{closest:()=>({dataset:{contextAction:'delete'},disabled:false})}});await Promise.resolve();
+  assert.deepEqual(h.state.plan.objects.map(object=>object.id),['a','locked']);assert.equal(h.calls.flush,1);assert.equal(h.state.contextObject,null);assert.equal(h.state.contextGeneration,null);
 });

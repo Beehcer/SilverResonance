@@ -54,7 +54,7 @@
   class Controller{
     constructor({list,callbacks={}}){
       if(!list)throw new Error('Layer list is required');
-      this.list=list;this.document=list.ownerDocument;this.callbacks=callbacks;this.rows=new Map();this.objects=[];this.selected=null;this.period='m30';this.peers=[];this.query='';this.filter='all';
+      this.list=list;this.document=list.ownerDocument;this.callbacks=callbacks;this.rows=new Map();this.objects=[];this.selected=null;this.period='m30';this.peers=[];this.query='';this.filter='all';this.scope=undefined;this.scopeEpoch=0;this.destroyed=false;
       list.replaceChildren();
       this.controls=this.element('div','layer-controls');
       this.search=this.element('input','layer-search');this.search.type='search';this.search.placeholder='搜索图层';this.search.setAttribute('aria-label','搜索图层');
@@ -67,7 +67,8 @@
     }
     element(tag,className,text){const node=this.document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node;}
     object(id){return this.objects.find(object=>object.id===id);}
-    update({objects=[],selected=null,period=this.period,peers=[]}={}){
+    update({objects=[],selected=null,period=this.period,peers=[],scope=this.scope}={}){
+      if(scope!==this.scope){this.finishDrag();this.scope=scope;this.scopeEpoch++;this.rows.clear();this.list.replaceChildren();this.empty=null;this.clearFilters();this.selected=null;}
       const selectionChanged=selected!==this.selected;this.objects=objects;this.selected=selected;this.period=period;this.peers=peers;
       if(selectionChanged&&selected&&this.object(selected)&&!filterObjects(objects,{query:this.query,period:this.filter}).some(object=>object.id===selected))this.clearFilters();
       this.render();if(selectionChanged&&selected)this.reveal(selected);
@@ -75,22 +76,23 @@
     clearFilters(){this.query='';this.filter='all';this.search.value='';this.periodSelect.value='all';}
     row(id){
       const row=this.element('div','object-row layer-row');row.dataset.layerId=id;
+      const scope=this.scope,epoch=this.scopeEpoch,current=()=>!this.destroyed&&scope===this.scope&&epoch===this.scopeEpoch;
       const drag=this.element('button','layer-drag','⋮⋮'),main=this.element('button','layer-main'),title=this.element('span','layer-name'),meta=this.element('small','layer-provenance'),peer=this.element('small','layer-peer');
       const locate=this.element('button','layer-locate','⌖'),visibility=this.element('button','object-visibility layer-visibility'),lock=this.element('button','object-visibility layer-lock');
       for(const button of[drag,main,locate,visibility,lock])button.type='button';main.append(title,meta,peer);row.append(drag,main,locate,visibility,lock);
-      const context=event=>{event.preventDefault();event.stopPropagation();this.callbacks.context?.(id,event);};
+      const context=event=>{event.preventDefault();event.stopPropagation();if(current())this.callbacks.context?.(id,event);};
       row.addEventListener('contextmenu',context);
       row.addEventListener('keydown',event=>{if(event.key==='ContextMenu'||event.key==='F10'&&event.shiftKey&&!event.ctrlKey&&!event.altKey&&!event.metaKey)context(event);});
-      main.addEventListener('click',()=>this.callbacks.select?.(id));
-      locate.addEventListener('click',()=>this.callbacks.locate?.(id));
-      visibility.addEventListener('click',()=>{const object=this.object(id);if(object&&!object.locked)this.callbacks.update?.(id,{visible:object.visible===false});});
-      lock.addEventListener('click',()=>{const object=this.object(id);if(object)this.callbacks.update?.(id,{locked:!object.locked});});
-      drag.addEventListener('keydown',event=>this.keyMove(event,id));
-      row.addEventListener('dragstart',event=>{if(this.object(id)?.locked){event.preventDefault();return;}this.dragged=id;row.classList.add('dragging');event.dataTransfer?.setData('text/plain',id);if(event.dataTransfer)event.dataTransfer.effectAllowed='move';});
-      row.addEventListener('dragover',event=>{if(!this.dragged||this.dragged===id)return;event.preventDefault();const before=event.clientY<row.getBoundingClientRect().top+row.getBoundingClientRect().height/2;this.clearDropTargets();row.dataset.drop=before?'before':'after';if(event.dataTransfer)event.dataTransfer.dropEffect='move';});
-      row.addEventListener('dragleave',event=>{if(!row.contains(event.relatedTarget))delete row.dataset.drop;});
-      row.addEventListener('drop',event=>{if(!this.dragged)return;event.preventDefault();const from=this.dragged,before=row.dataset.drop!=='after';this.finishDrag();this.move(from,id,before);});
-      row.addEventListener('dragend',()=>this.finishDrag());
+      main.addEventListener('click',()=>{if(current())this.callbacks.select?.(id);});
+      locate.addEventListener('click',()=>{if(current())this.callbacks.locate?.(id);});
+      visibility.addEventListener('click',()=>{if(!current())return;const object=this.object(id);if(object&&!object.locked)this.callbacks.update?.(id,{visible:object.visible===false});});
+      lock.addEventListener('click',()=>{if(!current())return;const object=this.object(id);if(object)this.callbacks.update?.(id,{locked:!object.locked});});
+      drag.addEventListener('keydown',event=>{if(current())this.keyMove(event,id);});
+      row.addEventListener('dragstart',event=>{if(!current()||!this.object(id)||this.object(id).locked){event.preventDefault();return;}this.dragged=id;row.classList.add('dragging');event.dataTransfer?.setData('text/plain',id);if(event.dataTransfer)event.dataTransfer.effectAllowed='move';});
+      row.addEventListener('dragover',event=>{if(!current()||!this.dragged||this.dragged===id)return;event.preventDefault();const before=event.clientY<row.getBoundingClientRect().top+row.getBoundingClientRect().height/2;this.clearDropTargets();row.dataset.drop=before?'before':'after';if(event.dataTransfer)event.dataTransfer.dropEffect='move';});
+      row.addEventListener('dragleave',event=>{if(current()&&!row.contains(event.relatedTarget))delete row.dataset.drop;});
+      row.addEventListener('drop',event=>{if(!current()||!this.dragged)return;event.preventDefault();const from=this.dragged,before=row.dataset.drop!=='after';this.finishDrag();this.move(from,id,before);});
+      row.addEventListener('dragend',()=>{if(current())this.finishDrag();});
       return{row,drag,main,title,meta,peer,locate,visibility,lock};
     }
     clearDropTargets(){for(const{row}of this.rows.values())delete row.dataset.drop;}
@@ -136,7 +138,7 @@
       if(rect.top<bounds.top)this.list.scrollTop-=bounds.top-rect.top;
       else if(rect.bottom>bounds.bottom)this.list.scrollTop+=rect.bottom-bounds.bottom;
     }
-    destroy(){this.finishDrag();this.search.removeEventListener('input',this.onSearch);this.periodSelect.removeEventListener('change',this.onFilter);this.controls.remove();this.result.remove();this.list.replaceChildren();this.rows.clear();}
+    destroy(){this.destroyed=true;this.scopeEpoch++;this.finishDrag();this.search.removeEventListener('input',this.onSearch);this.periodSelect.removeEventListener('change',this.onFilter);this.controls.remove();this.result.remove();this.list.replaceChildren();this.rows.clear();}
   }
   return{Controller,ordered,nextZ,reorder,visibleOnPeriod,provenance,provenanceInfo,filterObjects};
 }));

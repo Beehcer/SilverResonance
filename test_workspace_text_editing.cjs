@@ -5,7 +5,7 @@ const C=require('./static/workspace-chart.js');
 
 function harness(run){
   const oldDocument=global.document,oldObserver=global.ResizeObserver;
-  function make(tag){return{tag,style:{},attrs:{},listeners:{},children:[],hidden:false,value:'',setAttribute(key,value){this.attrs[key]=String(value);},getAttribute(key){return this.attrs[key];},append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=[...nodes];},addEventListener(type,fn){this.listeners[type]=fn;},getBoundingClientRect(){return{left:0,top:0};},focus(){this.focused=true;},select(){this.selectedText=true;},setPointerCapture(id){this.capture=id;},hasPointerCapture(id){return this.capture===id;},releasePointerCapture(){this.capture=null;}};}
+  function make(tag){return{tag,style:{},attrs:{},listeners:{},children:[],hidden:false,value:'',setAttribute(key,value){this.attrs[key]=String(value);},getAttribute(key){return this.attrs[key];},append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=[...nodes];},addEventListener(type,fn){this.listeners[type]=fn;},getBoundingClientRect(){return{left:0,top:0};},focus(){this.focused=true;},select(){this.selectedText=true;},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},remove(){this.removed=true;},setPointerCapture(id){this.capture=id;},hasPointerCapture(id){return this.capture===id;},releasePointerCapture(){this.capture=null;}};}
   try{
     global.document={createElement:make,createElementNS:(_,tag)=>make(tag)};global.ResizeObserver=class{observe(){}};
     const host=Object.assign(make('div'),{clientWidth:500,clientHeight:260}),updates=[],presence=[],notices=[],chart=new C.Chart(host,'m3',{update(id,patch){updates.push({id,patch:structuredClone(patch)});chart.setPlan({...chart.plan,objects:chart.plan.objects.map(object=>object.id===id?{...object,...patch}:object)});},presence:value=>presence.push(value),notice:message=>notices.push(message)});
@@ -107,9 +107,88 @@ test('rendered editable labels expose name targets while prices remain separate 
   harness(({chart,names,make})=>{
     for(const kind of ['text','zone','trend','reference','horizontal','segment']){
       const object=names(kind),layer=make('g');chart.drawObject(layer,object);const flatten=node=>[node,...node.children.flatMap(flatten)],nodes=flatten(layer),labels=nodes.filter(node=>node.attrs['data-edit-name']===object.id);
-      assert.equal(labels.length,1,kind);assert.equal(labels[0].textContent,object.name);
+      assert.equal(labels.length,1,kind);assert.equal(kind==='text'?labels[0].children.map(line=>line.textContent).join('\n'):labels[0].textContent,object.name);
       if(kind==='horizontal')assert.equal(nodes.find(node=>node.attrs['data-layer-price']===object.id).textContent,'103');
       if(kind==='segment')assert.equal(nodes.find(node=>node.attrs['data-segment-price']===object.id).textContent,'103');
     }
+  });
+});
+
+test('multiline text renders left-aligned tspans around a vertically centered point on either side',()=>{
+  harness(({chart,names,make})=>{
+    for(const side of ['right','left']){
+      const object=names('text',{text_side:side,name:'观察反弹\r\n\r\n受阻再空，等待确认'}),layer=make('g');chart.plan={objects:[object]};chart.selected=object.id;chart.drawObject(layer,object);
+      const flatten=node=>[node,...node.children.flatMap(flatten)],nodes=flatten(layer),label=chart.nameLabel(object),text=nodes.find(node=>node.attrs['data-edit-name']===object.id),lines=text.children;
+      assert.deepEqual(lines.map(line=>line.textContent),['观察反弹','','受阻再空，等待确认']);assert.equal(lines.every(line=>line.tag==='tspan'),true);assert.equal(text.textContent,undefined,'no stray null text before tspans');
+      assert.equal(text.attrs['text-anchor'],'start');assert.equal(text.attrs['xml:space'],'preserve');assert.equal(new Set(lines.map(line=>line.attrs.x)).size,1,'shorter lines remain left-aligned');
+      assert.equal(Number(lines[1].attrs.y)-Number(lines[0].attrs.y),16);assert.equal(label.top+label.height/2,chart.tx.y(103));
+      if(side==='left')assert.equal(label.left+label.width,chart.tx.x(50)-7);else assert.equal(label.left,chart.tx.x(50)+7);
+      const outline=nodes.find(node=>node.attrs['data-text-selection']===object.id);assert.equal(Number(outline.attrs.height),label.height+6);assert.equal(Number(outline.attrs.width),label.width+6);
+      for(const row of [0,1,2]){const at={x:label.left+label.width/2,y:label.top+row*16+8};assert.equal(chart.hit(at)?.object.id,object.id,'all rows including blank lines select the whole text');}
+      assert.equal(chart.titleContains(object,{x:label.left+5,y:label.top+label.height+5}),false);
+    }
+  });
+});
+
+test('double click on the final line opens a textarea sized for the complete block, while other layer names use inputs',()=>{
+  harness(({chart,names,pointer})=>{
+    const object=names('text',{name:'第一行\n第二行\n第三行'});chart.plan={objects:[object]};const label=chart.nameLabel(object),point={x:label.left+20,y:label.top+label.height-7};
+    chart.down(pointer(point.x,point.y,1000));chart.up(pointer(point.x,point.y,1020));chart.down(pointer(point.x,point.y,1200));
+    assert.equal(chart.titleObjectId,object.id);assert.equal(chart.titleEditor.tag,'textarea');assert.equal(chart.titleEditor.maxLength,2000);assert.equal(chart.titleEditor.wrap,'off');assert.ok(parseFloat(chart.titleEditor.style.height)>label.height);assert.equal(parseFloat(chart.titleEditor.style.top),label.top-7);
+    const textarea=chart.titleEditor,other=names('zone');chart.setPlan({objects:[object,other]});chart.openTitleEditor(other,point);assert.equal(chart.titleEditor.tag,'input');assert.equal(chart.titleEditor.maxLength,80);assert.equal(textarea.removed,true);
+    textarea.value='旧输入框不能污染区域名';textarea.listeners.input({});textarea.listeners.blur({});assert.equal(chart.titleObjectId,other.id);assert.equal(chart.plan.objects[1].name,other.name);
+  });
+});
+
+test('Alt+Enter replaces the selection with a real newline and shares exactly one name-only edit',()=>{
+  harness(({chart,names,key,updates})=>{
+    const object=names('text',{name:'等待反弹受阻'});chart.plan={objects:[object]};chart.openTitleEditor(object);const input=chart.titleEditor;input.setSelectionRange(2,4);let prevented=0;
+    input.listeners.keydown(key('Enter',{altKey:true,preventDefault(){prevented++;}}));
+    assert.equal(prevented,1);assert.equal(input.value,'等待\n受阻');assert.equal(input.selectionStart,3);assert.equal(chart.titleObjectId,object.id);assert.deepEqual(updates,[{id:object.id,patch:{name:'等待\n受阻'}}]);
+    input.value+='，再考虑';input.listeners.input({});assert.equal(chart.plan.objects[0].name,'等待\n受阻，再考虑');input.listeners.keydown(key('Enter'));assert.equal(chart.titleObjectId,null);assert.equal(updates.length,2);
+  });
+});
+
+test('IME confirmation ignores both Enter variants until composition has ended and does not publish pinyin',()=>{
+  harness(({chart,names,key,updates})=>{
+    const object=names('text',{name:'等待\n确认'});chart.plan={objects:[object]};chart.openTitleEditor(object);const input=chart.titleEditor;
+    input.listeners.compositionstart({});input.value='等待\nshouzu';input.listeners.input({isComposing:true});input.listeners.keydown(key('Enter',{altKey:true}));input.listeners.keydown(key('Enter',{keyCode:229}));assert.equal(updates.length,0);assert.equal(chart.titleObjectId,object.id);assert.equal(input.value,'等待\nshouzu');
+    input.value='等待\n受阻';input.listeners.compositionend({});assert.deepEqual(updates,[{id:object.id,patch:{name:'等待\n受阻'}}]);
+  });
+});
+
+test('new text uses a textarea with Alt+Enter, ordinary Enter adds all lines, and composition never submits early',()=>{
+  harness(({chart,key})=>{
+    const added=[];chart.callbacks.add=object=>added.push(object);chart.openTextEditor({time:50,price:103},{x:490,y:250});const input=chart.textInput,form=chart.textEditor;
+    assert.equal(input.tag,'textarea');assert.equal(input.maxLength,2000);assert.equal(input.wrap,'off');assert.ok(parseFloat(form.style.left)+parseFloat(form.style.width)<=chart.host.clientWidth-4);assert.ok(parseFloat(form.style.top)+parseFloat(form.style.height)<=chart.host.clientHeight-4);
+    input.value='等待';input.setSelectionRange(2,2);form.listeners.keydown(key('Enter',{altKey:true,target:input}));assert.equal(input.value,'等待\n');assert.equal(added.length,0);
+    input.listeners.compositionstart({});input.value='等待\nshouzu';form.listeners.keydown(key('Enter',{target:input}));form.listeners.submit({preventDefault(){}});assert.equal(added.length,0);assert.equal(form.hidden,false);
+    input.value='等待\n受阻';input.listeners.compositionend({});form.listeners.keydown(key('Enter',{target:input}));assert.equal(added.length,1);assert.equal(added[0].name,'等待\n受阻');assert.deepEqual(added[0].points,[{time:50,price:103}]);assert.equal(form.hidden,true);
+    chart.openTextEditor({time:60,price:100},{x:250,y:150});input.value='取消\n草稿';form.listeners.keydown(key('Escape',{target:input}));assert.equal(added.length,1);assert.equal(form.hidden,true);
+  });
+});
+
+test('multiline text drags from its final line while preserving all text and collaborator style',()=>{
+  harness(({chart,names,pointer,updates})=>{
+    const object=names('text',{name:'等反弹\n再看受阻\n确认后做空'});chart.plan={objects:[object]};const label=chart.nameLabel(object),point={x:label.left+20,y:label.top+label.height-8};
+    chart.down(pointer(point.x,point.y,1000));assert.equal(chart.drag.kind,'object');assert.equal(chart.selected,object.id);assert.equal(chart.drag.anchor,null);
+    chart.move(pointer(point.x+20,point.y+10,1100));chart.setPlan({objects:[{...object,color:'#00ff88',name:'伙伴补充\n等反弹\n确认后做空'}]});chart.up(pointer(point.x+20,point.y+10,1200));
+    assert.equal(updates.length,1);assert.deepEqual(Object.keys(updates[0].patch),['points']);assert.equal(chart.plan.objects[0].name,'伙伴补充\n等反弹\n确认后做空');assert.equal(chart.plan.objects[0].color,'#00ff88');assert.notDeepEqual(chart.plan.objects[0].points,object.points);
+    const movedLabel=chart.nameLabel(chart.plan.objects[0]);assert.equal(movedLabel.top+movedLabel.height/2,chart.tx.y(chart.plan.objects[0].points[0].price));
+  });
+});
+
+test('zero opacity text retains a visible whole-block selection outline without exposing artwork',()=>{
+  harness(({chart,names,make})=>{
+    const object=names('text',{opacity:0,name:'第一行\n第二行\n第三行'});chart.plan={objects:[object]};chart.selected=object.id;const layer=make('g');chart.drawObject(layer,object);const artwork=layer.children.find(node=>node.attrs['data-object-artwork']===object.id),selection=layer.children.find(node=>node.attrs['data-object-selection']===object.id),bounds=selection.children.find(node=>node.tag==='rect'),label=chart.nameLabel(object);
+    assert.equal(artwork.attrs.opacity,'0');assert.ok(Number(bounds.attrs.height)>=label.height);assert.ok(Number(bounds.attrs.width)>=label.width);assert.equal(selection.attrs.opacity,'0.9');
+  });
+});
+
+test('Alt+Enter respects the text content limit and does not apply it to ordinary layer names',()=>{
+  harness(({chart,names,key,updates})=>{
+    const object=names('text',{name:'字'.repeat(2000)});chart.plan={objects:[object]};chart.openTitleEditor(object);chart.titleEditor.setSelectionRange(2000,2000);chart.titleEditor.listeners.keydown(key('Enter',{altKey:true}));assert.equal(chart.titleEditor.value.length,2000);assert.equal(updates.length,0);assert.equal(chart.titleObjectId,object.id);
+    chart.titleEditor.setSelectionRange(1999,2000);chart.titleEditor.listeners.keydown(key('Enter',{altKey:true}));assert.equal(chart.titleEditor.value.length,2000);assert.equal(chart.titleEditor.value.at(-1),'\n');assert.equal(updates.length,1);
+    const zone=names('zone');chart.plan={objects:[zone]};chart.openTitleEditor(zone);assert.equal(chart.titleEditor.maxLength,80);chart.titleEditor.listeners.keydown(key('Enter',{altKey:true}));assert.equal(chart.titleObjectId,null);
   });
 });

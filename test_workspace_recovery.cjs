@@ -10,16 +10,16 @@ const source=fs.readFileSync(path.join(__dirname,'static/workspace.js'),'utf8');
 const clone=value=>JSON.parse(JSON.stringify(value));
 
 // Run the production recovery helpers, with only their browser/network boundaries
-// replaced. These helpers are single-line declarations in the workspace bundle.
+// replaced. Keep document guards and cancellation on their production helpers.
 function helper(name){
   const line=source.split(/\r?\n/).find(line=>new RegExp('^  (?:async )?function '+name+'\\(').test(line));
   assert.ok(line,`Missing workspace helper ${name}`);if(line.trimEnd().endsWith('}'))return line;const start=source.indexOf(line),end=source.indexOf('\n  }',start);assert.ok(end>=0);return source.slice(start,end+4);
 }
 function harness(overrides={}){
-  const saved={revision:1,notes:'A',objects:[]},state={session:{user:{id:'me'}},symbol:'SHFE.rb2701',board:'first',plan:clone(saved),saved:clone(saved),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false};
+  const saved={symbol:'SHFE.rb2701',board_id:'first',revision:1,notes:'A',objects:[]},state={session:{user:{id:'me'}},symbol:'SHFE.rb2701',board:'first',generation:1,plan:clone(saved),saved:clone(saved),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false};
   const storage=new Map(),elements=new Map(),calls={flush:0,notices:[],savedViews:0};
   const context=vm.createContext({
-    state,M,E,clone,PREFIX:'test:',charts:{},Date,Promise,
+    state,M,E,clone,PREFIX:'test:',charts:{},Date,Promise,readRequests:new Set(),marketRequests:new Map(),
     $:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id);},
     localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value)),removeItem:key=>storage.delete(key)},
     storageSet:(key,value)=>{storage.set('test:'+key,JSON.stringify(value));return true;},
@@ -28,10 +28,10 @@ function harness(overrides={}){
     rememberCurrentDocument:()=>{},defaultPlan:()=>({notes:'',objects:[]}),fillPlan:()=>{},fillPlanQuietly:()=>{},planMeta:()=>{},renderObjects:()=>{},renderEvaluation:()=>{},renderSyncStatus:()=>{},
     shownPlan:()=>state.plan,flush:async()=>{calls.flush++;},notice:value=>calls.notices.push(value),
     setUnavailable:()=>{},saveViews:()=>{calls.savedViews++;},sendPresence:()=>{},presenceSender:{reset:()=>{}},
-    setTimeout:callback=>{callback();return 1;},
+    setTimeout:callback=>{callback();return 1;},clearTimeout:()=>{},
     ...overrides,
   });
-  for(const name of ['documentKey','draftKey','persistDraft','drawingCharts','finishDrawings'])vm.runInContext(helper(name),context);
+  for(const name of ['documentKey','currentPlan','closeObjectContext','cancelObsoleteReads','draftKey','persistDraft','drawingCharts','finishDrawings'])vm.runInContext(helper(name),context);
   return{context,state,storage,elements,calls,load:name=>vm.runInContext(helper(name),context),key:()=>`test:draft:me:${state.symbol}:${state.board}`};
 }
 
@@ -60,6 +60,13 @@ test('recovering a lost acknowledgement keeps the draft dirty and buffers newer 
   h.context.receivePlan(current);assert.equal(h.state.queuedRemote.revision,9);
   const remaining=M.ack(h.state.pending,sent,h.state.saved),settled=M.apply(h.state.queuedRemote,remaining);
   assert.equal(settled.notes,'A');assert.equal(settled.objects[0].name,'伙伴的新备注');
+});
+
+test('an unrelated document cannot replace a draft or enter the lost-acknowledgement queue',()=>{
+  const h=harness();h.load('receivePlan');const original=clone(h.state.plan);h.state.outbox={id:'unknown'};
+  for(const other of [{...original,symbol:'SHFE.au2612',revision:99},{...original,board_id:'second',revision:99}])h.context.receivePlan(other);
+  assert.deepEqual(h.state.plan,original);assert.equal(h.state.queuedRemote,undefined);assert.equal(h.state.revision,1);
+  h.context.receivePlan({...original,revision:2,notes:'same document'});assert.equal(h.state.queuedRemote.revision,2);
 });
 
 test('document switching waits for an outstanding commit even with no ordinary dirty flag',async()=>{
@@ -105,6 +112,14 @@ test('bulk deletion waits for unlocks but never deletes a peer layer arriving du
   h.state.saved.objects=[{id:'mine',locked:true}];h.state.plan.objects=[{id:'mine',locked:false}];
   h.context.ensureSaved=async()=>{h.state.plan.objects.push({id:'peer',locked:false});return true;};h.context.recordHistory=()=>{};h.context.dirty=()=>{};
   await h.context.deleteAll({document:h.context.documentKey(),generation:h.state.generation,ids:['mine']});assert.equal(h.state.plan.objects.length,1);assert.equal(h.state.plan.objects[0].id,'peer');
+});
+
+test('deletion cannot touch a previous document still held while the active context changes',async()=>{
+  const h=harness();h.load('hasUnsettledLock');h.load('deleteObject');h.load('deleteAll');
+  h.state.plan.objects=[{id:'old-layer',locked:false}];h.state.board='second';
+  await h.context.deleteObject('old-layer');
+  await h.context.deleteAll({document:h.context.documentKey(),generation:h.state.generation,ids:['old-layer']});
+  assert.equal(h.state.plan.objects.length,1);assert.equal(h.calls.flush,0);
 });
 
 test('unconfirmed commit prevents switching when reconnection cannot complete',async()=>{

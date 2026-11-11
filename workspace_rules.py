@@ -112,7 +112,7 @@ def validate_chart_anchor(anchor):
         raise ValueError("图表柱位偏移须为0到10000之间的有限数值")
 
 
-def validate_plan(raw):
+def validate_plan(raw, *, existing_objects=(), preserve_legacy_names=False):
     """Validate a partial draft without inventing missing premises or risk values."""
     if not isinstance(raw, dict):
         raise ValueError("计划必须是对象")
@@ -180,9 +180,25 @@ def validate_plan(raw):
             raise ValueError("计划讨论格式无效")
     if not isinstance(objects, list) or len(objects) > 500:
         raise ValueError("绘图对象必须是最多500项的列表")
+    existing = {obj.get("id"): obj for obj in existing_objects if isinstance(obj, dict)}
     for obj in objects:
         if not isinstance(obj, dict) or not isinstance(obj.get("kind"), str):
             raise ValueError("绘图对象缺少类型")
+        if obj["kind"] == "text" and "name" in obj and not preserve_legacy_names:
+            old = existing.get(obj.get("id"), {})
+            unchanged = old.get("kind") == "text" and "name" in old and old["name"] == obj["name"]
+            # Legacy persisted names keep their original schema allowance.
+            # Only new or edited text content adopts the multiline limit.
+            if not unchanged:
+                name = obj["name"]
+                if not isinstance(name, str):
+                    raise ValueError("文本内容必须是字符串")
+                name = name.replace("\r\n", "\n").replace("\r", "\n")
+                if any(ord(char) < 32 and char not in ("\t", "\n") for char in name):
+                    raise ValueError("文本内容包含无效控制字符")
+                if len(name) > 2000:
+                    raise ValueError("文本内容最多2000个字符")
+                obj["name"] = name
         if "locked" in obj and not isinstance(obj["locked"], bool):
             raise ValueError("锁定状态须明确为是或否")
         if "opacity" in obj and (not _finite(obj["opacity"]) or not 0 <= obj["opacity"] <= 1):
@@ -338,7 +354,7 @@ def evaluate_plan(plan, market, risk, rule_version):
             issues.append((severity, detail))
 
     try:
-        plan = validate_plan(plan)
+        plan = validate_plan(plan, preserve_legacy_names=True)
     except ValueError as exc:
         result.update(status="invalid", label="计划无效", reason=str(exc), next_action="修正计划字段后重新检查")
         check("plan", "计划参数", "fail", str(exc))

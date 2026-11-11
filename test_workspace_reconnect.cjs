@@ -13,10 +13,10 @@ test('reconnecting clears old readiness before an early disk preview while boots
   const symbol='SHFE.rb2701',oldPlan={symbol,board_id:'previous-board',notes:'unsaved old session draft',objects:[]};
   const state={session:{user:{id:'previous-user'}},plan:oldPlan,saved:oldPlan,planReady:true,board:'previous-board',revision:42,
     generation:9,cacheEpoch:1,loading:false,dirty:true,polling:false,evaluation:{status:'ready',source:'live'},lastSignal:'obsolete-ready'};
-  const calls=[],nodes=new Map(),savedDrafts=[],pending=new Promise(()=>{}),noop=()=>{};
+  const calls=[],nodes=new Map(),savedDrafts=[],pending=new Promise(()=>{}),noop=()=>{},oldRead={controller:new AbortController(),cancelled:false};let closedEvents=0;state.eventSource={close(){closedEvents++;}};state.contextObject='old-layer';state.contextDocument=symbol+':previous-board';state.contextGeneration=9;
   const preview={symbol,partial:true,client_cached:true,fresh:false,periods:{day:[],m30:[],m3:[]}};
   const context=vm.createContext({
-    state,WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),
+    state,WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map([[symbol,pending]]),documentCache:new Map(),readRequests:new Set([oldRead]),
     marketPreview:{get:async()=>preview},presenceSender:{reset:noop},URLSearchParams,Set,Map,Promise,
     location:{search:'?symbol='+symbol},
     $:id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);},
@@ -27,10 +27,11 @@ test('reconnecting clears old readiness before an early disk preview while boots
     refreshMarket:()=>{calls.push('UNEXPECTED_MARKET_RETRY');return pending;},
     notice:noop,setUnavailable:noop,
   });
-  for(const name of ['preloadSavedMarket','enter','poll'])vm.runInContext(helper(name),context);
+  for(const name of ['cancelObsoleteReads','closeObjectContext','preloadSavedMarket','enter','poll'])vm.runInContext(helper(name),context);
   void context.enter({user:{id:'restored-user'}});
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(savedDrafts,[oldPlan],'The old draft must be retained before clearing live state.');
+  assert.equal(oldRead.cancelled,true);assert.equal(oldRead.controller.signal.aborted,true);assert.equal(context.readRequests.size,0);assert.equal(context.marketRequests.size,0);assert.equal(closedEvents,1);assert.equal(state.contextObject,null);assert.equal(state.contextGeneration,null);
   assert.deepEqual(calls,['/symbols','/rules','/risk']);assert.equal(state.symbol,symbol);assert.equal(state.market.partial,true);
   assert.equal(state.loading,true);assert.equal(state.planReady,false);assert.equal(state.plan,null);assert.equal(state.evaluation,null);assert.equal(state.lastSignal,null);
   await context.poll();

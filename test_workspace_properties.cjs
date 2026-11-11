@@ -45,3 +45,29 @@ test('node edits follow stable IDs through peer insertion and reject deleted nod
   assert.ok(P.nodePatch(object,'deleted','price','103').error);
   assert.ok(P.nodePatch(object,'target','price','').error);
 });
+
+test('text content accepts multiline names through 2000 characters with canonical line endings',()=>{
+  const object={kind:'text',name:'old',note:'independent note',points:[{time:10,price:100}]};
+  const content='  开盘计划\r\n\r\n等待回抽\r受阻后再看空\n';
+  assert.deepEqual(P.propertyPatch(object,'name',content),{patch:{name:'  开盘计划\n\n等待回抽\n受阻后再看空\n'}});
+  for(const value of ['','文'.repeat(2000),'😀'.repeat(2000)])assert.deepEqual(P.namePatch(object,value),{patch:{name:value}});
+  for(const value of ['文'.repeat(2001),'😀'.repeat(2001),'invalid\0text',null,123])assert.ok(P.namePatch(object,value).error);
+  assert.equal(object.name,'old');assert.equal(object.note,'independent note');
+});
+
+test('other layer names remain single-line and capped at eighty characters in the editor',()=>{
+  for(const kind of ['horizontal','segment','trend','reference','wave','zone']){
+    const object={kind};assert.deepEqual(P.namePatch(object,'第一行\r\n第二行\r第三行'),{patch:{name:'第一行 第二行 第三行'}});
+    assert.equal(P.namePatch(object,'字'.repeat(80)).patch.name.length,80);assert.ok(P.namePatch(object,'字'.repeat(81)).error);
+  }
+});
+
+test('multiline content patches and undo preserve a collaborator geometry, color and separate note',()=>{
+  const M=require('./static/workspace-merge.js'),E=require('./static/workspace-editing.js');
+  const before={objects:[{id:'text',kind:'text',name:'第一段\n第二段',note:'对象备注',color:'#f1c40f',points:[{time:10,price:100}]}]},after=JSON.parse(JSON.stringify(before));
+  Object.assign(after.objects[0],P.namePatch(after.objects[0],'等待反弹\r\n\r\n受阻再开空').patch);
+  const delta=M.diff(before,after);assert.deepEqual(delta.object_edits[0].changes,{name:'等待反弹\n\n受阻再开空'});assert.equal(delta.upsert_objects.length,0);
+  const peer=JSON.parse(JSON.stringify(before));Object.assign(peer.objects[0],{color:'#00ff00',note:'伙伴单独备注'});peer.objects[0].points[0].price=103;
+  const merged=M.apply(peer,delta);assert.equal(merged.objects[0].name,'等待反弹\n\n受阻再开空');assert.equal(merged.objects[0].note,'伙伴单独备注');
+  const undone=E.apply(merged,E.operation(before,after),true);assert.equal(undone.conflicts.length,0);assert.equal(undone.plan.objects[0].name,before.objects[0].name);assert.equal(undone.plan.objects[0].color,'#00ff00');assert.equal(undone.plan.objects[0].points[0].price,103);
+});

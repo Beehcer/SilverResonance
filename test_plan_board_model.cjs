@@ -104,3 +104,15 @@ test('segment distance supports selection hit testing', () => {
   assert.equal(Model.distanceToSegment({x: 50, y: 50}, a, b), 0);
   assert.ok(Math.abs(Model.distanceToSegment({x: 0, y: 100}, a, b) - Math.sqrt(5000)) < 1e-9);
 });
+
+test('text names retain multiline content beyond eighty characters and never borrow note',()=>{
+  const content='  开盘计划\r\n\r\n'+'等待回抽'.repeat(35)+'\r受阻再入场\n';
+  const object=Model.createObject('text',[points[0]],{name:content,note:'独立备注'});
+  assert.equal(object.name,content.replace(/\r\n?/g,'\n'));assert.equal(object.note,'独立备注');assert.equal(Model.normalizeObject(object).name,object.name);
+  assert.equal(Model.createObject('text',[points[0]],{note:'不是文本内容'}).name,'');
+  assert.equal(Model.createObject('text',[points[0]],{name:'字'.repeat(2000)}).name.length,2000);
+  assert.equal(Array.from(Model.createObject('text',[points[0]],{name:'😀'.repeat(2000)}).name).length,2000);
+  assert.equal(Model.createObject('text',[points[0]],{name:'字'.repeat(2001)}).name.length,2000);
+  assert.equal(Model.createObject('horizontal',[points[0]],{name:'一\r\n二\r三'}).name,'一 二 三');
+  assert.equal(Model.createObject('horizontal',[points[0]],{name:'字'.repeat(100)}).name.length,80);
+});

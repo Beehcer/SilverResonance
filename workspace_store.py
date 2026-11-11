@@ -142,6 +142,11 @@ class WorkspaceStore:
         self._file_signature = None
         self._presence = {}
         self._presence_lock = threading.RLock()
+        # Notifications are hints only. Every stream still checks durable state
+        # periodically, so another process's writes/revocations cannot be missed.
+        self._event_condition = threading.Condition()
+        self._event_revision = 0
+        self._presence_revision = {}
         self._load_error = False
         if self.path:
             try:
@@ -220,7 +225,7 @@ class WorkspaceStore:
             _require(_integer(plan["revision"]) and plan["revision"] >= 1)
             _require(plan["updated_by"]["id"] in members and isinstance(plan["updated_at"], str))
             from workspace_rules import validate_plan
-            validate_plan(plan)
+            validate_plan(plan, preserve_legacy_names=True)
             _require(symbol in state["history"] and symbol in state["activations"])
         _require(set(state["plans"]) == set(state["history"]) == set(state["activations"]))
         for symbol, history in state["history"].items():
@@ -233,7 +238,7 @@ class WorkspaceStore:
                 _require(entry["actor"]["id"] in members and isinstance(entry["at"], str))
                 _require(entry["action"] in ("created", "updated", "activated"))
                 _require(entry["plan"]["revision"] == entry["revision"] and _plan_key(entry["plan"]) == symbol)
-                validate_plan(entry["plan"])
+                validate_plan(entry["plan"], preserve_legacy_names=True)
                 _require(entry["actor"] == entry["plan"]["updated_by"] and entry["at"] == entry["plan"]["updated_at"])
             _require(last == state["plans"][symbol]["revision"])
             _require(history[-1]["plan"] == state["plans"][symbol])
@@ -244,7 +249,7 @@ class WorkspaceStore:
                 _require(_plan_key(snapshot) == symbol and _integer(snapshot["revision"]) and snapshot["revision"] > last)
                 last = snapshot["revision"]
                 _require("activated_snapshot" not in snapshot)
-                validate_plan(snapshot)
+                validate_plan(snapshot, preserve_legacy_names=True)
                 _require(snapshot.get("enabled") is True and bool(snapshot.get("activation_at")))
                 _require(snapshot["revision"] <= state["plans"][symbol]["revision"])
             active_snapshot = state["plans"][symbol].get("activated_snapshot")
@@ -350,7 +355,47 @@ class WorkspaceStore:
             signature = self._persist(updated)
             self._state = updated
             self._file_signature = signature
-            return copy.deepcopy(result)
+            result = copy.deepcopy(result)
+        # Never wake readers before the atomic commit and in-memory publication.
+        # Do not hold the file lock while waking stream workers.
+        self._notify_events(durable=True)
+        return result
+
+    def _notify_events(self, symbol=None, durable=False):
+        with self._event_condition:
+            if durable:
+                self._event_revision += 1
+            else:
+                self._presence_revision[symbol] = self._presence_revision.get(symbol, 0) + 1
+            self._event_condition.notify_all()
+
+    def event_marker(self, symbol):
+        with self._event_condition:
+            return self._event_revision, self._presence_revision.get(symbol, 0)
+
+    def wait_for_events(self, symbol, marker, timeout):
+        """Wait without polling; a captured marker closes the read/wait race."""
+        with self._event_condition:
+            self._event_condition.wait_for(
+                lambda: (self._event_revision, self._presence_revision.get(symbol, 0)) != marker,
+                timeout=max(0, timeout))
+
+    def event_state(self, token, symbol):
+        """Authenticate and read only a revision under one durable-store lock.
+
+        A stream's background checks must not deepcopy complete plans or renew
+        durable activity timestamps. Normal authenticated requests retain those
+        activity updates. None means the stream's session is no longer valid.
+        """
+        if not isinstance(token, str) or len(token) > 200:
+            return None
+        with self._locked():
+            self._reload()
+            session = self._state["sessions"].get(_hash(token))
+            if session is None or session["expires"] <= time.time():
+                return None
+            plan = self._state["plans"].get(symbol)
+            return plan["revision"] if plan else 0
 
     @staticmethod
     def _new_session(state, user_id):
@@ -389,9 +434,12 @@ class WorkspaceStore:
             member["last_seen"] = _now()
             return _public_member(member)
         user = self._change(operation)
+        scope = None
         with self._presence_lock:
             if user_id in self._presence:
                 self._presence[user_id].update(user)
+                scope = self._presence[user_id]["symbol"]
+        self._notify_events(scope)
         return user
 
     def authenticate(self, token):
@@ -438,7 +486,7 @@ class WorkspaceStore:
         if preview_object is not None:
             from workspace_rules import validate_plan
             try:
-                validate_plan({"objects": [preview_object]})
+                preview_object = validate_plan({"objects": [preview_object]})["objects"][0]
                 self._objects_by_id([preview_object])
             except (ValueError, TypeError) as exc:
                 raise WorkspaceError("拖拽预览无效") from exc
@@ -453,11 +501,15 @@ class WorkspaceStore:
                     or not 0 < area["min"] < area["max"]):
                 raise WorkspaceError("协作视角范围无效")
         with self._presence_lock:
+            previous_symbol = self._presence.get(user["id"], {}).get("symbol")
             self._presence[user["id"]] = {**user, "symbol": symbol, "period": period,
                                          "object_id": object_id, "cursor": copy.deepcopy(cursor),
                                          "preview_object": copy.deepcopy(preview_object),
                                          "view": copy.deepcopy(view),
                                          "seen_at": time.monotonic()}
+        self._notify_events(symbol)
+        if previous_symbol != symbol:
+            self._notify_events(previous_symbol)
         return self.presence(symbol)
 
     def presence(self, symbol=None):
@@ -554,10 +606,10 @@ class WorkspaceStore:
             result[identity] = obj
         return result
 
-    def _clean_plan(self, raw, rule_version):
+    def _clean_plan(self, raw, rule_version, existing_objects=()):
         from workspace_rules import validate_plan
         try:
-            clean = validate_plan(raw)
+            clean = validate_plan(raw, existing_objects=existing_objects)
         except (ValueError, TypeError) as exc:
             raise WorkspaceError(str(exc)) from exc
         for field in _METADATA:
@@ -602,12 +654,12 @@ class WorkspaceStore:
     def save_plan(self, symbol, base_revision, raw, user_id, rule_version):
         if not _integer(base_revision):
             raise WorkspaceError("保存计划必须提供有效版本号")
-        clean = self._clean_plan(raw, rule_version)
         def operation(state):
             current = state["plans"].get(symbol)
             revision = current["revision"] if current else 0
             if base_revision != revision:
                 raise RevisionConflict(current)
+            clean = self._clean_plan(raw, rule_version, (current or {}).get("objects", []))
             clean["comments"] = copy.deepcopy((current or {}).get("comments", []))
             return self._commit_plan(state, symbol, clean, user_id)
         return self._change(operation)
@@ -784,7 +836,7 @@ class WorkspaceStore:
             for identity in deletes:
                 current_objects.pop(identity, None)
             merged["objects"] = list(current_objects.values())
-            clean = self._clean_plan(merged, rule_version)
+            clean = self._clean_plan(merged, rule_version, latest.get("objects", []))
             unchanged = {key: value for key, value in latest.items() if key not in _METADATA}
             result = current if current and clean == unchanged else self._commit_plan(state, symbol, clean, user_id)
             if receipt_key:
