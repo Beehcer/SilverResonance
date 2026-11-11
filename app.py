@@ -14,8 +14,9 @@ import os
 import sys
 import json
 import webbrowser
+import queue
 from datetime import datetime, timedelta, timezone
-from flask import Flask, jsonify, render_template, request, redirect, url_for
+from flask import Flask, jsonify, render_template, request, redirect, url_for, Response, stream_with_context
 
 import config
 import resonance
@@ -28,8 +29,10 @@ import outlook
 import outlook_store
 import trading
 import trade_plan
+import plan_board_demo as board_demo
 
 _trading_store = trading.TradingStore(os.path.join(user_settings.app_dir(), "state", "trading_state.json"))
+_board_demo_store = board_demo.SharedPlanStore(os.path.join(user_settings.app_dir(), "state", "plan_board_demo.json"))
 _structure_store = outlook_store.OutlookStore(os.path.join(user_settings.app_dir(), "state", "outlook_state.json"))
 _mock_structure_store = outlook_store.OutlookStore()
 
@@ -1528,6 +1531,53 @@ def index():
                            symbol_name=symbols.name_of(config.SYMBOL) or "",
                            presets=symbols.PRESETS,
                            poll_ms=config.POLL_INTERVAL_MS)
+
+
+@app.route("/board-demo")
+def plan_board_demo():
+    return render_template("plan_board_demo.html")
+
+
+@app.route("/api/board-demo/plans/<symbol>", methods=["GET", "PUT"])
+def api_board_demo_plan(symbol):
+    try:
+        if request.method == "GET":
+            return jsonify(status="ok", plan=_board_demo_store.get(symbol))
+        if request.content_length and request.content_length > 2 * 1024 * 1024:
+            return jsonify(status="error", message="计划变更过大"), 413
+        payload = request.get_json(silent=True)
+        plan, conflicts = _board_demo_store.apply(symbol, payload, request.headers.get("X-Board-Client", ""))
+        if conflicts:
+            return jsonify(status="conflict", message="服务器对象已被其他人修改", plan=plan, conflicts=conflicts), 409
+        return jsonify(status="ok", plan=plan)
+    except ValueError as exc:
+        return jsonify(status="error", message=str(exc)), 400
+    except OSError:
+        return jsonify(status="error", message="共享计划保存失败"), 500
+
+
+@app.route("/api/board-demo/events/<symbol>")
+def api_board_demo_events(symbol):
+    def events():
+        subscriber = _board_demo_store.subscribe(symbol)
+        try:
+            yield "retry: 2000\n\n"
+            while True:
+                try:
+                    event = subscriber.get(timeout=15)
+                except queue.Empty:
+                    yield ": heartbeat\n\n"
+                    continue
+                yield "event: plan\ndata: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+        finally:
+            _board_demo_store.unsubscribe(symbol, subscriber)
+
+    try:
+        _board_demo_store.get(symbol)
+    except ValueError as exc:
+        return jsonify(status="error", message=str(exc)), 400
+    return Response(stream_with_context(events()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/setup")

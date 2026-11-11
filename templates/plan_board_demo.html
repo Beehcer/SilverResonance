@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>共享计划画板 · 独立模拟验收</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='plan-board-demo.css') }}?v=6">
+</head>
+<body>
+<header class="board-header">
+  <div class="brand">
+    <strong>计划画板</strong>
+    <span class="demo-badge">独立模拟</span>
+    <span class="market-badge"><i></i>模拟 K 线自动更新</span>
+  </div>
+  <div class="plan-identity">
+    <input id="plan-title" class="plan-title" maxlength="100" aria-label="计划名称" value="模拟计划画板">
+    <select id="symbol-select" aria-label="切换模拟品种"></select>
+    <span>模拟 30 秒</span>
+  </div>
+  <div class="header-actions">
+    <span id="save-state" class="save-state">正在连接共享计划服务…</span>
+    <button id="export-plan" class="button secondary" type="button">导出计划</button>
+  </div>
+</header>
+
+<div class="notice">
+  PC 端共享模拟：K 线每 4 秒加速生成一根；计划保存到本机服务并实时同步给已连接客户端。不连接真实行情，不代表程序预测或交易许可。
+</div>
+
+<main class="board-layout">
+  <aside class="tool-rail" aria-label="绘图工具">
+    <button class="tool active" data-tool="select" title="鼠标指针（V）"><svg class="pointer-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3 L18 13 L12.2 15.1 L16.2 21 L13 22.4 L9 16.2 L4.5 20 Z"></path></svg>选择</button>
+    <button class="tool" data-tool="pan" title="平移（B）"><span class="hand-icon">✋</span>平移</button>
+    <div class="tool-separator"></div>
+    <button class="tool" data-tool="horizontal" title="水平线（H）"><span>─</span>水平线</button>
+    <button class="tool" data-tool="trend" title="趋势线（T）"><span>╱</span>趋势线</button>
+    <button class="tool" data-tool="reference" title="参考线（R）"><span>┄</span>参考线</button>
+    <button class="tool" data-tool="path" title="计划路径（P）"><span>⌁</span>计划路径</button>
+    <button class="tool" data-tool="text" title="文本注记（A）"><span>字</span>文本</button>
+    <div class="tool-separator"></div>
+    <button id="undo" class="tool" title="撤销（Ctrl+Z）" disabled><span>↶</span>撤销</button>
+    <button id="redo" class="tool" title="重做（Ctrl+Y）" disabled><span>↷</span>重做</button>
+  </aside>
+
+  <section class="chart-section">
+    <div class="chart-toolbar">
+      <div class="style-group" aria-label="默认颜色">
+        <span>颜色</span>
+        <button class="swatch active" data-color="#ef6268" style="--swatch:#ef6268" title="红色 · 看涨" aria-label="红色"></button>
+        <button class="swatch" data-color="#48be8b" style="--swatch:#48be8b" title="绿色 · 看跌" aria-label="绿色"></button>
+        <button class="swatch" data-color="#e7c460" style="--swatch:#e7c460" title="黄色 · 参考" aria-label="黄色"></button>
+        <button class="swatch" data-color="#63a9ef" style="--swatch:#63a9ef" title="蓝色" aria-label="蓝色"></button>
+        <button class="swatch" data-color="#bc9af2" style="--swatch:#bc9af2" title="紫色" aria-label="紫色"></button>
+        <button class="swatch" data-color="#e6edf3" style="--swatch:#e6edf3" title="白色" aria-label="白色"></button>
+        <input id="custom-color" type="color" value="#ef6268" title="自定义颜色" aria-label="自定义颜色">
+      </div>
+      <label>线宽 <select id="default-width"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+      <label>线型 <select id="default-style"><option value="solid">实线</option><option value="dashed">虚线</option></select></label>
+      <label class="zoom-control">横向 <input id="zoom-range" type="range" min="50" max="400" value="100"><output id="zoom-value">100%</output></label>
+      <label class="zoom-control">纵向 <input id="zoom-y-range" type="range" min="50" max="400" value="100"><output id="zoom-y-value">100%</output></label>
+      <span class="toolbar-spacer"></span>
+      <span id="active-view" class="active-view">当前：30分钟</span>
+      <label class="check" title="新建水平线、趋势线和参考线默认同时显示在三个周期"><input id="map-all-periods" type="checkbox" checked>画线全周期</label>
+      <label class="check"><input id="snap" type="checkbox" checked>吸附</label>
+      <label class="check"><input id="follow" type="checkbox" checked>跟随最新</label>
+      <button id="reset-view" class="button secondary" type="button">复位视图</button>
+    </div>
+
+    <div class="tri-chart">
+      <section class="chart-panel" data-period="day">
+        <header><strong>日线</strong><span>独立缩放 · 共享计划大纲</span></header>
+        <div id="chart-host-day" class="chart-host">
+          <canvas id="kline-canvas-day" aria-label="日线模拟 K 线"></canvas>
+          <svg id="drawing-layer-day" aria-label="日线计划绘图层"></svg>
+          <div class="chart-watermark">人工计划 · 非程序预测</div>
+          <div id="empty-chart-tip-day" class="empty-chart-tip">在日线绘制计划</div>
+          <div id="chart-loading-day" class="chart-loading" hidden><i></i><span>正在加载日线…</span></div>
+        </div>
+      </section>
+      <section class="chart-panel" data-period="m3">
+        <header><strong>3分钟</strong><span>短周期确认观察</span></header>
+        <div id="chart-host-m3" class="chart-host">
+          <canvas id="kline-canvas-m3" aria-label="3分钟模拟 K 线"></canvas>
+          <svg id="drawing-layer-m3" aria-label="3分钟计划绘图层"></svg>
+          <div class="chart-watermark">人工计划 · 非程序预测</div>
+          <div id="empty-chart-tip-m3" class="empty-chart-tip">在3分钟绘制计划</div>
+          <div id="chart-loading-m3" class="chart-loading" hidden><i></i><span>正在加载3分钟…</span></div>
+        </div>
+      </section>
+      <section class="chart-panel primary-chart" data-period="m30">
+        <header><strong>30分钟</strong><span>主计划周期</span></header>
+        <div id="chart-host-m30" class="chart-host">
+          <canvas id="kline-canvas-m30" aria-label="30分钟模拟 K 线"></canvas>
+          <svg id="drawing-layer-m30" aria-label="30分钟计划绘图层"></svg>
+          <div class="chart-watermark">人工计划 · 非程序预测</div>
+          <div id="empty-chart-tip-m30" class="empty-chart-tip">在30分钟绘制计划</div>
+          <div id="chart-loading-m30" class="chart-loading" hidden><i></i><span>正在加载30分钟…</span></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="chart-statusbar">
+      <span id="tool-help">V 选择 · 单击选中，拖动移动，控制点调整锚点</span>
+      <span id="cursor-readout">时间 — · 价格 —</span>
+    </div>
+  </section>
+
+  <aside class="inspector">
+    <section class="panel">
+      <div class="panel-heading"><h2>计划对象</h2><span id="object-count">0 项</span></div>
+      <div id="object-list" class="object-list"><div class="empty-list">尚未绘制内容</div></div>
+      <div class="panel-actions">
+        <button id="duplicate" class="button secondary" disabled>复制所选</button>
+        <button id="clear-board" class="button danger">清空画板</button>
+      </div>
+    </section>
+
+    <section class="panel properties">
+      <div class="panel-heading"><h2>对象属性</h2><span id="selected-kind">未选择</span></div>
+      <div id="no-selection" class="empty-list">选中画线后可修改属性</div>
+      <div id="property-fields" hidden>
+        <label>名称<input id="object-name" maxlength="80"></label>
+        <label>颜色<input id="object-color" type="color"></label>
+        <div class="property-row" id="line-style-row">
+          <label>线宽<select id="object-width"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></label>
+          <label>线型<select id="object-line-style"><option value="solid">实线</option><option value="dashed">虚线</option></select></label>
+        </div>
+        <label id="extend-row" class="check"><input id="object-extend" type="checkbox">向右延伸</label>
+        <label id="all-periods-row" class="check"><input id="object-all-periods" type="checkbox">全周期映射（日线 / 3分钟 / 30分钟）</label>
+        <label id="text-side-row">文本位置<select id="object-text-side"><option value="right">点的右侧</option><option value="left">点的左侧</option></select></label>
+        <label>备注<textarea id="object-note" maxlength="500" rows="3" placeholder="记录触发、失效或观察理由"></textarea></label>
+      </div>
+    </section>
+
+    <section class="panel plan-notes">
+      <div class="panel-heading"><h2>当前计划说明</h2></div>
+      <textarea id="plan-notes" maxlength="3000" rows="6" placeholder="记录当前计划背景、关注条件、失效条件和放弃情形"></textarea>
+      <p>计划说明与画线保留本地备份，并自动同步到本机共享服务。</p>
+    </section>
+  </aside>
+</main>
+
+<div id="context-menu" class="context-menu" hidden>
+  <button id="context-delete" type="button">删除（当前）</button>
+  <button id="context-delete-all" type="button">全部删除（所有）</button>
+</div>
+
+<footer class="board-footer">
+  <span>快捷键：V 选择 · B 平移 · H 水平线 · T 趋势线 · R 参考线 · P 计划路径 · A 文本</span>
+  <span>路径：单点拖动 · 双击整体移动 · +/- 增减点 · 右键菜单</span>
+</footer>
+
+<script src="{{ url_for('static', filename='plan-board-model.js') }}?v=4"></script>
+<script src="{{ url_for('static', filename='plan-board-sync.js') }}?v=1"></script>
+<script src="{{ url_for('static', filename='plan-board-demo.js') }}?v=5"></script>
+</body>
+</html>
