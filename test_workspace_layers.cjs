@@ -1,5 +1,15 @@
 const test=require('node:test'),assert=require('node:assert/strict'),L=require('./static/workspace-layers.js');
 const ids=items=>items.map(item=>item.id);
+test('user opacity multiplies with each lower-period mapping and zero remains a selectable listed layer',()=>{
+  const wave={id:'faded',kind:'wave',period:'day',opacity:.5};
+  assert.equal(L.provenance(wave,'day').opacity,.5);
+  assert.equal(L.provenance(wave,'m30').opacity,.2);
+  assert.ok(Math.abs(L.provenance(wave,'m3').opacity-.08)<1e-9);
+  const clear={...wave,opacity:0};assert.equal(L.provenance(clear,'m3').opacity,0);
+  assert.deepEqual(ids(L.filterObjects([clear],{period:'m3'})),['faded']);
+  assert.match(L.provenance(clear,'day').text,/0%/);
+  assert.equal(L.provenance({kind:'horizontal',period:'all'},'m30').opacity,1);
+});
 function apply(objects,changes){return objects.map(object=>({...object,...changes.find(change=>change.id===object.id)?.patch}));}
 function contextHarness(){
   class Element extends EventTarget{

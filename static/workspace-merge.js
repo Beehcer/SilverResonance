@@ -3,7 +3,7 @@
   const clone=value=>value===undefined?undefined:JSON.parse(JSON.stringify(value));
   const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
   const equal=(a,b)=>JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
-  const fields=new Set(['archived','title','enabled','rule_version','direction','mode','session_label','expires_at','context_confirmed','context_note','main_level','main_after','main_buffer_ticks','entry_low','entry_high','trigger_price','trigger_buffer_ticks','stop_price','obstacle_price','planned_entry_price','notes']);
+  const fields=new Set(['archived','title','enabled','rule_version','direction','mode','session_label','expires_at','context_confirmed','context_note','main_level','main_after','main_buffer_ticks','entry_low','entry_high','trigger_price','trigger_buffer_ticks','stop_price','obstacle_price','planned_entry_price','plan_opacity','notes']);
   const empty=()=>({changes:{},upsert_objects:[],delete_object_ids:[],object_edits:[]});
   const byId=items=>new Map((items||[]).map(item=>[item.id,item]));
   const identified=points=>Array.isArray(points)&&points.every(point=>typeof point.id==='string'&&point.id)&&new Set(points.map(point=>point.id)).size===points.length;

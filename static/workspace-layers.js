@@ -17,15 +17,17 @@
     const originPeriod=own(PERIODS,object.source_period)?object.source_period:(own(PERIODS,object.period)?object.period:null);
     const drawingPeriod=own(PERIODS,object.period)?object.period:'all';
     const visible=visibleOnPeriod(object,period),mapped=drawingPeriod!=='all'&&drawingPeriod!==period&&visible;
-    const opacity=mapped?Math.pow(.4,RANK[period]-RANK[drawingPeriod]):1;
+    const baseOpacity=typeof object.opacity==='number'&&Number.isFinite(object.opacity)&&object.opacity>=0&&object.opacity<=1?object.opacity:1;
+    const opacity=baseOpacity*(mapped?Math.pow(.4,RANK[period]-RANK[drawingPeriod]):1);
     let text=drawingPeriod==='all'?(originPeriod?PERIODS[originPeriod]+'绘制 · 全周期':'来源周期未记录 · 全周期'):PERIODS[drawingPeriod]+'原图';
     if(mapped)text+=' → '+PERIODS[period]+'映射 · '+Math.round(opacity*100)+'%';
     else if(period&&own(PERIODS,period)&&!visible)text+=' · 当前图不显示';
+    else if(baseOpacity<1)text+=' · 不透明度 '+Math.round(baseOpacity*100)+'%';
     let detail=originPeriod?'最初在'+PERIODS[originPeriod]+'绘制':'旧图层未记录绘制周期';
     if(drawingPeriod!=='all'&&originPeriod!==drawingPeriod)detail+='，现位于'+PERIODS[drawingPeriod];
     if(mapped)detail+='；映射到'+PERIODS[period]+'，不透明度 '+Math.round(opacity*100)+'%，编辑会同步原图';
     else if(drawingPeriod==='all')detail+='；在所有周期显示，编辑会同步所有盘面';
-    return{text,detail,originPeriod,drawingPeriod,mapped,opacity,visible};
+    return{text,detail,originPeriod,drawingPeriod,mapped,opacity,baseOpacity,visible};
   }
   function provenance(object,period){return provenanceInfo(object,period);}
   function filterObjects(objects,{query='',period='all'}={}){

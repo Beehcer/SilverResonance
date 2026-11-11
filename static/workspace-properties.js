@@ -1,8 +1,14 @@
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.WorkspaceProperties=api;}(globalThis,function(){
   'use strict';
   const positive=value=>String(value).trim()!==''&&Number.isFinite(Number(value))&&Number(value)>0;
+  const opacity=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=1?value:1;
+  function opacityPatch(value,key='opacity'){
+    if(typeof value==='boolean'||value==null||String(value).trim()===''||!Number.isFinite(Number(value))||Number(value)<0||Number(value)>100)return{error:'不透明度须为 0–100%。'};
+    return{patch:{[key]:Number(value)/100}};
+  }
   function propertyPatch(object,field,value){
     if(!object||object.locked)return{error:'标记已锁定或已删除。'};
+    if(field==='opacity'||field==='opacity-value')return opacityPatch(value);
     const keys={name:'name',note:'note',color:'color',type:'zone_type',direction:'direction',effect:'effect',period:'period','text-side':'text_side'};
     if(keys[field])return{patch:{[keys[field]]:value}};
     if(!['low','high'].includes(field))return{error:'未知属性。'};
@@ -22,5 +28,5 @@
     if(!['time','price'].includes(field)||!Number.isFinite(number)||field==='price'&&!positive(value)||field==='time'&&number<0)return{error:'请填写有效时间与正价格。'};
     const points=object.points.map((p,i)=>i===index?{...p,[field]:number}:{...p});return{patch:{points}};
   }
-  return{propertyPatch,nodePatch};
+  return{propertyPatch,nodePatch,opacity,opacityPatch};
 }));

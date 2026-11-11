@@ -95,7 +95,10 @@ def _decision_changed(current, updated):
     if any(current.get(key) != updated.get(key) for key in _DECISION_FIELDS):
         return True
     def blocks(plan):
-        return [obj for obj in plan.get("objects", []) if obj.get("kind") == "zone" and obj.get("effect") == "block"]
+        # Opacity changes visibility only; an invisible blocking region still
+        # has the same trading meaning and must not reactivate the plan.
+        return [{key: value for key, value in obj.items() if key != "opacity"}
+                for obj in plan.get("objects", []) if obj.get("kind") == "zone" and obj.get("effect") == "block"]
     return blocks(current) != blocks(updated)
 
 

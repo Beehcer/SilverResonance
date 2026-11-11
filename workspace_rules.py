@@ -49,7 +49,7 @@ PLAN_KEYS = {
     "title", "enabled", "rule_version", "direction", "mode", "session_label",
     "expires_at", "context_confirmed", "context_note", "main_level", "main_after",
     "main_buffer_ticks", "entry_low", "entry_high", "trigger_price",
-    "trigger_buffer_ticks", "stop_price", "obstacle_price", "planned_entry_price", "objects", "notes",
+    "trigger_buffer_ticks", "stop_price", "obstacle_price", "planned_entry_price", "plan_opacity", "objects", "notes",
     "id", "symbol", "revision", "updated_by", "updated_at", "activated_snapshot", "activation_at",
 }
 RISK_KEYS = ("lots", "fee_per_lot", "slippage_ticks", "budget", "daily_limit", "daily_loss")
@@ -107,6 +107,8 @@ def validate_plan(raw):
     if unknown:
         raise ValueError("未知计划字段：" + ", ".join(sorted(unknown)))
     plan = _json_value(raw)
+    if "plan_opacity" in plan and (not _finite(plan["plan_opacity"]) or not 0 <= plan["plan_opacity"] <= 1):
+        raise ValueError("计划不透明度须为0到1之间的有限数值")
     for key in ("title", "rule_version", "session_label", "context_note", "notes",
                 "id", "symbol", "board_id"):
         if key in plan and plan[key] is not None and not isinstance(plan[key], str):
@@ -168,6 +170,8 @@ def validate_plan(raw):
             raise ValueError("绘图对象缺少类型")
         if "locked" in obj and not isinstance(obj["locked"], bool):
             raise ValueError("锁定状态须明确为是或否")
+        if "opacity" in obj and (not _finite(obj["opacity"]) or not 0 <= obj["opacity"] <= 1):
+            raise ValueError("图层不透明度须为0到1之间的有限数值")
         points = obj.get("points")
         if not isinstance(points, list) or not points or len(points) > 200:
             raise ValueError("绘图对象必须包含有效锚点")

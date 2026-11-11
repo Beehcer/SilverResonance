@@ -66,3 +66,11 @@
 .active-symbol{max-width:100%;flex-wrap:wrap}#market-stamp{white-space:normal;overflow-wrap:anywhere}
 
 .drawing-draft{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid #625521;background:#272718;color:#f0ce54;flex:none}.drawing-draft button{border:1px solid #625521;background:#35331e;white-space:nowrap}.drawing-draft small{color:#b7aa7a}.object-context-menu button:disabled{cursor:default}
+.opacity-field{min-width:0;display:flex;flex-direction:column;gap:5px}
+.opacity-inputs{display:flex;align-items:center;gap:8px;min-width:0}
+.opacity-inputs input[type=range]{flex:1;min-width:40px;width:100%;padding:0;accent-color:#e5bc49;cursor:pointer}
+.opacity-inputs>span,.draw-opacity>span{display:inline-flex;align-items:center;gap:3px;flex:none}
+.opacity-inputs input[type=number],.draw-opacity input[type=number]{width:57px;box-sizing:border-box;min-width:0;text-align:right}
+.plan-opacity-field{margin:10px 0;color:#b9c5d0;font-size:12px}
+.drawing-options .draw-opacity{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:11px;color:#b9c5d0}
+.drawing-options .draw-opacity input{height:23px;padding:2px 3px}

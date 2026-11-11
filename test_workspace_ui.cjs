@@ -738,3 +738,93 @@ test('zone and segment body drags preserve latest dimensions across compressed s
     assert.equal(saved.points[0].price-saved.points[1].price,remote.objects[0].points[0].price-remote.objects[0].points[1].price);
   }
 });
+
+function captureSvg(run){
+  const previous=global.document;
+  const make=tag=>({tag,attrs:{},children:[],style:{},listeners:{},setAttribute(key,value){this.attrs[key]=String(value);},append(...nodes){for(const node of nodes){node.parent=this;this.children.push(node);}},replaceChildren(...nodes){this.children=[];this.append(...nodes);},addEventListener(name,handler){this.listeners[name]=handler;},focus(){},getBoundingClientRect(){return{left:0,top:0};},setPointerCapture(){},hasPointerCapture(){return false;}});
+  const entries=(node,inherited=1)=>{const opacity=inherited*(node.attrs.opacity===undefined?1:Number(node.attrs.opacity));return[{node,opacity},...node.children.flatMap(child=>entries(child,opacity))];};
+  try{global.document={createElementNS:(_,tag)=>make(tag),createElement:make};return run({make,entries});}finally{global.document=previous;}
+}
+
+test('all eight drawing kinds apply optional opacity to every artwork component including zero',()=>{
+  captureSvg(({make,entries})=>{
+    const{chart}=chartHarness({objects:[]});
+    for(const kind of ['horizontal','segment','trend','reference','wave','path','zone','text'])for(const opacity of [undefined,0,.35,1,NaN,-1,2,'0.5',null]){
+      const object={id:kind,kind,period:'m3',opacity,points:[{id:'a',label:'1',time:20,price:105},{id:'b',label:'2',time:60,price:kind==='segment'?105:98}]};
+      const layer=make('g');chart.drawObject(layer,object);
+      const artwork=entries(layer).find(({node})=>node.attrs['data-object-artwork']===kind);assert.ok(artwork,kind);
+      const expected=typeof opacity==='number'&&Number.isFinite(opacity)&&opacity>=0&&opacity<=1?opacity:1;
+      const painted=entries(artwork.node).filter(({node})=>['line','polyline','rect','circle','text'].includes(node.tag));assert.ok(painted.length,kind);
+      for(const item of painted)assert.equal(item.opacity,expected,`${kind} / ${opacity} / ${item.node.tag}`);
+      assert.equal(entries(layer).some(({node})=>node.attrs['data-object-selection']),false);
+    }
+  });
+});
+
+test('forecast opacity multiplies with period mapping and peer ghost opacity without dimming cursors',()=>{
+  captureSvg(({make,entries})=>{
+    const{chart}=chartHarness({objects:[]});
+    for(const period of ['day','m30','m3'])for(const opacity of [0,.5,1]){
+      chart.period=period;const layer=make('g');chart.drawObject(layer,{id:'w',kind:'wave',period:'day',opacity,points:C.wavePoints([{time:20,price:105},{time:60,price:98}])});
+      const line=entries(layer).find(({node})=>node.attrs['data-wave-line']==='w');assert.ok(line);
+      assert.ok(Math.abs(line.opacity-opacity*C.pathPeriodOpacity('day',period))<1e-12);
+    }
+    chart.period='m3';chart.selected='w';chart.peerLayer=make('g');
+    chart.setPresence([{id:'peer',name:'同伴',period:'m3',cursor:{time:40,price:103},preview_object:{id:'w',kind:'wave',period:'day',opacity:.5,points:C.wavePoints([{time:20,price:105},{time:60,price:98}])}}]);
+    const all=entries(chart.peerLayer),line=all.find(({node})=>node.attrs['data-wave-line']==='w'),cursor=all.find(({node})=>node.attrs['data-peer-cursor']==='peer');
+    assert.ok(Math.abs(line.opacity-.5*.5*.16)<1e-12);assert.equal(cursor.opacity,1);
+    assert.equal(all.some(({node})=>node.attrs['data-object-selection']),false);
+  });
+});
+
+test('transparent selected objects retain separate editing affordances and unchanged hit geometry',()=>{
+  captureSvg(({make,entries})=>{
+    for(const kind of ['horizontal','segment','trend','reference','wave','path','zone','text'])for(const opacity of [0,.1]){
+      const{chart,pointer}=chartHarness({objects:[]});
+      const object={id:kind,kind,period:'m3',opacity,points:C.wavePoints([{time:20,price:105},{time:60,price:kind==='segment'?105:98}])};
+      chart.plan.objects=[object];chart.selected=kind;const point={x:chart.tx.x(20),y:chart.tx.y(105)},hit=chart.hit(point);
+      assert.equal(hit.object.id,kind);const layer=make('g');chart.drawObject(layer,object);
+      const all=entries(layer),artwork=all.find(({node})=>node.attrs['data-object-artwork']===kind),selection=all.find(({node})=>node.attrs['data-object-selection']===kind);
+      assert.equal(artwork.opacity,opacity);assert.ok(selection?.opacity>=.5);assert.ok(selection.node.children.some(node=>node.tag==='circle'));
+      assert.equal(selection.node.children.some(node=>node.tag==='text'||node.tag==='polyline'),false);
+      let patch;chart.callbacks.update=(id,value)=>patch=value;chart.down(pointer(point.x,point.y));chart.move(pointer(point.x+16,point.y+10));chart.up(pointer(point.x+16,point.y+10));assert.ok(patch?.points,kind);
+      assert.equal(object.opacity,opacity);
+    }
+  });
+});
+
+test('plan opacity affects all manual overlays and badges but leaves market and peer visuals independent',()=>{
+  captureSvg(({make,entries})=>{
+    for(const opacity of [undefined,0,.25,1]){
+      const{chart}=chartHarness({direction:'long',planned_entry_price:103,stop_price:97,main_level:106,trigger_price:104,obstacle_price:108,entry_low:100,entry_high:102,plan_opacity:opacity,objects:[{id:'own',kind:'horizontal',opacity:.6,points:[{time:20,price:101}]}]});
+      chart.svg=make('svg');chart.autoPrice=false;chart.bars=Array.from({length:30},(_,index)=>({time:index*3,open:100,high:105,low:95,close:102}));chart.crosshair={x:100,y:80};
+      chart.peers=[{id:'peer',name:'伙伴',period:'m3',cursor:{time:40,price:103}}];C.Chart.prototype.render.call(chart);
+      const all=entries(chart.svg),expected=opacity??1,plan=all.find(({node})=>node.attrs['data-plan-overlays']==='m3');assert.equal(plan.opacity,expected);
+      for(const key of ['entry-range','main_level','trigger_price','obstacle_price','risk-fill','planned_entry_price','stop_price'])assert.equal(all.find(({node})=>node.attrs['data-plan-overlay']===key).opacity,expected,key);
+      const badges=all.filter(({node})=>node.attrs['data-plan-target']==='price-label');assert.equal(badges.length,2);for(const badge of badges)for(const item of entries(badge.node))assert.equal(item.opacity,expected);
+      for(const item of all.filter(({node})=>node.attrs['data-candle']!==undefined||node.attrs['data-crosshair']||node.attrs['data-peer-cursor']))assert.equal(item.opacity,1);
+      const averages=all.filter(({node})=>node.tag==='polyline'&&['#dededb','#d8c345','#c65aba'].includes(node.attrs.stroke));assert.equal(averages.length,3);assert.ok(averages.every(item=>item.opacity===.8));
+      assert.equal(all.find(({node})=>node.attrs['data-object-artwork']==='own').opacity,.6);
+      assert.deepEqual(chart.levelGeometry().map(level=>level.field).sort(),['planned_entry_price','stop_price']);
+    }
+  });
+});
+
+test('new drawing tools preserve chosen opacity in drafts and saved objects',()=>{
+  captureSvg(({make,entries})=>{
+    for(const kind of ['horizontal','segment','trend','reference','wave','path','zone','text'])for(const opacity of [0,.3]){
+      const{chart,pointer,host}=chartHarness({objects:[]}),added=[];host.append=()=>{};chart.callbacks.add=object=>added.push(object);
+      chart.view={start:0,end:1000000,min:90,max:110};chart.tx=C.transform(chart.view,chart.plot);chart.bars=[{time:0,open:100,high:105,low:95,close:102},{time:180000,open:101,high:106,low:96,close:103}];chart.autoPrice=false;
+      chart.setTool(kind,{opacity});assert.equal(chart.toolOpacity,opacity);
+      chart.down({...pointer(100,70),timeStamp:1000});
+      if(kind==='text'){chart.textInput.value='测试文字';chart.textEditor.listeners.submit({preventDefault(){}});}
+      else if(kind!=='horizontal'){
+        if(['wave','path'].includes(kind))chart.down({...pointer(300,150),timeStamp:2000});else chart.move(pointer(300,150));
+        const oldSvg=chart.svg;chart.svg=make('svg');C.Chart.prototype.render.call(chart);
+        const draft=entries(chart.svg).find(({node})=>node.attrs['data-object-artwork']===(['wave','path'].includes(kind)?'path':kind));assert.equal(draft?.opacity,opacity,kind);chart.svg=oldSvg;
+        if(['wave','path'].includes(kind))chart.finishPath();else chart.up(pointer(300,150));
+      }
+      assert.equal(added.length,1,kind);assert.equal(added[0].opacity,opacity,kind);chart.setTool('select');assert.equal(chart.toolOpacity,1);
+    }
+  });
+});
