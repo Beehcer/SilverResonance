@@ -3,6 +3,12 @@ __pycache__/
 dist/
 build/build/
 backtest/
+state/plan_board_demo.json
+state/workspace.json
+state/workspace.json.lock
+state/workspace-preview.json
+state/workspace-preview.json.lock
+state/trading_state.json
 
 # Personal market-data credentials stay on this machine.
 /user_config.json
