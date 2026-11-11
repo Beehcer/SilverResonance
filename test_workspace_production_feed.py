@@ -247,7 +247,7 @@ class ProductionFeedTests(unittest.TestCase):
         self.assertEqual(after["quote_at"], before["quote_at"])
         self.assertFalse(after["fresh"])
 
-    def test_rolled_bar_reloads_full_period_and_rotates_token(self):
+    def test_rolled_bar_only_converts_old_tail_plus_new_and_rotates_cursor(self):
         code, api, reader = self.reader()
         before = self.cache.snapshot(code, self.presets[0], {"connected": True})
         frame = api.frames[(code, 180)]
@@ -257,11 +257,50 @@ class ProductionFeedTests(unittest.TestCase):
         api.changed = True
         reader.observe(True)
         self.now += 180
-        reader.refresh(True)
+        with patch.object(app, "_serial_rows", wraps=app._serial_rows) as convert:
+            reader.refresh(True)
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True}, history_token=before["history_token"])
+        self.assertEqual([len(call.args[0]["close"]) for call in convert.call_args_list], [2, 2, 3])
+        self.assertTrue(after["incremental"])
+        self.assertEqual(after["period_counts"]["m3"], 10000)
+        self.assertEqual(after["period_drops"]["m3"], 1)
+        self.assertEqual(len(after["periods"]["m3"]), 3)
+        self.assertTrue(after["periods"]["m3"][-2]["closed"])
+        self.assertNotEqual(after["periods"]["m3"][-1]["dt"], before["periods"]["m3"][-1]["dt"])
+
+    def test_rollover_with_older_history_correction_still_reloads_full_period(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        frame = api.frames[(code, 180)]
+        for field, values in frame.items():
+            next_value = values[-1] + 180 * 1000000000 if field == "datetime" else values[-1]
+            frame[field] = Column(values[1:] + [next_value])
+        frame["high"][100] = 111
+        api.changed = True
+        reader.observe(True)
+        with patch.object(app, "_serial_rows", wraps=app._serial_rows) as convert:
+            reader.refresh(True)
+        self.assertEqual([len(call.args[0]["close"]) for call in convert.call_args_list], [2, 2, 10000])
         after = self.cache.snapshot(code, self.presets[0], {"connected": True}, history_token=before["history_token"])
         self.assertFalse(after["incremental"])
-        self.assertEqual(len(after["periods"]["m3"]), 10000)
-        self.assertNotEqual(after["periods"]["m3"][-1]["dt"], before["periods"]["m3"][-1]["dt"])
+        self.assertEqual(after["periods"]["m3"][100]["high"], 111)
+
+    def test_multi_bar_provider_jump_only_converts_missing_candles_and_final_tail(self):
+        code, api, reader = self.reader()
+        before = self.cache.snapshot(code, self.presets[0], {"connected": True})
+        frame = api.frames[(code, 180)]
+        for field, values in frame.items():
+            extra = [values[-1] + (i+1)*180*1000000000 if field == "datetime" else values[-1] for i in range(4)]
+            frame[field] = Column(values[4:] + extra)
+        api.changed = True
+        reader.observe(True)
+        with patch.object(app, "_serial_rows", wraps=app._serial_rows) as convert:
+            reader.refresh(True)
+        self.assertEqual([len(call.args[0]["close"]) for call in convert.call_args_list], [2, 2, 6])
+        after = self.cache.snapshot(code, self.presets[0], {"connected": True}, history_token=before["history_token"])
+        self.assertTrue(after["incremental"])
+        self.assertEqual(after["period_drops"]["m3"], 4)
+        self.assertEqual(len(after["periods"]["m3"]), 6)
 
     def test_disconnected_or_invalid_tail_cannot_renew_checked_time(self):
         code, api, reader = self.reader()

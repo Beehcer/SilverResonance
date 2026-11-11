@@ -4,11 +4,14 @@ import math
 import secrets
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
 TZ = timezone(timedelta(hours=8))
 PERIODS = {"day": 86400, "m30": 1800, "m3": 180}
 RETENTION_BARS = {86400: 180, 1800: 6000, 180: 10000}
+MAX_APPEND_BARS = 64
+CURSORS_PER_SYMBOL = 128
 
 
 def data_length_for_period(period):
@@ -56,6 +59,7 @@ class WorkspaceMarketCache:
         self.requests = {}
         self.data = {}
         self.epoch = secrets.token_hex(16)
+        self.cursors = {}
 
     def _allowed(self):
         return set(self.allowed_symbols()) if self.allowed_symbols is not None else None
@@ -135,13 +139,29 @@ class WorkspaceMarketCache:
             old_rows = previous["bars"] if previous else []
             same_history = (len(old_rows) == len(rows) and old_rows[:-2] == rows[:-2]
                             and [row["dt"] for row in old_rows[-2:]] == [row["dt"] for row in rows[-2:]])
-            token = previous["history_token"] if same_history else secrets.token_hex(16)
+            append_only = False
+            if previous and not same_history:
+                tail_count = min(2, len(old_rows))
+                old_tail = [row["dt"] for row in old_rows[-tail_count:]]
+                for index in range(max(0, len(rows) - MAX_APPEND_BARS - tail_count), len(rows) - tail_count + 1):
+                    if [row["dt"] for row in rows[index:index + tail_count]] != old_tail:
+                        continue
+                    added, dropped = len(rows) - index - tail_count, len(old_rows) - tail_count - index
+                    append_only = (0 <= dropped <= added <= MAX_APPEND_BARS
+                                   and old_rows[dropped:-tail_count] == rows[:index])
+                    break
+            token = previous["history_token"] if same_history or append_only else secrets.token_hex(16)
             self._store_rows(symbol, period, rows, previous, token)
         return True
 
     def update_tail(self, symbol, period, bars):
         """Replace only a verified unchanged-window tail; otherwise request full data."""
-        if period not in PERIODS.values() or not 1 <= len(bars) <= 2:
+        return self.update_window(symbol, period, bars, appended=0)
+
+    def update_window(self, symbol, period, bars, appended=0):
+        """Apply a provider-verified unchanged prefix plus final old bars/new bars."""
+        if (period not in PERIODS.values() or isinstance(appended, bool) or not isinstance(appended, int)
+                or not 0 <= appended <= MAX_APPEND_BARS or not bars or len(bars) > MAX_APPEND_BARS + 2):
             return False
         rows = self._prepare_rows(period, bars)
         with self.lock:
@@ -149,10 +169,53 @@ class WorkspaceMarketCache:
             if not previous:
                 return False
             old_rows = previous["bars"]
-            if len(rows) != min(2, len(old_rows)) or [r["dt"] for r in old_rows[-2:]] != [r["dt"] for r in rows]:
+            tail_count = min(2, len(old_rows))
+            if (len(rows) != tail_count + appended
+                    or [r["dt"] for r in old_rows[-tail_count:]] != [r["dt"] for r in rows[:tail_count]]):
                 return False
-            self._store_rows(symbol, period, old_rows[:-2] + rows, previous, previous["history_token"])
+            combined = (old_rows[:-tail_count] + rows)[-data_length_for_period(period):]
+            self._store_rows(symbol, period, combined, previous, previous["history_token"])
         return True
+
+    def _cursor(self, symbol, entries, history_token):
+        description = {key: {"generation": entry.get("history_token", "missing"),
+                             "count": len(entry.get("bars", [])),
+                             "first": entry["bars"][0]["dt"] if entry.get("bars") else None,
+                             "tail": [row["dt"] for row in entry.get("bars", [])[-2:]]}
+                       for key, entry in entries.items()}
+        token = hashlib.sha256(repr((self.epoch, symbol, description)).encode()).hexdigest()
+        with self.lock:
+            known = self.cursors.setdefault(symbol, OrderedDict())
+            base = known.get(history_token) if history_token else None
+            known[token] = description
+            known.move_to_end(token)
+            while len(known) > CURSORS_PER_SYMBOL:
+                known.popitem(last=False)
+        if history_token == token:
+            base = description
+        starts, drops = {}, {}
+        if base is None:
+            return token, None, None
+        for key, current in description.items():
+            old, bars = base[key], entries[key].get("bars", [])
+            if old["generation"] != current["generation"]:
+                return token, None, None
+            tail_count = min(2, old["count"])
+            if not tail_count:
+                if bars:
+                    return token, None, None
+                starts[key], drops[key] = 0, 0
+                continue
+            start = next((index for index in range(max(0, len(bars) - MAX_APPEND_BARS - tail_count), len(bars) - tail_count + 1)
+                          if [row["dt"] for row in bars[index:index + tail_count]] == old["tail"]), None)
+            if start is None:
+                return token, None, None
+            added, dropped = len(bars) - start - tail_count, old["count"] - tail_count - start
+            if (not 0 <= dropped <= added <= MAX_APPEND_BARS or dropped > old["count"] - tail_count
+                    or (dropped == 0 and current["first"] != old["first"])):
+                return token, None, None
+            starts[key], drops[key] = start, dropped
+        return token, starts, drops
 
     def mark_checked(self, symbol, period):
         with self.lock:
@@ -178,20 +241,20 @@ class WorkspaceMarketCache:
                     # Do not renew old evidence when a subscription fails.
                     self.mark_failed(symbol, period)
 
-    def snapshot(self, symbol, preset, state, simulated=False, history_token=None):
+    def snapshot(self, symbol, preset, state, simulated=False, history_token=None, preview=False):
         self.request(symbol)
         now = self.clock()
         periods, freshness = {}, {}
         with self.lock:
             entries = {key: self.data.get((symbol, duration), {}) for key, duration in PERIODS.items()}
-        token_parts = [self.epoch, symbol] + [entries[key].get("history_token", "missing") for key in PERIODS]
-        token = hashlib.sha256("|".join(token_parts).encode()).hexdigest()
-        incremental = bool(history_token and history_token == token)
+        token, starts, drops = self._cursor(symbol, entries, history_token) if not preview else (None, None, None)
+        incremental = starts is not None
         counts = {}
         for key, cached in entries.items():
             bars = cached.get("bars", [])
             counts[key] = len(bars)
-            periods[key] = [dict(row) for row in (bars[-2:] if incremental else bars)]
+            selected = bars[-240:] if preview else bars[starts[key]:] if incremental else bars
+            periods[key] = [dict(row) for row in selected]
             freshness[key] = {
                 "checked_at": cached.get("checked_at"),
                 "quote_at": iso(cached["market_at"]) if cached.get("market_at") else None,
@@ -227,7 +290,7 @@ class WorkspaceMarketCache:
             feed_status, message = "live", "真实行情更新中"
         else:
             feed_status, message = "idle", "真实行情已连接 · 暂无新报价，可查看K线与编写计划"
-        return {
+        result = {
             "symbol": symbol, "name": preset.get("name", symbol),
             "tick": preset.get("tick"), "tick_value": preset.get("tick_value"),
             "price": last["close"] if last else None, "source": "mock" if simulated else "live",
@@ -237,3 +300,9 @@ class WorkspaceMarketCache:
             "history_token": token, "incremental": incremental, "period_counts": counts,
             "message": message,
         }
+        if incremental:
+            result.update(base_history_token=history_token, period_drops=drops)
+        if preview:
+            result.update(partial=True, fresh=False, feed_status="preview",
+                          message="近期K线预览 · 正在加载完整历史")
+        return result

@@ -18,7 +18,7 @@ MAX_REQUEST_BYTES = 128 * 1024
 
 
 def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None,
-                       market_incremental_provider=None):
+                       market_incremental_provider=None, market_preview_provider=None):
     """Providers: market(symbol), optional incremental(symbol, token), symbols(),
     rules(), evaluate(plan, market, risk, version). Reviews always read full data.
     """
@@ -207,7 +207,9 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     def market():
         symbol = symbol_requested()
         history = request.args.get("history", "")
-        if history and len(history) <= 128 and market_incremental_provider is not None:
+        if request.args.get("preview") == "240" and market_preview_provider is not None:
+            result = market_preview_provider(symbol)
+        elif history and len(history) <= 128 and market_incremental_provider is not None:
             result = market_incremental_provider(symbol, history)
         else:
             result = market_provider(symbol)

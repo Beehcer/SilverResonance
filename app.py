@@ -33,7 +33,7 @@ import plan_board_demo as board_demo
 import workspace_rules
 import workspace_store
 import workspace_api
-from workspace_market import WorkspaceMarketCache, data_length_for_period
+from workspace_market import MAX_APPEND_BARS, WorkspaceMarketCache, data_length_for_period
 
 _trading_store = trading.TradingStore(os.path.join(user_settings.app_dir(), "state", "trading_state.json"))
 _board_demo_store = board_demo.SharedPlanStore(os.path.join(user_settings.app_dir(), "state", "plan_board_demo.json"))
@@ -1504,6 +1504,19 @@ class _WorkspaceSerialReader:
                 if same_window:
                     tail = _serial_rows({field: column[-2:] for field, column in columns.items()})
                     updated = self.cache.update_tail(*key, tail)
+                elif previous is not None and len(previous) >= 2:
+                    # Align retained rows when the provider advances its rolling
+                    # window. New candles must not reformat ten thousand old rows.
+                    matches = np.flatnonzero(matrix[-MAX_APPEND_BARS-1:, 0] == previous[-1, 0])
+                    if len(matches):
+                        index = max(0, len(matrix)-MAX_APPEND_BARS-1) + int(matches[-1])
+                        appended = len(matrix) - index - 1
+                        dropped = len(previous) + appended - len(matrix)
+                        if (0 < appended <= MAX_APPEND_BARS and 0 <= dropped <= appended
+                                and dropped <= len(previous)-2
+                                and np.array_equal(previous[dropped:-2], matrix[:index-1], equal_nan=True)):
+                            tail = _serial_rows({field: column[-appended-2:] for field, column in columns.items()})
+                            updated = self.cache.update_window(*key, tail, appended=appended)
                 if not updated:
                     updated = self.cache.cache(*key, _serial_rows(serial))
                 if not updated:
@@ -2181,12 +2194,13 @@ def _workspace_symbols_provider():
             for preset in symbols.PRESETS]
 
 
-def _workspace_market_provider(symbol, history_token=None):
+def _workspace_market_provider(symbol, history_token=None, preview=False):
     preset = symbols.find(symbol)
     if not preset:
         raise ValueError("未知实际合约")
     state = get_state()
-    market = _workspace_market.snapshot(symbol, preset, state, simulated=config.MOCK_MODE, history_token=history_token)
+    market = _workspace_market.snapshot(symbol, preset, state, simulated=config.MOCK_MODE,
+                                        history_token=history_token, preview=preview)
     market["setup_required"] = state.get("boot_phase") == "need_config"
     if market["setup_required"]:
         market["message"] = "主机尚未配置行情来源 · 主机可打开 /setup 完成配置，协作成员无需行情账号"
@@ -2223,7 +2237,8 @@ def _workspace_quotes_provider():
 workspace_api.register_workspace(app, _workspace_store, _workspace_market_provider,
                                  _workspace_symbols_provider, workspace_rules.rule_manifest,
                                  workspace_rules.evaluate_plan, _workspace_quotes_provider,
-                                 market_incremental_provider=_workspace_market_provider)
+                                 market_incremental_provider=_workspace_market_provider,
+                                 market_preview_provider=lambda symbol: _workspace_market_provider(symbol, preview=True))
 
 
 def _open_browser_later():

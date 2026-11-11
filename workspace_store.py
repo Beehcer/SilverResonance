@@ -67,6 +67,11 @@ def _hash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _file_signature(info):
+    """Identity plus nanosecond mutation stamps, always checked under the lock."""
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def csrf_token(token):
     return _hash("workspace-csrf:" + token)
 
@@ -134,6 +139,7 @@ class WorkspaceStore:
         with _LOCKS_GUARD:
             self._lock = _LOCKS.setdefault(str(self.path) if self.path else id(self), threading.RLock())
         self._state = self._empty()
+        self._file_signature = None
         self._presence = {}
         self._presence_lock = threading.RLock()
         self._load_error = False
@@ -244,35 +250,61 @@ class WorkspaceStore:
             active_snapshot = state["plans"][symbol].get("activated_snapshot")
             _require(active_snapshot == (snapshots[-1] if snapshots else None))
 
+    def _disk_signature(self):
+        signature = _file_signature(self.path.stat())
+        if os.name == "nt":
+            # On Windows, path.stat() may expose creation time as ctime while
+            # fstat() reports the actual change time. Inspect metadata only so
+            # a same-size write with restored mtime still invalidates the cache.
+            with self.path.open("rb") as stream:
+                opened = _file_signature(os.fstat(stream.fileno()))
+            _require(opened[:4] == signature[:4])
+            return opened
+        return signature
+
     def _reload(self):
         if self._load_error:
             raise WorkspaceUnavailable("工作区文件读取失败，请恢复备份后重启；禁止重新初始化")
         if not self.path:
             return
         try:
-            if self.path.exists():
-                def reject(value):
-                    raise ValueError("invalid JSON constant")
-                with self.path.open("r", encoding="utf-8") as stream:
-                    state = json.load(stream, parse_constant=reject)
-                migrated = isinstance(state, dict) and state.get("schema_version") == 1
-                if migrated:
-                    _require(set(state) - {"mutations"} == (set(self._empty()) - {"mutations"}) | {"invite_code"})
-                    state.pop("invite_code")
-                    for index, member in enumerate(state["members"].values()):
-                        _require(set(member) == {"id", "name", "role", "last_seen", "password_hash", "risk"})
-                        member.pop("password_hash")
-                        member.update(role="member", color=_COLORS[index % len(_COLORS)])
-                    state["schema_version"] = 2
-                if isinstance(state, dict) and state.get("schema_version") == 2 and "mutations" not in state:
-                    state["mutations"] = {}
-                    migrated = True
-                self._validate_state(state)
-                if migrated:
-                    self._persist(state)
-                self._state = state
-            elif self._state["members"]:
-                raise ValueError("existing workspace disappeared")
+            try:
+                signature = self._disk_signature()
+            except FileNotFoundError:
+                if self._file_signature is not None or self._state["members"]:
+                    raise ValueError("existing workspace disappeared") from None
+                return
+            if signature == self._file_signature:
+                return
+            def reject(value):
+                raise ValueError("invalid JSON constant")
+            with self.path.open("r", encoding="utf-8") as stream:
+                opened = _file_signature(os.fstat(stream.fileno()))
+                # Windows can report creation time for path.stat().ctime but
+                # change time for fstat().ctime. Compare each clock with itself.
+                _require(opened[:4] == signature[:4])
+                state = json.load(stream, parse_constant=reject)
+                _require(_file_signature(os.fstat(stream.fileno())) == opened)
+            migrated = isinstance(state, dict) and state.get("schema_version") == 1
+            if migrated:
+                _require(set(state) - {"mutations"} == (set(self._empty()) - {"mutations"}) | {"invite_code"})
+                state.pop("invite_code")
+                for index, member in enumerate(state["members"].values()):
+                    _require(set(member) == {"id", "name", "role", "last_seen", "password_hash", "risk"})
+                    member.pop("password_hash")
+                    member.update(role="member", color=_COLORS[index % len(_COLORS)])
+                state["schema_version"] = 2
+            if isinstance(state, dict) and state.get("schema_version") == 2 and "mutations" not in state:
+                state["mutations"] = {}
+                migrated = True
+            self._validate_state(state)
+            # Lock-respecting writers cannot race this read. Also reject an
+            # external replacement/in-place edit during parsing or validation.
+            _require(self._disk_signature() == signature)
+            if migrated:
+                signature = self._persist(state)
+            self._state = state
+            self._file_signature = signature
         except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, AssertionError, WorkspaceError) as exc:
             self._load_error = True
             raise WorkspaceUnavailable("工作区文件读取失败，请恢复备份后重启；禁止重新初始化") from exc
@@ -287,7 +319,14 @@ class WorkspaceStore:
                 json.dump(state, stream, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
                 stream.flush()
                 os.fsync(stream.fileno())
+                written = _file_signature(os.fstat(stream.fileno()))
             os.replace(temporary, self.path)
+            committed = self._disk_signature()
+            # Rename may update ctime, but it must retain the exact file we
+            # wrote. Never associate another writer's replacement with state.
+            if committed[:4] != written[:4]:
+                raise OSError("workspace changed during atomic commit")
+            return committed
         except (OSError, ValueError, TypeError) as exc:
             raise WorkspaceUnavailable("工作区写入失败，修改未保存") from exc
         finally:
@@ -308,8 +347,9 @@ class WorkspaceStore:
                 self._validate_state(updated)
             except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, WorkspaceError) as exc:
                 raise WorkspaceUnavailable("工作区数据校验失败，修改未保存") from exc
-            self._persist(updated)
+            signature = self._persist(updated)
             self._state = updated
+            self._file_signature = signature
             return copy.deepcopy(result)
 
     @staticmethod
@@ -372,8 +412,9 @@ class WorkspaceStore:
                     updated = copy.deepcopy(self._state)
                     updated["sessions"][_hash(token)]["touched"] = time.time()
                     updated["members"][result["id"]]["last_seen"] = _now()
-                    self._persist(updated)
+                    signature = self._persist(updated)
                     self._state = updated
+                    self._file_signature = signature
                     result = operation(updated)
             return copy.deepcopy(result)
 
