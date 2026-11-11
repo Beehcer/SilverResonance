@@ -8,6 +8,18 @@ function full(symbol=SYMBOL,token='history-1',counts={day:4,m30:7,m3:10}){
 }
 function delta(base){return{...copy(base),incremental:true,periods:Object.fromEntries(PERIODS.map(period=>[period,copy(base.periods[period].slice(-2))]))};}
 function accept(store,value){return store.accept(value.symbol,value,store.begin(value.symbol));}
+function append(base,added={day:0,m30:0,m3:1},drops={day:0,m30:0,m3:0}){
+  const periods={},counts={};
+  for(const period of PERIODS){
+    const old=base.periods[period],tail=copy(old.slice(-2));
+    for(let index=0;index<(added[period]||0);index++){
+      const previous=tail.at(-1);previous.closed=true;previous.closed_at=new Date(Date.parse(previous.dt)+180000).toISOString();
+      tail.push({...previous,dt:previous.closed_at,closed:false});delete tail.at(-1).closed_at;
+    }
+    periods[period]=tail;counts[period]=old.length-(drops[period]||0)+(added[period]||0);
+  }
+  return{...base,base_history_token:base.history_token,history_token:base.history_token+'-next',incremental:true,period_drops:{...drops},period_counts:counts,periods};
+}
 
 test('a verified full response seeds all three periods and a token; access returns independent snapshots',()=>{
   const store=new Store(),source=full(),result=accept(store,source);
@@ -115,4 +127,80 @@ test('a one-entry cache retains only its pin and safely ignores an evicted backg
   const store=new Store({limit:1});accept(store,full());store.pin(SYMBOL);const ticket=store.begin(OTHER);
   assert.equal(store.entries.size,1);assert.equal(store.accept(OTHER,full(OTHER),ticket).ignored,true);assert.notEqual(store.get(SYMBOL),null);
   store.clear();assert.equal(store.pinned,null);assert.equal(store.entries.size,0);assert.equal(accept(store,full(OTHER)).accepted,true);
+});
+
+test('read-only views deeply protect cached prices, arrays and nested metadata without copying',()=>{
+  const store=new Store(),source=full();source.periods.m3[0].details={flags:['verified']};
+  const result=store.accept(SYMBOL,source,store.begin(SYMBOL),{readOnly:true}),view=store.view(SYMBOL);
+  assert.equal(view,result.market);assert.equal(store.view(SYMBOL),view);assert.equal(store.view(OTHER),null);
+  for(const value of [view,view.periods,view.periods.m3,view.periods.m3[0],view.periods.m3[0].details,view.periods.m3[0].details.flags,view.freshness.day])assert.equal(Object.isFrozen(value),true);
+  assert.equal(Reflect.set(view.periods.m3[0],'close',0),false);assert.equal(Reflect.set(view.freshness.day,'available',false),false);
+  assert.throws(()=>view.periods.m3.push({}),TypeError);assert.throws(()=>view.periods.m3[0].details.flags.push('bad'),TypeError);
+  source.periods.m3[0].details.flags.push('wire mutation');assert.deepEqual(view.periods.m3[0].details.flags,['verified']);assert.equal(Object.isFrozen(source),false);
+  const independent=store.get(SYMBOL);independent.periods.m3[0].close=99;assert.equal(view.periods.m3[0].close,101);
+});
+
+test('hot read-only updates share historical rows and unchanged periods while preserving older snapshots',()=>{
+  const store=new Store(),base=full(SYMBOL,'large',{day:180,m30:6000,m3:10000});store.accept(SYMBOL,base,store.begin(SYMBOL),{readOnly:true});
+  const before=store.view(SYMBOL),patch=delta(base);patch.periods.m3[1].close=104;patch.fresh=false;patch.quote_at=null;
+  const result=store.accept(SYMBOL,patch,store.begin(SYMBOL),{readOnly:true}),after=store.view(SYMBOL);
+  assert.equal(result.market,after);assert.notEqual(after,before);assert.equal(after.periods.day,before.periods.day);assert.equal(after.periods.m30,before.periods.m30);
+  assert.notEqual(after.periods.m3,before.periods.m3);assert.equal(after.periods.m3[0],before.periods.m3[0]);assert.equal(after.periods.m3[9998],before.periods.m3[9998]);assert.notEqual(after.periods.m3[9999],before.periods.m3[9999]);
+  assert.equal(before.periods.m3.at(-1).close,101);assert.equal(before.fresh,true);assert.equal(after.periods.m3.at(-1).close,104);assert.equal(after.fresh,false);assert.equal(after.quote_at,null);
+  patch.periods.m3[1].close=98;assert.equal(after.periods.m3.at(-1).close,104);
+});
+
+test('metadata-only ticks retain all period array identities and replace metadata honestly',()=>{
+  const store=new Store(),base=full();accept(store,base);const before=store.view(SYMBOL),patch=delta(base);
+  patch.connected=false;patch.feed_status='disconnected';patch.fresh=false;patch.price=0;patch.freshness={day:{available:false},m30:{available:false},m3:{available:false}};
+  const after=store.accept(SYMBOL,patch,store.begin(SYMBOL),{readOnly:true}).market;
+  for(const period of PERIODS)assert.equal(after.periods[period],before.periods[period]);
+  assert.equal(after.connected,false);assert.equal(after.freshness.day.available,false);assert.equal(before.connected,true);assert.equal(before.freshness.day.available,true);
+});
+
+test('append responses update the former last bar and append new bars without resending the historical prefix',()=>{
+  const store=new Store(),base=full();accept(store,base);const before=store.view(SYMBOL),patch=append(base,{day:1,m30:2,m3:3});
+  patch.periods.day.at(-1).source_trade_day='2026-11-12';patch.price=103;patch.periods.m3.at(-1).close=103;
+  const result=store.accept(SYMBOL,patch,store.begin(SYMBOL),{readOnly:true}),after=result.market;
+  assert.equal(result.accepted,true);assert.equal(store.history(SYMBOL),patch.history_token);
+  for(const period of PERIODS){assert.equal(after.periods[period].length,patch.period_counts[period]);assert.equal(after.periods[period][0],before.periods[period][0]);assert.equal(after.periods[period][before.periods[period].length-1].closed,true);assert.equal(before.periods[period].at(-1).closed,false);}
+  assert.equal(after.periods.day.at(-1).source_trade_day,'2026-11-12');assert.equal(after.periods.m3.at(-1).close,103);assert.equal(after.price,103);
+  const next=append(after,{day:0,m30:0,m3:1});assert.equal(store.accept(SYMBOL,next,store.begin(SYMBOL),{readOnly:true}).accepted,true);assert.equal(store.view(SYMBOL).periods.m3.length,14);
+});
+
+test('a capped sliding history drops only the specified oldest bars while appending new bars',()=>{
+  const store=new Store(),base=full(SYMBOL,'large',{day:180,m30:6000,m3:10000});store.accept(SYMBOL,base,store.begin(SYMBOL),{readOnly:true});const before=store.view(SYMBOL);
+  const patch=append(base,{day:1,m30:2,m3:3},{day:1,m30:2,m3:3}),result=store.accept(SYMBOL,patch,store.begin(SYMBOL),{readOnly:true});
+  assert.equal(result.accepted,true);for(const period of PERIODS){const drop=patch.period_drops[period];assert.equal(result.market.periods[period].length,base.period_counts[period]);assert.equal(result.market.periods[period][0],before.periods[period][drop]);assert.equal(result.market.periods[period].at(-1).dt,patch.periods[period].at(-1).dt);assert.equal(before.periods[period][0].dt,base.periods[period][0].dt);}
+});
+
+test('append protocol also accepts unchanged tails, one-bar histories and up to sixty-four missing bars',()=>{
+  const store=new Store(),base=full(SYMBOL,'one',{day:1,m30:1,m3:1});accept(store,base);const before=store.view(SYMBOL);
+  const tick=append(base,{day:0,m30:0,m3:0});tick.history_token=base.history_token;assert.equal(accept(store,tick).accepted,true);
+  for(const period of PERIODS)assert.equal(store.view(SYMBOL).periods[period],before.periods[period]);
+  const growth=append(store.view(SYMBOL),{day:1,m30:1,m3:64});assert.equal(accept(store,growth).accepted,true);assert.equal(store.view(SYMBOL).periods.m3.length,65);assert.equal(store.view(SYMBOL).periods.m3[0].dt,base.periods.m3[0].dt);
+});
+
+test('unsafe append metadata, overlaps, counts and oversized gaps request full history atomically',()=>{
+  const changes=[
+    d=>d.base_history_token='other-process',d=>delete d.base_history_token,d=>delete d.period_drops,
+    d=>delete d.period_drops.day,d=>d.period_drops.m3=-1,d=>d.period_drops.m3=0.5,d=>d.period_drops.m3=true,
+    d=>d.period_drops.day=1,d=>d.period_counts.m3++,d=>d.periods.m3.shift(),
+    d=>d.periods.m3[0].dt='2000-01-01T00:00:00Z',d=>d.periods.m3.at(-1).dt=d.periods.m3.at(-2).dt,
+    d=>d.periods.m3.at(-1).low=200,d=>{d.periods.m30=[];d.period_counts.m30=0;},
+    d=>Object.assign(d,append(full(),{day:0,m30:0,m3:65}))
+  ];
+  for(const change of changes){const store=new Store(),base=full();accept(store,base);const before=store.view(SYMBOL),patch=append(base);patch.periods.day[0].close=104;patch.fresh=false;change(patch);const result=store.accept(SYMBOL,patch,store.begin(SYMBOL),{readOnly:true});assert.equal(result.retryFull,true);assert.equal(store.view(SYMBOL),before);assert.equal(store.history(SYMBOL),null);assert.deepEqual(store.get(SYMBOL),base);}
+});
+
+test('append cannot drop an overlap anchor or grow past a period cap',()=>{
+  const store=new Store(),base=full(SYMBOL,'short',{day:2,m30:2,m3:2});accept(store,base);
+  assert.equal(accept(store,append(base,{day:0,m30:0,m3:1},{day:0,m30:0,m3:1})).retryFull,true);
+  const large=full(SYMBOL,'large',{day:180,m30:6000,m3:10000});accept(store,large);assert.equal(accept(store,append(large)).retryFull,true);
+});
+
+test('older append requests cannot roll back an already accepted newer cursor',()=>{
+  const store=new Store(),base=full();accept(store,base);const older=store.begin(SYMBOL),latest=store.begin(SYMBOL),patch=append(base);
+  assert.equal(store.accept(SYMBOL,patch,latest,{readOnly:true}).accepted,true);const after=store.view(SYMBOL);
+  assert.equal(store.accept(SYMBOL,delta(base),older,{readOnly:true}).ignored,true);assert.equal(store.view(SYMBOL),after);assert.equal(store.history(SYMBOL),patch.history_token);
 });

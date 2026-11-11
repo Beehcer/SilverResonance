@@ -4,6 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const M=require('./static/workspace-merge.js'),E=require('./static/workspace-editing.js');
 const T=require('./static/workspace-ticket.js'),C=require('./static/workspace-chart.js');
 const MarketCache=require('./static/workspace-market-cache.js');
+const MarketPreview=require('./static/workspace-market-preview.js');
 const source=fs.readFileSync(path.join(__dirname,'static/workspace.js'),'utf8');
 const copy=value=>JSON.parse(JSON.stringify(value)),tick=()=>new Promise(resolve=>setImmediate(resolve));
 const A='SHFE.rb2701',B='CZCE.RM701',D='DCE.jd2612';
@@ -22,7 +23,7 @@ function harness(){
   const state={session:{user:{id:'me'},csrf_token:'test-token'},symbol:A,board:'',plan:plan(A),saved:plan(A),market:market(A),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false,generation:1,cacheEpoch:1,visitedSymbols:new Set([A]),markedSymbols:new Set(),active:'m30',rules:{version:'r1'},risk:{},alerts:[],evaluation:{status:'ready',source:'live',signal_key:'old'},lastSignal:'old',lastSuccess:1};
   const elements=new Map(),storage=new Map(),calls={network:[],paints:[],notices:[],events:0,flush:0,views:0};
   const $=id=>{if(!elements.has(id))elements.set(id,{dataset:{},style:{},value:'',hidden:false,textContent:'',elements:[]});return elements.get(id);};
-  const charts=Object.fromEntries(['day','m30','m3'].map(period=>[period,{path:[],setTool(){},setPlan(){},setData(value,shared,reset){calls.paints.push({period,market:value?copy(value):null,plan:shared?copy(shared):null,reset,active:state.symbol});}}]));
+  const charts=Object.fromEntries(['day','m30','m3'].map(period=>[period,{path:[],setTool(){},setPlan(){},setPresence(){},setData(value,shared,reset){calls.paints.push({period,market:value?copy(value):null,plan:shared?copy(shared):null,reset,active:state.symbol});}}]));
   let responder=async request=>{
     const url=new URL(request.url,'https://example.test'),symbol=url.searchParams.get('symbol')||decodeURIComponent(url.pathname.split('/').at(-1)),board=url.searchParams.get('board')||'';
     if(url.pathname.endsWith('/market'))return{market:market(symbol)};
@@ -32,20 +33,20 @@ function harness(){
     throw new Error('Unexpected request '+url.pathname);
   };
   const context=vm.createContext({
-    state,M,E,T,C,clone:copy,WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),
+    state,M,E,T,C,clone:copy,WorkspaceMarketPreview:MarketPreview,marketPreview:new MarketPreview.Store({indexedDB:null}),WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),
     $,charts,PREFIX:'test:',PERIODS:{day:'日线',m30:'30分钟',m3:'3分钟'},Date,Promise,Map,Set,URL,URLSearchParams,AbortController,
     navigator:{onLine:true},document:{hidden:false,activeElement:null},location:{href:'https://example.test/workspace',hostname:'example.test'},history:{replaceState(){}},
     fetch:async(url,options)=>{const request={url,...options};calls.network.push(request);const data=await responder(request);return{ok:true,status:200,json:async()=>data};},
     setTimeout:callback=>1,clearTimeout:()=>{},
     localStorage:{removeItem:key=>storage.delete(key)},
     storageSet:(key,value)=>{storage.set(key,copy(value));return true;},storageGet:(key,fallback=null)=>storage.has(key)?copy(storage.get(key)):fallback,
-    notice:value=>calls.notices.push(value),renderSyncStatus:()=>{},renderObjects:()=>{},fillPlan:()=>{},fillPlanQuietly:()=>{},planMeta:()=>{},renderMarket:()=>{},renderSymbols:()=>{},renderQuickPlan:()=>{},updateHistoryButtons:()=>{},renderChecks:()=>{},renderRisk:()=>{},fmtTime:()=>'',addAlert:()=>{},
+    notice:value=>calls.notices.push(value),renderMembers:()=>{},renderSyncStatus:()=>{},renderObjects:()=>{},fillPlan:()=>{},fillPlanQuietly:()=>{},planMeta:()=>{},renderMarket:()=>{},renderSymbols:()=>{},renderQuickPlan:()=>{},updateHistoryButtons:()=>{},renderChecks:()=>{},renderRisk:()=>{},fmtTime:()=>'',addAlert:()=>{},
     setPlanLoading:value=>{state.loading=value;},setSaveDisabled:()=>{},setUnavailable:undefined,
-    stopFollowing:()=>{},saveViews:()=>{},restoreViews:()=>{calls.views++;},sendPresence:()=>{},presenceSender:{reset(){}},
+    setLayout:()=>{},stopFollowing:()=>{},saveViews:()=>{},restoreViews:()=>{calls.views++;},sendPresence:()=>{},presenceSender:{reset(){}},
     connectEvents:()=>{calls.events++;},recoverableDraft:()=>null,loadBoards:async()=>{},
     flush:async()=>{calls.flush++;},
   });
-  const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','applyActiveMarket','api','refreshMarket','refreshBackground','documentKey','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
+  const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','batchCharts','preloadSavedMarket','paintOpeningPreview','loadOpeningMarket','applyActiveMarket','api','refreshMarket','refreshBackground','documentKey','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
   for(const name of names)vm.runInContext(helper(name),context);
   return{context,state,calls,elements,storage,charts,$,respond:fn=>{responder=fn;},seed:value=>context.marketCache.accept(value.symbol,value,context.marketCache.begin(value.symbol))};
 }
@@ -188,4 +189,48 @@ test('a warm plan-load failure can be retried by clicking the same contract',asy
   await h.context.switchSymbol(B);assert.equal(h.state.planLoadFailed,true);assert.equal(h.state.loading,false);const before=h.calls.network.length;
   h.respond(async request=>request.url.includes('/market?')?{market:market(B)}:request.url.includes('/review?')?{evaluation:{status:'waiting',source:'live'},plan_revision:1}:request.url.includes('/quotes')?{quotes:[]}:{plan:plan(B)});
   await h.context.switchSymbol(B);assert.ok(h.calls.network.length>before);assert.equal(h.state.planLoadFailed,false);
+});
+
+test('cold opening paints a short preview before full download and keeps plan anchors hidden until aligned',async()=>{
+  const h=harness(),full=deferred(),p=plan(B);p.objects=[{id:'anchored',kind:'wave',points:[{time:1,price:100,chart_anchor:{period:'m30',base_time:1,offset:30}}]}];
+  h.respond(request=>{if(request.url.includes('preview=240'))return{market:{...market(B),partial:true,history_token:null,fresh:false}};if(request.url.includes('/market?'))return full.promise;if(request.url.includes('/review?'))return{evaluation:{status:'waiting'},plan_revision:1};if(request.url.includes('/quotes'))return{quotes:[]};return{plan:p};});
+  const switching=h.context.switchSymbol(B);await tick();
+  assert.equal(h.state.market.partial,true);assert.equal(h.state.loading,true);assert.equal(h.state.plan.objects.length,1);assert.equal(h.context.marketCache.history(B),null);
+  assert.ok(h.calls.paints.filter(p=>p.market?.partial).every(p=>p.plan.objects.length===0));
+  full.resolve({market:market(B)});await switching;
+  assert.equal(h.state.loading,false);assert.equal(h.state.market.fresh,true);assert.equal(h.calls.paints.at(-1).plan.objects[0].id,'anchored');
+  assert.equal(h.calls.network.filter(r=>r.url.includes('/market?')).length,2);assert.equal(h.calls.network.filter(r=>r.url.includes('/plans/')).length,1);
+});
+
+test('persisted preview paints while the first network response is still pending, without restoring READY',async()=>{
+  const h=harness(),wait=deferred();h.state.symbol=B;h.state.market=null;h.state.planReady=false;h.context.marketPreview.put(market(B));h.respond(()=>wait.promise);
+  const loading=h.context.loadOpeningMarket(B,h.state.generation);await tick();
+  assert.equal(h.state.market.partial,true);assert.equal(h.state.market.fresh,false);assert.equal(h.context.marketCache.history(B),null);assert.notEqual(h.$('decision').dataset.status,'READY');
+  h.state.generation++;h.state.symbol=D;wait.resolve({market:market(B)});assert.equal(await loading,null);
+});
+
+test('late disk preview and a wrong-symbol preview cannot overwrite the selected market',async()=>{
+  const h=harness(),disk=deferred();h.state.symbol=null;h.context.marketPreview={get:()=>disk.promise};
+  const preload=h.context.preloadSavedMarket(A,h.state.generation);h.state.symbol=B;h.state.market=market(B);h.state.generation++;disk.resolve(market(A));await preload;
+  h.context.paintOpeningPreview(market(A),h.state.generation);
+  assert.equal(h.state.market.symbol,B);assert.equal(h.calls.paints.length,0);
+});
+
+test('disk preview starts without waiting for rules or risk and never restores saved view on a partial timeline',async()=>{
+  const h=harness();h.state.symbol=null;h.state.market=null;h.context.marketPreview.put(market(B));
+  await h.context.preloadSavedMarket(B,h.state.generation);
+  assert.equal(h.state.symbol,B);assert.equal(h.state.market.partial,true);assert.equal(h.calls.views,0);assert.equal(h.state.loading,true);
+});
+
+test('a failed full download can recover through polling while the partial view remains locked',async()=>{
+  const h=harness();h.state.symbol=B;h.state.market={...market(B),partial:true,fresh:false};h.state.plan=plan(B);h.state.planReady=true;h.state.loading=true;
+  h.respond(request=>request.url.includes('/market?')?Promise.reject(new Error('temporary')):request.url.includes('/review?')?{evaluation:{status:'ready'},plan_revision:1}:request.url.includes('/quotes')?{quotes:[]}:{plan:plan(B)});
+  await h.context.poll();assert.equal(h.state.loading,true);assert.equal(h.state.market.fresh,false);
+  h.respond(request=>request.url.includes('/market?')?{market:market(B)}:request.url.includes('/review?')?{evaluation:{status:'waiting'},plan_revision:1}:request.url.includes('/quotes')?{quotes:[]}:{plan:plan(B)});
+  await h.context.poll();assert.equal(h.state.loading,false);assert.equal(h.state.market.partial,undefined);assert.equal(h.state.market.fresh,true);
+});
+
+test('completing full history resumes a draft that could not flush during the preview',()=>{
+  const h=harness();h.state.market={...market(A),partial:true,fresh:false};h.state.loading=true;h.state.planReady=true;h.state.pending.fields={notes:'kept draft'};h.state.outbox={id:'pending'};
+  h.context.applyActiveMarket(market(A));assert.equal(h.state.loading,false);assert.equal(h.calls.flush,1);
 });

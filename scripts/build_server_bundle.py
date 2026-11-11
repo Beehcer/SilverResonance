@@ -62,6 +62,7 @@ ASSET_FILES = (
     "static/workspace-layouts.js",
     "static/workspace-merge.js",
     "static/workspace-market-cache.js",
+    "static/workspace-market-preview.js",
     "static/workspace-symbols.js",
     "static/workspace-shortcuts.js",
     "static/workspace-presence.js",

@@ -43,5 +43,6 @@
 !/deploy/Dockerfile
 
 !/static/workspace-market-cache.js
+!/static/workspace-market-preview.js
 !/static/workspace-symbols.js
 !/static/workspace-shortcuts.js
