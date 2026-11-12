@@ -8,9 +8,9 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261112-9fa3db4c15a3`，运行代码提交 `bfce1a8` / `06ecaec`，包含后台首订、协作通知提速、品种图层隔离、多行文字和自动备份。
+- 源码版本：`/opt/SilverResonance/releases/20261112-367d88ebb6b5`，运行代码提交 `7e8130d`；新增手机只读协作、三周期竖排及图表在前的计划布局，保留此前加载、协作和自动备份能力。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261112-9fa3db4c15a3`。
+- 镜像：`silver-resonance:20261112-367d88ebb6b5`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
@@ -21,6 +21,29 @@
 - 依赖快照：`/opt/SilverResonance/staging/dependencies.lock.txt`。
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
+
+## 2026-11-12 08:37 移动端只读发布
+
+用户明确授权“推送上线，确保手机用户只能阅读”。发布 `20261112-367d88ebb6b5`，代码 `7e8130d`；51文件白名单包296918字节，SHA-256 `367d88ebb6b5142e420842c7daee70817608f8867b1cc37f633e1798087b1f9f`。变更的工作台JS、图表JS和CSS使用资源版本19。
+
+- 手机固定单列：30分钟→3分钟→日线→计划与备注。保留品种/计划切换、行情与协作实时查看；绘图、拖点、改字、删除及计划修改不可用。后端按移动UA或只读请求头拦截持久写入；不改变同一用户的桌面权限。触摸主指针检查覆盖移动“桌面网站”模式。
+- 修复首次加载时切窄窗口、手机/桌面视角缓存混用、晚返回的新建计划跳错品种，以及未加载计划或手机刷新后误删桌面草稿的边界。详见[移动端说明](MOBILE_VIEW.md)。
+- 08:30在线备份 `/var/backups/SilverResonance/preflight-20261112T003047Z/user-data.tgz`，209427字节，7个私有文件逐项校验，SHA-256 `25846b8a924ccda313b75e410448dc46662f843c30c986760f9c8e59198e17ae`。
+- 构建和新旧数据兼容检查通过后，停写取得最终备份 `/var/backups/SilverResonance/20261112-367d88ebb6b5/data-before-update.tgz`；SHA-256 `5b36370be88f1d73407dd5b96926df2c7e0df997e1a7863bc03d93c0c6fb7f8b`，工作区原文1817079字节，21计划70图层。归档原文与停写文件逐字节一致。
+- 继续挂载原 `/var/lib/SilverResonance`；切换后及最终验收后，原21计划版本未下降、同版本内容完全相同。Nginx和运行覆盖配置哈希保持不变。旧版 `20261112-9fa3db4c15a3` 留存，没有回退源码或恢复旧数据。
+- 唯一行情连接于08:37:42重新核对16合约，新容器healthy、零重启、无OOM。
+
+公网验证：
+
+- 18个静态资源与最终ZIP逐项哈希一致，HTML计划面板位于全部图表后。
+- 手机UA与显式只读请求头共12项持久写入均403；同一cookie恢复桌面编辑成功，手机presence不能声明编辑或发布修改预览。
+- 手机SSE能看到桌面新建/修改的备注、浪点、鼠标与拖动预览；两次单次通知观测0.569秒、0.579秒，不是P95或硬性延迟保证。
+- 独立QA画板 `f37c6848f1c601fc` 已清空归档；16品种默认计划逐项unchanged，没有向默认计划发出修改请求。结果 `backtest/mobile-release-public-result.json`。
+- 螺纹与黄金三周期完整历史及末两根增量正常；分别180/2344/10000和180/4456/10000，均connected、休市idle。首次订阅均经过5次有界检查到齐；不能把最终一次HTTP耗时当总首订时长。回切增量单次24.39/32.83/32.59ms。结果 `backtest/mobile-release-market-result.json`。
+- 自动备份全部16份校验通过：变更6、定时10，共2337330字节，保留上限仍40+10。最近成功08:38:45，目录/文件私有权限正常。容器当时279.2MiB/1.25GiB、CPU0.30%，为历史订阅验收前的单次采样。
+- 前端455项全过；此前工作台Python228项全过；发布前另跑只读API/协作/事件/打包/运行74项检查通过，3项Windows环境条件跳过。部署验收脚本5项离线自检通过。
+
+既有页面不强制刷新；显示“已同步”后刷新一次加载前端19。线上结论依据实际HTTP/SSE、资源哈希、数据摘要和归档校验；手机布局/双击/Delete/跟随等交互已在本地浏览器手机尺寸下验收，尚未做实体手机触屏验收。
 
 ## 2026-11-12 01:05 加载、协作及自动备份发布
 
@@ -123,7 +146,7 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261112-9fa3db4c15a3
+export SILVER_RELEASE=20261112-367d88ebb6b5
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
