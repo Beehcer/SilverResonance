@@ -423,7 +423,7 @@
       }
       if(this.tool==='horizontal'){this.callbacks.add?.({kind:'horizontal',name:'水平线',points:[value],color:'#f1c40f',opacity:this.toolOpacity,period:'all'});return;}
       if(this.tool==='segment'){const origin=this.toValue(point,false);this.drag={kind:'new-segment',origin,point:origin,pointerId:event.pointerId};this.render();return;}
-      if(this.tool==='text'){this.openTextEditor(value,point);return;}
+      if(this.tool==='text'){this.openTextEditor(this.toValue(point,false,true),point);return;}
       if(['trend','reference'].includes(this.tool)){this.snapPreview=this.snapTarget(point);this.drag={kind:'new-line',lineKind:this.tool,origin:value,point:value,pointerId:event.pointerId};this.render();return;}
       if(this.tool==='zone'){this.drag={kind:'new-zone',origin:value,point:value,pointerId:event.pointerId};this.render();return;}
       if(levelHit&&!(isForecast(objectHit?.object)&&levelHit.target!=='label')){this.selected=null;this.selectedLevel=levelHit.field;this.callbacks.select?.(null);this.drag={...beginLevelDrag(levelHit.field,levelHit.price,this.tick),pointerId:event.pointerId};this.callbacks.dragLevel?.(levelHit.field,levelHit.price,{phase:'start'});this.callbacks.presence?.({object_id:'field:'+levelHit.field,cursor:{...value,price:levelHit.price},preview_object:null,editing:true},true);this.render();return;}
@@ -435,7 +435,7 @@
       if(this.lastPathClick&&previousClick?.id===hit.object.id&&previousClick.anchor===hit.anchor&&previousClick.segment===hit.segment&&now-previousClick.at>=0&&now-previousClick.at<=450&&Math.hypot(point.x-previousClick.x,point.y-previousClick.y)<=6){
         this.lastPathClick=null;this.suppressDoubleClickUntil=now+450;this.editPathAtHit(hit,point);this.releasePointer({pointerId:event.pointerId});return;
       }
-      if(hit){this.selected=hit.object.id;this.callbacks.select?.(hit.object.id,hit.anchor);this.selectedAnchor=hit.anchor;this.callbacks.anchorSelected?.(hit.object.id,hit.anchor);const canDrag=!hit.object.locked&&(hit.anchor!==null||!['path','wave'].includes(hit.object.kind));if(canDrag){this.drag={kind:'object',origin:hit.anchor===null||['path','wave'].includes(hit.object.kind)?this.toValue(point,false,isForecast(hit.object)):value,start:{...point},object:JSON.parse(JSON.stringify(hit.object)),anchor:hit.anchor,moved:false,pointerId:event.pointerId};this.callbacks.presence?.({object_id:hit.object.id,editing:true},true);}}
+      if(hit){this.selected=hit.object.id;this.callbacks.select?.(hit.object.id,hit.anchor);this.selectedAnchor=hit.anchor;this.callbacks.anchorSelected?.(hit.object.id,hit.anchor);const canDrag=!hit.object.locked&&(hit.anchor!==null||!['path','wave'].includes(hit.object.kind));if(canDrag){this.drag={kind:'object',origin:hit.object.kind==='text'||hit.anchor===null||['path','wave'].includes(hit.object.kind)?this.toValue(point,false,isForecast(hit.object)||hit.object.kind==='text'):value,start:{...point},object:JSON.parse(JSON.stringify(hit.object)),anchor:hit.anchor,moved:false,pointerId:event.pointerId};this.callbacks.presence?.({object_id:hit.object.id,editing:true},true);}}
       else{this.selected=null;this.selectedAnchor=null;this.callbacks.select?.(null);this.followLatest=false;this.drag={kind:'pan',origin:point,view:{...this.view},pointerId:event.pointerId};}this.render();
     }
     scheduleRender(){if(this.renderFrame!=null)return;const frame=globalThis.requestAnimationFrame;if(!frame){this.render();return;}const task={};this.renderTask=task;this.renderFrame=frame(()=>{if(this.renderTask!==task)return;this.renderTask=null;this.renderFrame=null;this.render();});}
@@ -443,6 +443,14 @@
       if(this.readOnly)return null;
       const current=this.plan.objects?.find(object=>object.id===drag.object.id);
       if(!current||current.locked||current.kind!==drag.object.kind||!drag.value||!drag.point)return null;
+      if(current.kind==='text'){
+        // A text handle and its label are one freely translated block. Use
+        // screen deltas so a grab offset cannot stretch across a session gap.
+        const dx=drag.point.x-drag.start.x,dy=drag.point.y-drag.start.y;
+        return{...current,points:current.points.map(anchor=>({...anchor,
+          time:dx===0?anchor.time:Math.max(0,Math.round(this.tx.time(this.tx.x(anchor.time)+dx))),
+          price:dy===0?anchor.price:Math.max(Number.EPSILON,this.tx.price(this.tx.y(anchor.price)+dy))}))};
+      }
       const value={...drag.value},dt=value.time-drag.origin.time,dp=value.price-drag.origin.price;
       if(drag.anchor===null){
         // Replay this gesture on the latest geometry instead of restoring its starting snapshot.
@@ -472,7 +480,7 @@
         else if(drag.kind==='place-level'){drag.price=this.toValue(point,false).price;this.callbacks.previewLevel?.(drag.field,drag.price);}
         else if(drag.kind==='new-zone'||drag.kind==='new-line')drag.point=this.toValue(point);
         else if(drag.kind==='new-segment')drag.point={time:this.toValue(point,false).time,price:drag.origin.price};
-        else if(drag.kind==='object'){drag.value=this.toValue(point,drag.anchor!==null&&!['path','wave','segment'].includes(drag.object.kind),isForecast(drag.object));drag.point={...point};drag.moved=drag.moved||Math.hypot(point.x-drag.start.x,point.y-drag.start.y)>=3;if(drag.moved){this.lastPathClick=null;this.lastTitleClick=null;drag.preview=this.objectDragPreview(drag);}}
+        else if(drag.kind==='object'){const text=drag.object.kind==='text';drag.value=this.toValue(point,drag.anchor!==null&&!['path','wave','segment','text'].includes(drag.object.kind),isForecast(drag.object)||text);drag.point={...point};const distance=Math.hypot(point.x-drag.start.x,point.y-drag.start.y);drag.moved=drag.moved||(text?distance>0:distance>=3);if(drag.moved){this.lastPathClick=null;this.lastTitleClick=null;drag.preview=this.objectDragPreview(drag);}}
       }
       const drag=this.drag,isLevel=drag&&['plan-level','place-level'].includes(drag.kind),overControl=!drag&&this.tool==='select'?this.hitPathControl(point):null;this.hoverLevel=!drag&&this.tool==='select'?hitPlanLevel(point,this.levelGeometry(),this.plot,this.host.clientWidth)?.field:null;
       this.snapPreview=drag?.kind==='new-line'||drag?.kind==='object'&&Number.isInteger(drag.anchor)&&['trend','reference'].includes(drag.object.kind)||!drag&&['trend','reference','horizontal'].includes(this.tool)?this.snapTarget(point):null;

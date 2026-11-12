@@ -168,6 +168,77 @@ test('new text uses a textarea with Alt+Enter, ordinary Enter adds all lines, an
   });
 });
 
+function freeTextChart(chart){
+  chart.callbacks.snapEnabled=()=>true;chart.tick=1;
+  chart.view={start:0,end:1800000,min:90,max:110};
+  chart.bars=Array.from({length:11},(_,index)=>({time:index*180000,open:102,high:105,low:99,close:104}));
+  chart.tx=C.transform(chart.view,chart.plot,chart.bars,chart.period);
+}
+function near(actual,expected,message){assert.ok(Math.abs(actual-expected)<1e-6,`${message}: ${actual} vs ${expected}`);}
+
+test('text handles and either multiline body preserve grab offset during one-pixel drags with candle snapping enabled',()=>{
+  for(const selected of [false,true])for(const target of ['point','left','right'])harness(({chart,names,pointer,updates,presence})=>{
+    freeTextChart(chart);
+    const object=names('text',{name:'等反弹再看受阻\n\n确认后做空',text_side:target==='left'?'left':'right',points:[{time:900000,price:103.025}]}),
+      anchor={x:chart.tx.x(object.points[0].time),y:chart.tx.y(object.points[0].price)};
+    chart.plan={objects:[object]};chart.selected=selected?object.id:null;
+    const label=chart.nameLabel(object),grab=target==='point'?{x:anchor.x-2,y:anchor.y+2}:{x:label.left+label.width/2,y:label.top+label.height-8},
+      offset={x:grab.x-anchor.x,y:grab.y-anchor.y};
+    assert.ok(chart.snapTarget(grab),'fixture has a nearby OHLC snap target');
+    chart.down(pointer(grab.x,grab.y,1000));chart.move(pointer(grab.x,grab.y,1010));chart.up(pointer(grab.x,grab.y,1020));
+    assert.equal(updates.length,0,'stationary selection must not write coordinates');
+    chart.selected=selected?object.id:null;
+    chart.down(pointer(grab.x,grab.y,2000));
+    assert.equal(chart.drag.kind,'object');assert.equal(chart.drag.anchor,target==='point'&&selected?0:null);
+    for(const distance of [1,2,1]){
+      chart.move(pointer(grab.x+distance,grab.y+distance,2100+distance));
+      assert.equal(chart.drag.moved,true,'even one pixel must move text');
+      const preview=chart.drag.preview,point=preview.points[0],movedLabel=chart.nameLabel(preview);
+      near(chart.tx.x(point.time),anchor.x+distance,'horizontal motion');near(chart.tx.y(point.price),anchor.y+distance,'vertical motion');
+      near(grab.x+distance-chart.tx.x(point.time),offset.x,'horizontal grab offset');near(grab.y+distance-chart.tx.y(point.price),offset.y,'vertical grab offset');
+      near(point.price,103.025-distance*.1,'continuous price instead of tick rounding');
+      near(movedLabel.left,label.left+distance,'complete text block follows horizontally');near(movedLabel.top,label.top+distance,'complete text block follows vertically');
+      assert.equal(chart.snapPreview,null);assert.deepEqual(presence.at(-1).preview_object,preview,'collaborator sees the same preview');
+    }
+    const preview=structuredClone(chart.drag.preview);
+    chart.up(pointer(grab.x+1,grab.y+1,2300));
+    assert.equal(updates.length,1);assert.deepEqual(updates[0].patch,{points:preview.points});assert.deepEqual(chart.plan.objects[0].points,preview.points);
+  });
+});
+
+test('dragging from distant multiline text across night and weekend gaps translates in screen space without acceleration',()=>{
+  harness(({chart,names,pointer,updates,presence})=>{
+    freeTextChart(chart);
+    const times=['2026-11-13T14:54:00+08:00','2026-11-13T14:57:00+08:00','2026-11-13T21:00:00+08:00','2026-11-13T21:03:00+08:00','2026-11-13T21:06:00+08:00','2026-11-16T09:00:00+08:00','2026-11-16T09:03:00+08:00','2026-11-16T09:06:00+08:00'].map(Date.parse);
+    chart.bars=times.map(time=>({time,open:102,high:105,low:99,close:104}));
+    chart.view={...chart.view,start:times[0]-180000,end:times.at(-1)+180000};chart.tx=C.transform(chart.view,chart.plot,chart.bars,chart.period);
+    const object=names('text',{name:'远处正文拖动也跟随鼠标\n晚盘与周末仍保持原偏移',points:[{time:times[1],price:103.025}]});chart.plan={objects:[object]};
+    const label=chart.nameLabel(object),anchor={x:chart.tx.x(times[1]),y:chart.tx.y(103.025)},grab={x:label.left+label.width-10,y:label.top+label.height-8},dx=70,dy=3;
+    assert.ok(grab.x-anchor.x>100,'grab the far end of the body, not its handle');
+    const wrongTime=times[1]+chart.tx.time(grab.x+dx)-chart.tx.time(grab.x);
+    assert.ok(Math.abs(chart.tx.x(wrongTime)-anchor.x-dx)>20,'fixture exposes time-delta acceleration across compressed gaps');
+    chart.down(pointer(grab.x,grab.y,1000));assert.equal(chart.drag.anchor,null);chart.move(pointer(grab.x+dx,grab.y+dy,1100));
+    const preview=structuredClone(chart.drag.preview),point=preview.points[0];
+    assert.ok(point.time>times[2]&&point.time<times[3],'anchor crosses the night-session gap');
+    near(chart.tx.x(point.time),anchor.x+dx,'compressed horizontal translation');near(chart.tx.y(point.price),anchor.y+dy,'vertical translation');
+    near(grab.x+dx-chart.tx.x(point.time),grab.x-anchor.x,'distant grab offset remains fixed');
+    near(chart.nameLabel(preview).left,label.left+dx,'label follows the same screen displacement');
+    assert.deepEqual(presence.at(-1).preview_object.points,preview.points);
+    chart.up(pointer(grab.x+dx,grab.y+dy,1200));assert.deepEqual(updates[0].patch,{points:preview.points});
+  });
+});
+
+test('new text follows its actual free cursor location even beside a candle with snapping enabled',()=>{
+  harness(({chart,pointer,key})=>{
+    freeTextChart(chart);const added=[];chart.callbacks.add=object=>added.push(object);chart.setTool('text');
+    const point={x:chart.tx.x(900000)+2,y:chart.tx.y(103.025)+1},expected={time:Math.round(chart.tx.time(point.x)),price:chart.tx.price(point.y)};
+    const snapped=chart.snapTarget(point);assert.ok(snapped);assert.notEqual(expected.time,snapped.time);assert.notEqual(expected.price,snapped.price);
+    chart.down(pointer(point.x,point.y));assert.deepEqual(chart.textAnchor,expected);
+    chart.textInput.value='自由落点\n不吸附';chart.textEditor.listeners.keydown(key('Enter',{target:chart.textInput}));
+    assert.equal(added.length,1);assert.deepEqual(added[0].points,[expected]);assert.equal(added[0].name,'自由落点\n不吸附');
+  });
+});
+
 test('multiline text drags from its final line while preserving all text and collaborator style',()=>{
   harness(({chart,names,pointer,updates})=>{
     const object=names('text',{name:'等反弹\n再看受阻\n确认后做空'});chart.plan={objects:[object]};const label=chart.nameLabel(object),point={x:label.left+20,y:label.top+label.height-8};
