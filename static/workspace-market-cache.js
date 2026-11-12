@@ -21,6 +21,32 @@
     const keys=Object.keys(left);return keys.length===Object.keys(right).length&&keys.every(key=>Object.hasOwn(right,key)&&equal(left[key],right[key]));
   };
   const appendProtocol=market=>Object.hasOwn(market,'base_history_token')||Object.hasOwn(market,'period_drops');
+  const coordinateKeys=['candle_basis','anchor_reference_id','anchor_reference'];
+  const basisAt=(market,period)=>market?.candle_basis?.[period]||'native_v1';
+  const sameCandleBasis=(left,right)=>PERIODS.every(period=>basisAt(left,period)===basisAt(right,period));
+  const basisDowngrade=(previous,next)=>PERIODS.some(period=>basisAt(previous,period)!=='native_v1'&&basisAt(next,period)==='native_v1');
+  const protectedBasis=market=>Object.fromEntries(PERIODS.filter(period=>basisAt(market,period)!=='native_v1').map(period=>[period,basisAt(market,period)]));
+  const referenceId=market=>market?.anchor_reference_id??null;
+  const stamp=value=>Number.isSafeInteger(value)&&value>=0&&value<=253402300799000;
+  function coordinateError(market,{allowReferenceOmission=false}={}){
+    const basis=market.candle_basis,reference=market.anchor_reference,id=referenceId(market);
+    if(basis!==undefined&&(!record(basis)||Object.entries(basis).some(([key,value])=>!PERIODS.includes(key)||typeof value!=='string'||!value.length||value.length>80)))return'candle_basis';
+    const transformed=PERIODS.filter(period=>basisAt(market,period)!=='native_v1');
+    if(id!==null&&(typeof id!=='string'||!id.length||id.length>128))return'anchor_reference_id';
+    if(reference===undefined){
+      if(id!==null&&!allowReferenceOmission||transformed.length&&id===null)return'anchor_reference_missing';
+      return null;
+    }
+    if(id===null||!record(reference)||!Object.keys(reference).length)return'anchor_reference_missing';
+    for(const [period,item]of Object.entries(reference)){
+      if(!PERIODS.includes(period)||!record(item)||item.basis!=='native_v1'||item.target_basis!==basisAt(market,period)||item.target_basis==='native_v1'||!stamp(item.target_base_time))return'anchor_reference';
+      const times=item.source_times;if(!Array.isArray(times)||!times.length||times.length>10000)return'anchor_reference';
+      let previous=-1;for(const value of times){if(!stamp(value)||value<=previous)return'anchor_reference';previous=value;}
+    }
+    if(transformed.some(period=>!Object.hasOwn(reference,period)))return'anchor_reference_missing';
+    return null;
+  }
+  const copyCoordinates=market=>Object.fromEntries(coordinateKeys.filter(key=>Object.hasOwn(market,key)).map(key=>[key,clone(market[key])]));
   function validBars(rows){
     let previous=-Infinity;
     for(const row of rows){
@@ -35,6 +61,7 @@
   function validate(market){
     if(!record(market)||typeof market.history_token!=='string'||!market.history_token.length||typeof market.incremental!=='boolean')return'history_metadata';
     if(!record(market.periods)||!record(market.period_counts))return'period_metadata';
+    const coordinates=coordinateError(market,{allowReferenceOmission:market.incremental});if(coordinates)return coordinates;
     const append=market.incremental&&appendProtocol(market);
     if(append&&(typeof market.base_history_token!=='string'||!market.base_history_token.length||!record(market.period_drops)))return'append_metadata';
     for(const period of PERIODS){
@@ -51,7 +78,7 @@
   class Store{
     constructor({limit=16}={}){
       if(!Number.isInteger(limit)||limit<1||limit>16)throw new RangeError('Market cache limit must be 1–16.');
-      this.limit=limit;this.entries=new Map();this.sequence=0;this.pinned=null;
+      this.limit=limit;this.entries=new Map();this.sequence=0;this.pinned=null;this.coordinateBases=new Map();
     }
     touch(symbol,create=false){
       let entry=this.entries.get(symbol);
@@ -74,7 +101,7 @@
     view(symbol){return this.touch(symbol)?.market||null;}
     ready(symbol){const market=this.entries.get(symbol)?.market;return Boolean(market&&PERIODS.every(period=>market.periods[period].length));}
     history(symbol){const entry=this.touch(symbol);return entry?.historyValid?entry.market.history_token:null;}
-    clear(symbol){if(symbol===undefined){this.entries.clear();this.pinned=null;}else{this.entries.delete(symbol);if(this.pinned===symbol)this.pinned=null;}}
+    clear(symbol){if(symbol===undefined){this.entries.clear();this.coordinateBases.clear();this.pinned=null;}else{this.entries.delete(symbol);this.coordinateBases.delete(symbol);if(this.pinned===symbol)this.pinned=null;}}
     reject(entry,reason){
       // Retain the last complete picture, but stop requesting deltas until a
       // verified full response arrives. No rejected tail/metadata is applied.
@@ -88,10 +115,15 @@
       if(!entry||ticket!==entry.latest||ticket<=entry.accepted)return{accepted:false,ignored:true,reason:'superseded'};
       if(!record(market)||market.symbol!==symbol)return this.reject(entry,'symbol_mismatch');
       const invalid=validate(market);if(invalid)return this.reject(entry,invalid);
+      // Keep only a tiny basis ledger when large histories are evicted. LRU
+      // pressure must not make an obsolete native response safe again.
+      if(basisDowngrade({candle_basis:this.coordinateBases.get(symbol)},market))return this.reject(entry,'candle_basis_downgrade');
       let periods;
       if(market.incremental){
         const base=entry.market;
         if(!base||!entry.historyValid)return this.reject(entry,'missing_full_history');
+        if(!sameCandleBasis(base,market))return this.reject(entry,'candle_basis_mismatch');
+        if(referenceId(base)!==referenceId(market)||Object.hasOwn(market,'anchor_reference')&&!equal(base.anchor_reference,market.anchor_reference))return this.reject(entry,'anchor_reference_mismatch');
         const append=appendProtocol(market);
         if(base.history_token!==(append?market.base_history_token:market.history_token))return this.reject(entry,'history_mismatch');
         periods={};
@@ -109,11 +141,16 @@
       }else periods=immutable(market.periods);
       // Metadata comes entirely from the newest response: false, zero, null,
       // unavailable status and freshness details must never inherit older truth.
-      const {periods:wirePeriods,...metadata}=market,next=Object.freeze({...immutable(metadata),periods});
+      const {periods:wirePeriods,anchor_reference:wireReference,...metadata}=market;
+      // The reference is frozen at the basis switch, not regenerated every
+      // tick. A delta carries its ID only and shares the verified full value.
+      const reference=market.incremental?entry.market.anchor_reference:wireReference;
+      const next=Object.freeze({...immutable(metadata),...(reference===undefined?{}:{anchor_reference:market.incremental?reference:immutable(reference)}),periods});
       entry.market=next;entry.historyValid=PERIODS.every(period=>next.periods[period].length>0);entry.accepted=ticket;
+      const basis=protectedBasis(next);if(Object.keys(basis).length)this.coordinateBases.set(symbol,basis);
       this.touch(symbol);
       return{accepted:true,market:readOnly?next:clone(next),ready:entry.historyValid};
     }
   }
-  return{Store,PERIODS,LIMITS};
+  return{Store,PERIODS,LIMITS,coordinateError,copyCoordinates,sameCandleBasis,basisDowngrade,protectedBasis,referenceId};
 }));

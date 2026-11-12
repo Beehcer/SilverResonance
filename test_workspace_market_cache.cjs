@@ -20,6 +20,75 @@ function append(base,added={day:0,m30:0,m3:1},drops={day:0,m30:0,m3:0}){
   }
   return{...base,base_history_token:base.history_token,history_token:base.history_token+'-next',incremental:true,period_drops:{...drops},period_counts:counts,periods};
 }
+function rebased(base=full(),id='reference-1'){
+  return{...copy(base),candle_basis:{m30:'trading_minutes_v1'},anchor_reference_id:id,
+    anchor_reference:{m30:{basis:'native_v1',target_basis:'trading_minutes_v1',source_times:base.periods.m30.map(row=>Date.parse(row.dt)),target_base_time:Date.parse(base.periods.m30.at(-1).dt)}}};
+}
+
+test('a candle basis switch replaces full history and retains an immutable complete anchor reference',()=>{
+  const store=new Store(),legacy=full(),next=rebased();accept(store,legacy);
+  assert.equal(accept(store,delta(next)).retryFull,true);assert.deepEqual(store.get(SYMBOL),legacy);
+  assert.equal(accept(store,next).accepted,true);const view=store.view(SYMBOL);
+  assert.deepEqual(view.candle_basis,{m30:'trading_minutes_v1'});assert.equal(view.anchor_reference_id,'reference-1');
+  for(const value of [view.candle_basis,view.anchor_reference,view.anchor_reference.m30,view.anchor_reference.m30.source_times])assert.equal(Object.isFrozen(value),true);
+  next.anchor_reference.m30.source_times[0]=0;store.get(SYMBOL).anchor_reference.m30.source_times[1]=0;
+  assert.notEqual(view.anchor_reference.m30.source_times[0],0);assert.notEqual(view.anchor_reference.m30.source_times[1],0);
+});
+
+test('same-basis delta and append packets share the verified reference by ID without resending source timestamps',()=>{
+  const store=new Store(),base=rebased();accept(store,base);const reference=store.view(SYMBOL).anchor_reference;
+  const tail=delta(base);delete tail.anchor_reference;tail.periods.m3.at(-1).close=104;
+  assert.equal(accept(store,tail).accepted,true);assert.equal(store.view(SYMBOL).anchor_reference,reference);assert.equal(store.view(SYMBOL).periods.m3.at(-1).close,104);
+  const rolled=append(store.view(SYMBOL));delete rolled.anchor_reference;
+  assert.equal(accept(store,rolled).accepted,true);assert.equal(store.view(SYMBOL).anchor_reference,reference);
+  assert.equal(store.get(SYMBOL).anchor_reference.m30.source_times.length,base.periods.m30.length);
+});
+
+test('different reference IDs, edited same-ID references and different bases cannot patch an existing history',()=>{
+  const changes=[packet=>packet.anchor_reference_id='reference-other',packet=>packet.candle_basis.m30='trading_minutes_v2',
+    packet=>{packet.anchor_reference=copy(baseReference);packet.anchor_reference.m30.target_base_time++;},packet=>delete packet.anchor_reference_id];
+  const baseReference=rebased().anchor_reference;
+  for(const change of changes){const store=new Store(),base=rebased();accept(store,base);const before=store.view(SYMBOL),packet=delta(base);delete packet.anchor_reference;change(packet);
+    assert.equal(accept(store,packet).retryFull,true);assert.equal(store.view(SYMBOL),before);assert.equal(store.history(SYMBOL),null);
+  }
+  const store=new Store();accept(store,rebased());const replacement=rebased(full(SYMBOL,'new-full'),'reference-new');replacement.anchor_reference.m30.target_base_time++;
+  assert.equal(accept(store,replacement).accepted,true);assert.equal(store.view(SYMBOL).anchor_reference_id,'reference-new');
+});
+
+test('full reference validation rejects malformed coordinate data without corrupting the previous picture',()=>{
+  const changes=[packet=>delete packet.anchor_reference,packet=>delete packet.anchor_reference_id,packet=>packet.anchor_reference_id='',
+    packet=>packet.anchor_reference.m30.source_times=[],packet=>packet.anchor_reference.m30.source_times=[1,1],
+    packet=>packet.anchor_reference.m30.source_times=[2,1],packet=>packet.anchor_reference.m30.source_times=[.5,2],
+    packet=>packet.anchor_reference.m30.source_times=[true,2],packet=>packet.anchor_reference.m30.source_times=[-1,2],
+    packet=>packet.anchor_reference.m30.source_times=Array.from({length:10001},(_,i)=>i),
+    packet=>packet.anchor_reference.m30.target_base_time=NaN,packet=>packet.anchor_reference.m30.target_basis='other',
+    packet=>packet.anchor_reference.m30.basis='other',packet=>packet.candle_basis={unknown:'trading_minutes_v1'},
+    packet=>packet.candle_basis.m30='',packet=>packet.anchor_reference={m3:packet.anchor_reference.m30}];
+  for(const change of changes){const store=new Store(),legacy=full();accept(store,legacy);const bad=rebased();change(bad);
+    assert.equal(accept(store,bad).retryFull,true);assert.deepEqual(store.get(SYMBOL),legacy);
+  }
+});
+
+test('an accepted transformed basis cannot silently downgrade to legacy or explicit native until the cache is cleared',()=>{
+  for(const explicit of [false,true]){const store=new Store(),current=rebased();accept(store,current);const old=full(SYMBOL,'old-process');if(explicit)old.candle_basis={m30:'native_v1'};
+    const rejected=accept(store,old);assert.equal(rejected.retryFull,true);assert.equal(rejected.reason,'candle_basis_downgrade');assert.deepEqual(store.get(SYMBOL),current);
+    store.clear(SYMBOL);assert.equal(accept(store,old).accepted,true);assert.deepEqual(store.get(SYMBOL),old);
+  }
+});
+
+test('LRU eviction does not forget the basis downgrade guard and explicit clear releases it',()=>{
+  const store=new Store({limit:1});accept(store,rebased());accept(store,full(OTHER));assert.equal(store.get(SYMBOL),null);assert.equal(store.entries.size,1);
+  assert.equal(accept(store,full()).reason,'candle_basis_downgrade');assert.equal(store.get(SYMBOL),null);
+  store.clear();assert.equal(accept(store,full()).accepted,true);
+});
+
+test('metadata failures and older requests cannot move an accepted basis reference',()=>{
+  const store=new Store(),obsolete=store.begin(SYMBOL),latest=store.begin(SYMBOL),current=rebased();
+  assert.equal(store.accept(SYMBOL,current,latest).accepted,true);const before=store.view(SYMBOL);
+  assert.equal(store.accept(SYMBOL,full(),obsolete).ignored,true);assert.equal(store.view(SYMBOL),before);
+  const bad=delta(current);delete bad.anchor_reference;bad.periods.m3.at(-1).close=104;bad.anchor_reference_id='wrong';bad.fresh=false;
+  assert.equal(accept(store,bad).retryFull,true);assert.equal(store.view(SYMBOL),before);assert.equal(before.fresh,true);
+});
 
 test('a verified full response seeds all three periods and a token; access returns independent snapshots',()=>{
   const store=new Store(),source=full(),result=accept(store,source);

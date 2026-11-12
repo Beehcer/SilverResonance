@@ -40,7 +40,9 @@ _board_demo_store = board_demo.SharedPlanStore(os.path.join(user_settings.app_di
 _structure_store = outlook_store.OutlookStore(os.path.join(user_settings.app_dir(), "state", "outlook_state.json"))
 _mock_structure_store = outlook_store.OutlookStore()
 _workspace_store = workspace_store.WorkspaceStore(os.path.join(user_settings.app_dir(), "state", "workspace.json"))
-_workspace_market = WorkspaceMarketCache(allowed_symbols=lambda: [preset["symbol"] for preset in symbols.PRESETS])
+_workspace_market = WorkspaceMarketCache(allowed_symbols=lambda: [preset["symbol"] for preset in symbols.PRESETS],
+    reference_provider=lambda symbol, proposed: _workspace_store.ensure_candle_reference(symbol, proposed),
+    reference_loader=lambda symbol: _workspace_store.candle_reference(symbol))
 _workspace_quote_lock = threading.Lock()
 _workspace_live_quotes = {}
 
@@ -1451,13 +1453,18 @@ class _WorkspaceSerialReader:
     """Accumulate SDK changes; materialize only changed tails when history agrees."""
     fields = ("datetime", "open", "high", "low", "close", "volume", "open_oi", "close_oi")
 
-    def __init__(self, api, cache):
+    def __init__(self, api, cache, *, quotes=None, trading_minutes=False):
         import numpy as np
         self.np, self.api, self.cache = np, api, cache
         self.subscriptions = _KlineSubscriptions(api)
         self.dirty = set()
         self.matrices = {}
         self.subscription_task = None
+        self.quotes = quotes or {}
+        self.trading_minutes = trading_minutes
+        self.periods = (86400, 1800, 180, 900) if trading_minutes else (86400, 1800, 180)
+        self.aggregators = {}
+        self.cycle_filters = {}
 
     def schedule_requested(self):
         """Create serials inside the same SDK event loop, without blocking it.
@@ -1477,7 +1484,7 @@ class _WorkspaceSerialReader:
             if not completed.cancelled():
                 completed.result()
         if not any((symbol, period) not in self.subscriptions.serials
-                   for symbol in self.cache.requested() for period in (86400, 1800, 180)):
+                   for symbol in self.cache.requested() for period in self.periods):
             return
         async def subscribe():
             self.subscribe_requested()
@@ -1490,7 +1497,9 @@ class _WorkspaceSerialReader:
 
     def subscribe_requested(self):
         for symbol in self.cache.requested():
-            for period in (86400, 1800, 180):
+            if self.trading_minutes:
+                self.cache.enable_trading_minutes(symbol)
+            for period in self.periods:
                 key = (symbol, period)
                 if key in self.subscriptions.serials:
                     continue
@@ -1512,6 +1521,46 @@ class _WorkspaceSerialReader:
                     changed = True
         return changed
 
+    def _publish_trading(self, symbol, tail=None, appended=0, full=False):
+        from workspace_candles import TradingMinuteAggregator
+        quote = self.quotes.get(symbol)
+        schedule = getattr(quote, "trading_time", None)
+        if schedule is None:
+            raise ValueError("交易时段尚未就绪")
+        aggregator = self.aggregators.get(symbol)
+        with self.cache.lock:
+            source = self.cache.data.get((symbol, 900), {}).get("bars", [])
+        if not source:
+            raise ValueError("15分钟源行情尚未就绪")
+        if aggregator is None:
+            aggregator = TradingMinuteAggregator(schedule, source_period=900)
+            full = True
+        now = datetime.fromtimestamp(self.cache.clock(), timezone(timedelta(hours=8)))
+        if full:
+            # CZCE's three-digit year/month identifier repeats each decade.
+            # Keep only the latest cycle when the provider actually supplies an
+            # eight-year discontinuity; never infer a listing date or mix cycles.
+            filtered = source
+            if symbol.startswith("CZCE."):
+                for index in range(len(source) - 1, 0, -1):
+                    newer = datetime.fromisoformat(source[index]["dt"])
+                    older = datetime.fromisoformat(source[index - 1]["dt"])
+                    if (newer - older).days >= 8 * 365:
+                        filtered = source[index:]
+                        self.cycle_filters[symbol] = {"excluded_before": filtered[0]["dt"],
+                                                      "reason": "reused_contract_code_decade_gap"}
+                        break
+            aggregator.replace(filtered, as_of=now)
+        else:
+            try:
+                aggregator.update_tail(tail or source[-2:], appended=appended, as_of=now)
+            except ValueError:
+                return self._publish_trading(symbol, full=True)
+        coverage = {**aggregator.coverage, **self.cycle_filters.get(symbol, {})}
+        if not self.cache.publish_trading_m30(symbol, aggregator.bars, coverage):
+            raise ValueError("30分钟转换基准尚未就绪")
+        self.aggregators[symbol] = aggregator
+
     def refresh(self, connected):
         if not connected:
             return
@@ -1523,6 +1572,8 @@ class _WorkspaceSerialReader:
                 if not self.api.is_serial_ready(serial):
                     raise ValueError("当前周期历史行情尚未就绪")
                 if key not in self.dirty and key in self.matrices and self.cache.mark_checked(*key):
+                    if key[1] == 900:
+                        self._publish_trading(key[0])
                     continue
                 columns = {field: np.asarray(serial[field]) for field in self.fields if field in serial}
                 count = len(columns["close"])
@@ -1535,6 +1586,7 @@ class _WorkspaceSerialReader:
                                and np.array_equal(previous[-2:, 0], matrix[-2:, 0], equal_nan=True)
                                and np.array_equal(previous[:-2], matrix[:-2], equal_nan=True))
                 updated = False
+                tail, appended = None, 0
                 if same_window:
                     tail = _serial_rows({field: column[-2:] for field, column in columns.items()})
                     updated = self.cache.update_tail(*key, tail)
@@ -1553,8 +1605,13 @@ class _WorkspaceSerialReader:
                             updated = self.cache.update_window(*key, tail, appended=appended)
                 if not updated:
                     updated = self.cache.cache(*key, _serial_rows(serial))
+                    full = True
+                else:
+                    full = False
                 if not updated:
                     raise ValueError("行情尚未可用")
+                if key[1] == 900:
+                    self._publish_trading(key[0], tail, appended, full)
                 self.matrices[key] = matrix
                 self.dirty.discard(key)
             except Exception:
@@ -1588,7 +1645,8 @@ def _workspace_tqsdk_session(api, notifications):
     """
     codes = [preset["symbol"] for preset in symbols.PRESETS]
     quotes = dict(zip(codes, api.get_quote_list(codes)))
-    reader = _WorkspaceSerialReader(api, _workspace_market)
+    reader = _WorkspaceSerialReader(api, _workspace_market, quotes=quotes,
+                                   trading_minutes=app.config.get("WORKSPACE_TRADING_MINUTES", True))
     _cache_workspace_quotes(quotes)
     _set_state(connected=True, connection_status="unknown", error=None)
     _set_boot("ready", 100, "真实报价已连接，图表按查看品种加载")

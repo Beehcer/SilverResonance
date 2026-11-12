@@ -98,3 +98,39 @@ test('legacy acknowledgement also retains or removes the full horizontal pair',(
   assert.deepEqual(remaining.object_edits[0].node_updates[0].changes,{time:latest.objects[0].points[0].time,chart_anchor:anchor(2)});
   assert.equal(M.hasPending(M.ack(sent,sent)),false);
 });
+
+test('absolute-time horizontal edits retain explicit null through JSON, peer merging and acknowledgement',()=>{
+  for(const oldNull of [false,true]){
+    const base=plan();if(oldNull)base.objects[0].points[0].chart_anchor=null;
+    const local=copy(base);local.objects[0].points[0].time+=180000;local.objects[0].points[0].chart_anchor=null;
+    const sent=JSON.parse(JSON.stringify(M.diff(base,local)));
+    assert.deepEqual(sent.object_edits[0].node_updates,[{id:'a',changes:{time:local.objects[0].points[0].time,chart_anchor:null}}]);
+    const peer=copy(base);peer.objects[0].points[0].price=106;
+    const merged=M.apply(peer,sent);assert.deepEqual(merged.objects[0].points[0],{...local.objects[0].points[0],price:106});
+    const latest=copy(local);latest.objects[0].points[0].time+=180000;
+    const remaining=M.ack(M.diff(base,latest),sent,base);
+    assert.deepEqual(remaining.object_edits[0].node_updates,[{id:'a',changes:{time:latest.objects[0].points[0].time,chart_anchor:null}}]);
+    assert.equal(M.hasPending(M.ack(sent,sent)),false);
+  }
+});
+
+test('adding null without moving time is a no-op and price-only edits stay independent',()=>{
+  const base=plan(),local=copy(base);local.objects[0].points[0].chart_anchor=null;
+  assert.equal(M.hasPending(M.diff(base,local)),false);
+  local.objects[0].points[0].price=105;
+  assert.deepEqual(M.diff(base,local).object_edits[0].node_updates,[{id:'a',changes:{price:105}}]);
+});
+
+test('candle-basis adoption is one horizontal coordinate through peer merge, serialization and undo',()=>{
+  const base=plan();base.objects[0].points[0].chart_anchor=anchor();
+  const local=copy(base);local.objects[0].points[0].time+=900000;local.objects[0].points[0].chart_anchor={...anchor(3.25),basis:'trading_minutes_v1'};
+  const peer=copy(base);peer.objects[0].points[0].price=107;peer.objects[0].points[1].price=119;
+  const horizontal=JSON.parse(JSON.stringify(M.diff(base,local))),vertical=JSON.parse(JSON.stringify(M.diff(base,peer)));
+  assert.deepEqual(horizontal.object_edits[0].node_updates[0].changes,{time:local.objects[0].points[0].time,chart_anchor:local.objects[0].points[0].chart_anchor});
+  assert.deepEqual(vertical.object_edits[0].node_updates[0].changes,{price:107});
+  for(const [first,second]of [[horizontal,vertical],[vertical,horizontal]]){
+    const combined=M.apply(M.apply(base,first),second);assert.deepEqual(combined.objects[0].points[0],{...local.objects[0].points[0],price:107});
+    const undone=E.apply(combined,E.operation(base,local));assert.deepEqual(undone.conflicts,[]);assert.deepEqual(undone.plan.objects[0].points[0],{...base.objects[0].points[0],price:107});
+    const redone=E.apply(undone.plan,E.operation(base,local),false);assert.deepEqual(redone.conflicts,[]);assert.deepEqual(redone.plan,combined);
+  }
+});

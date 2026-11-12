@@ -198,7 +198,13 @@ class WorkspaceStore:
 
     def _validate_state(self, state):
         json.dumps(state, allow_nan=False)
-        _require(isinstance(state, dict) and set(state) == set(self._empty()) and state["schema_version"] == 2)
+        _require(isinstance(state, dict) and set(state) - {"candle_references"} == set(self._empty()) and state["schema_version"] == 2)
+        references = state.get("candle_references", {})
+        _require(isinstance(references, dict) and len(references) <= 256)
+        from workspace_market import validate_candle_reference
+        for symbol, reference in references.items():
+            _require(isinstance(symbol, str) and re.fullmatch(r"[A-Za-z]+\.[A-Za-z0-9]+", symbol))
+            validate_candle_reference(reference)
         for key in ("members", "sessions", "plans", "history", "activations", "mutations"):
             _require(isinstance(state[key], dict))
         members = state["members"]
@@ -342,6 +348,27 @@ class WorkspaceStore:
         with self._locked():
             self._reload()
             return copy.deepcopy(operation(self._state))
+
+    def ensure_candle_reference(self, symbol, proposed):
+        """Freeze a candle-basis transition once, in the same backed-up store.
+
+        This never edits a plan or rewinds its revision. Competing readers and
+        process restarts must reuse the original transition, not today's last K.
+        """
+        from workspace_market import validate_candle_reference
+        validate_candle_reference(proposed)
+        existing = self._read(lambda state: state.get("candle_references", {}).get(symbol))
+        if existing is not None:
+            return existing
+        def operation(state):
+            return state.setdefault("candle_references", {}).setdefault(symbol, copy.deepcopy(proposed))
+        return self._change(operation)
+
+    def has_candle_reference(self, symbol):
+        return self._read(lambda state: symbol in state.get("candle_references", {}))
+
+    def candle_reference(self, symbol):
+        return self._read(lambda state: state.get("candle_references", {}).get(symbol))
 
     def _change(self, operation):
         with self._locked():
@@ -652,7 +679,7 @@ class WorkspaceStore:
         return plan
 
     @staticmethod
-    def _guard_forecast_coordinates(previous, incoming, cutoffs=None):
+    def _guard_forecast_coordinates(previous, incoming, cutoffs=None, reference=None):
         """Old tabs must not erase a repaired coordinate or add naked future nodes."""
         old_objects = {o["id"]: o for o in (previous or {}).get("objects", [])}
         for obj in incoming.get("objects", []):
@@ -672,6 +699,12 @@ class WorkspaceStore:
                 identity = point.get("id") if isinstance(point.get("id"), str) else None
                 before = prior[index] if same_legacy_x else old_points.get(identity)
                 if "chart_anchor" in point:
+                    anchor = point.get("chart_anchor")
+                    if (reference and isinstance(anchor, dict) and anchor.get("period") == "m30"
+                            and anchor.get("basis", "native_v1") != reference["target_basis"]
+                            and (before is None or before.get("time") != point.get("time")
+                                 or before.get("chart_anchor") != anchor)):
+                        raise WorkspaceError("30分钟K线口径已更新，请刷新页面后移动或新增节点；已有预测线已保留。")
                     continue  # An explicit null represents an intentional absolute/history coordinate.
                 if prior_anchored and not identity:
                     # A legacy full replacement may strip both IDs and anchors.
@@ -695,7 +728,8 @@ class WorkspaceStore:
             if base_revision != revision:
                 raise RevisionConflict(current)
             clean = self._clean_plan(raw, rule_version, (current or {}).get("objects", []))
-            self._guard_forecast_coordinates(current, clean, coordinate_cutoffs)
+            self._guard_forecast_coordinates(current, clean, coordinate_cutoffs,
+                                             state.get("candle_references", {}).get(symbol.partition("::")[0]))
             clean["comments"] = copy.deepcopy((current or {}).get("comments", []))
             return self._commit_plan(state, symbol, clean, user_id)
         return self._change(operation)
@@ -873,7 +907,8 @@ class WorkspaceStore:
                 current_objects.pop(identity, None)
             merged["objects"] = list(current_objects.values())
             clean = self._clean_plan(merged, rule_version, latest.get("objects", []))
-            self._guard_forecast_coordinates(latest, clean, coordinate_cutoffs)
+            self._guard_forecast_coordinates(latest, clean, coordinate_cutoffs,
+                                             state.get("candle_references", {}).get(symbol.partition("::")[0]))
             unchanged = {key: value for key, value in latest.items() if key not in _METADATA}
             result = current if current and clean == unchanged else self._commit_plan(state, symbol, clean, user_id)
             if receipt_key:

@@ -316,3 +316,96 @@ test('completing a drawing after a buffered opening preserves the frame in which
   added[0].points.forEach((point,index)=>{assert.equal(point.time,values[index].time);assert.equal(point.chart_anchor.base_time,lateHistory.at(-1).time);});
   chart.objectPoints(added[0]).forEach((point,index)=>{close(point.x,expected[index].x);close(point.y,expected[index].y);});
 });
+
+const nativeCutover=['2026-11-05T09:00:00','2026-11-05T09:30:00','2026-11-05T10:00:00','2026-11-05T10:30:00','2026-11-05T11:00:00'].map(value=>bar(ms(value)));
+const tradingCutover=['2026-11-05T09:00:00','2026-11-05T09:30:00','2026-11-05T10:00:00','2026-11-05T10:45:00','2026-11-05T11:15:00'].map(value=>bar(ms(value)));
+const tradingGrowth=['2026-11-05T13:45:00','2026-11-05T14:15:00','2026-11-05T14:45:00','2026-11-05T21:00:00','2026-11-05T21:30:00','2026-11-05T22:00:00','2026-11-05T22:30:00','2026-11-06T09:00:00','2026-11-06T09:30:00','2026-11-06T10:00:00','2026-11-06T10:45:00','2026-11-06T11:15:00'].map(ms);
+const cutoverReference=()=>({basis:'native_v1',target_basis:'trading_minutes_v1',source_times:nativeCutover.map(row=>row.time),target_base_time:tradingCutover.at(-1).time});
+function versionedMarket(trading=tradingCutover,native=nativeCutover,reference=cutoverReference()){
+  return{...market(trading,trading),candle_basis:{day:'native_v1',m30:'trading_minutes_v1',m3:'native_v1'},anchor_periods:{m30:native.map(row=>({dt:row.dt}))},...(reference?{anchor_reference:{m30:reference}}:{})};
+}
+function cutoverWave(){return{id:'cutover-wave',kind:'wave',period:'m30',points:C.wavePoints([1.25,3.5,6.25,9.5].map((offset,index)=>C.anchorPoint({time:nativeCutover.at(-1).time+offset*step,price:[3040,3061,3012,3054][index]},nativeCutover,'m30')))};}
+
+test('old and new anchor bases resolve against their own timelines even when a native base vanished',()=>{
+  const data=versionedMarket(tradingCutover,[...nativeCutover,bar(ms('2026-11-05T13:30:00'))],null);
+  const old={time:ms('2026-11-05T11:30:00'),price:3040,chart_anchor:{period:'m30',base_time:ms('2026-11-05T10:30:00'),offset:2}};
+  assert.equal(C.resolvePointTime(old,data),ms('2026-11-05T13:30:00'));
+  assert.equal(C.resolvePointTime({...old,chart_anchor:{...old.chart_anchor,basis:'native_v1'}},data),ms('2026-11-05T13:30:00'));
+  const sameBase={time:0,price:3040,chart_anchor:{period:'m30',base_time:ms('2026-11-05T10:00:00'),offset:1}};
+  assert.equal(C.resolvePointTime(sameBase,data),ms('2026-11-05T10:30:00'));
+  const modern={...sameBase,chart_anchor:{...sameBase.chart_anchor,basis:'trading_minutes_v1'}};
+  assert.equal(C.resolvePointTime(modern,data),ms('2026-11-05T10:45:00'));
+  const chart=chartAt('m30',data,{objects:[]});
+  for(const point of [sameBase,modern,old,modern,sameBase])assert.equal(chart.pointTime(point),C.resolvePointTime(point,data),'cached scales are separated by basis');
+});
+
+test('fixed cutover reference preserves future forecast spacing through lunch, night and next-day opens',()=>{
+  const wave=cutoverWave(),saved=JSON.stringify({objects:[wave]}),chart=chartAt('m30',market(nativeCutover),JSON.parse(saved));
+  chart.view={start:nativeCutover[0].time,end:nativeCutover.at(-1).time+12*step,min:2980,max:3070};chart.autoPrice=false;chart.followLatest=false;chart.render();
+  const positions=chart.objectPoints(wave),oldEnd=chart.view.end;
+  chart.setData(versionedMarket(),JSON.parse(saved));
+  assert.equal(chart.view.end,oldEnd+15*60000,'future viewport endpoint follows the same fixed cutover map');
+  for(let count=0;count<=tradingGrowth.length;count++){
+    const rows=[...tradingCutover,...tradingGrowth.slice(0,count).map(bar)],liveNative=[...nativeCutover,...tradingGrowth.slice(0,count).map(time=>bar(time-15*60000))],data=versionedMarket(rows,liveNative);
+    chart.setData(data,JSON.parse(saved));
+    chart.objectPoints(chart.plan.objects[0]).forEach((point,index)=>{close(point.x,positions[index].x);close(point.y,positions[index].y);});
+    assert.equal(JSON.stringify(chart.plan),saved,'compatibility projections do not migrate user data');
+    const reload=chartAt('m30',JSON.parse(JSON.stringify(data)),JSON.parse(saved));reload.view={...chart.view};reload.autoPrice=false;reload.followLatest=false;reload.render();
+    reload.objectPoints(reload.plan.objects[0]).forEach((point,index)=>close(point.x,positions[index].x));
+  }
+});
+
+test('fixed source history is immutable in meaning and absolute historical points retain their time',()=>{
+  const reference=cutoverReference(),data=versionedMarket([...tradingCutover,bar(tradingGrowth[0])],[],reference);
+  const historical={time:0,price:3040,chart_anchor:{period:'m30',base_time:nativeCutover[0].time,offset:3.5}},absolute={time:ms('2026-11-05T10:30:00'),price:3040,chart_anchor:null};
+  assert.equal(C.resolvePointTime(historical,data),ms('2026-11-05T10:45:00'));
+  assert.equal(C.resolvePointTime(absolute,data),absolute.time);
+  const saved=JSON.stringify([historical,absolute,reference]);
+  for(const rows of [nativeCutover,[],[...nativeCutover,bar(tradingGrowth[0])]])assert.equal(C.resolvePointTime(historical,versionedMarket(data.periods.m30,rows,reference)),ms('2026-11-05T10:45:00'));
+  assert.equal(JSON.stringify([historical,absolute,reference]),saved);
+});
+
+test('fixed-reference forecast coordinates agree on smaller periods and peers with trimmed retained history',()=>{
+  const wave=cutoverWave(),rows=[...tradingCutover,...tradingGrowth.map(bar)],data=versionedMarket(rows),main=chartAt('m30',data,{objects:[wave]}),expected=wave.points.map(point=>main.pointTime(point));
+  for(const period of ['m30','m3'])for(const target of [rows,rows.slice(3)]){
+    const peer=chartAt(period,versionedMarket(target),{objects:[JSON.parse(JSON.stringify(wave))]});
+    assert.deepEqual(peer.plan.objects[0].points.map(point=>peer.pointTime(point)),expected);
+  }
+  const missingBase=versionedMarket(rows.slice(5));
+  assert.deepEqual(wave.points.map(point=>C.resolvePointTime(point,missingBase)),wave.points.map(point=>point.time),'missing persisted target base never guesses a new reference');
+});
+
+test('anchor reference arrival and native-only timeline changes invalidate an otherwise unchanged chart',()=>{
+  const wave=cutoverWave(),chart=chartAt('m30',versionedMarket(tradingCutover,nativeCutover,null),{objects:[wave]}),render=chart.render;chart.autoPrice=false;chart.followLatest=false;
+  let paints=0;chart.render=function(){paints++;render.call(this);};
+  chart.setData(versionedMarket(),chart.plan);assert.equal(paints,1,'fixed reference installation must repaint old anchors');
+  chart.setData(JSON.parse(JSON.stringify(versionedMarket())),chart.plan);assert.equal(paints,1,'identical metadata need not repaint');
+  chart.setData(versionedMarket(tradingCutover,[...nativeCutover,bar(tradingGrowth[0])]),chart.plan);assert.equal(paints,2);
+});
+
+test('new drawings and inserted or horizontally moved future points carry the current basis',()=>{
+  const data={...market(lateHistory),candle_basis:{m30:'trading_minutes_v1'}},h=eventChart(data),{chart,added,event}=h;chart.tool='wave';
+  for(const [offset,price,at]of [[2,3040,1000],[6,3060,2000]])chart.down(event({x:chart.tx.x(lateHistory.at(-1).time+offset*step),y:chart.tx.y(price)},at));
+  chart.finishPath();assert.ok(added[0].points.every(point=>point.chart_anchor.basis==='trading_minutes_v1'));
+  const object=chart.plan.objects[0];chart.tool='select';const first=chart.objectPoints(object)[0];chart.down(event(first,3000));chart.move(event({x:first.x+20,y:first.y},3100));chart.up(event({x:first.x+20,y:first.y},3200));
+  assert.equal(object.points[0].chart_anchor.basis,'trading_minutes_v1');
+  const screen=chart.objectPoints(object),mid={x:(screen[0].x+screen[1].x)/2,y:(screen[0].y+screen[1].y)/2};chart.doubleClick(event(mid,4000));
+  assert.equal(object.points[1].chart_anchor.basis,'trading_minutes_v1');
+});
+
+test('vertical edits retain a legacy reference while horizontal edits adopt the new basis',()=>{
+  const wave=cutoverWave(),chart=chartAt('m30',versionedMarket(),{objects:[wave]}),start=chart.objectPoints(wave)[1],origin={time:chart.pointTime(wave.points[1]),price:wave.points[1].price};
+  const vertical=chart.objectDragPreview({object:structuredClone(wave),anchor:1,origin,value:{...origin,price:origin.price+2},start,point:{x:start.x,y:start.y-5}});
+  assert.deepEqual(vertical.points[1].chart_anchor,wave.points[1].chart_anchor);assert.equal(vertical.points[1].time,wave.points[1].time);
+  const horizontal=chart.objectDragPreview({object:structuredClone(wave),anchor:1,origin,value:{time:chart.tx.time(start.x+20),price:origin.price},start,point:{x:start.x+20,y:start.y}});
+  assert.equal(horizontal.points[1].chart_anchor.basis,'trading_minutes_v1');assert.deepEqual(horizontal.points[0],wave.points[0]);
+});
+
+test('moving average labels preserve indicator decimals without changing price formatting or calculations',()=>{
+  assert.equal(C.indicatorLabel(5990.8,2),'5,990.80');assert.equal(C.indicatorLabel(5996.8,2),'5,996.80');assert.equal(C.indicatorLabel(5984.1,2),'5,984.10');
+  assert.equal(C.indicatorLabel(5994,2),'5,994.00');assert.equal(C.indicatorLabel(872.14,.02),'872.14');assert.equal(C.indicatorLabel(null,2),'—');
+  assert.equal(C.indicatorLabel(3040.05,1),'3,040.05');assert.equal(C.indicatorLabel(872.141,.02),'872.141');
+  assert.equal(C.priceLabel(5990.8,2),'5,991','ordinary market price labels retain their existing precision');
+  const rows=Array.from({length:20},(_,index)=>({...bar(index*step),close:index===19?5994:5980+index*2})),chart=chartAt('m30',market(rows));
+  for(const length of [5,10,20])assert.equal(chart.getAverages(length).at(-1).value,rows.slice(-length).reduce((sum,row)=>sum+row.close,0)/length);
+});

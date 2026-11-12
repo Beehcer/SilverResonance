@@ -28,7 +28,7 @@
         }else{
           const changes={};for(const key of ['time','price'])if(!equal(old[key],point[key]))changes[key]=point[key];
           const anchorChanged=!equal(old.chart_anchor??null,point.chart_anchor??null);
-          if(anchorChanged||Object.hasOwn(changes,'time')&&(old.chart_anchor!=null||point.chart_anchor!=null)){changes.time=point.time;changes.chart_anchor=clone(point.chart_anchor??null);}
+          if(anchorChanged||Object.hasOwn(changes,'time')&&(Object.hasOwn(point,'chart_anchor')||old.chart_anchor!=null)){changes.time=point.time;changes.chart_anchor=clone(point.chart_anchor??null);}
           if(Object.keys(changes).length)edit.node_updates.push({id:point.id,changes});
         }
       });

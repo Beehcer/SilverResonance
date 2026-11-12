@@ -101,8 +101,11 @@ def validate_chart_anchor(anchor):
     """Optional source-candle coordinates; null explicitly restores absolute-time positioning."""
     if anchor is None:
         return
-    if not isinstance(anchor, dict) or set(anchor) != {"period", "base_time", "offset"}:
+    if (not isinstance(anchor, dict) or not {"period", "base_time", "offset"} <= set(anchor)
+            or set(anchor) - {"period", "base_time", "offset", "basis"}):
         raise ValueError("图表锚定须包含来源周期、基准K线时间与柱位偏移")
+    if "basis" in anchor and anchor["basis"] not in ("native_v1", "trading_minutes_v1"):
+        raise ValueError("图表锚定的K线口径无效")
     if anchor["period"] not in ("day", "m30", "m3"):
         raise ValueError("图表锚定周期无效")
     base, offset = anchor["base_time"], anchor["offset"]

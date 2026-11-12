@@ -35,6 +35,36 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     def fail(message, code):
         return jsonify(status="error", message=message), code
 
+    def candle_client_current():
+        return (request.headers.get("X-Workspace-Candle-Protocol") == "2"
+                or request.args.get("candle_protocol") == "2")
+
+    @bp.before_request
+    def protect_candle_transition():
+        # An already-open older tab cannot interpret the new coordinate basis.
+        # Keep its last known picture; require reload before returning a changed
+        # timeline or accepting edits. Never reinterpret old data in that tab.
+        if candle_client_current():
+            return None
+        symbol = (request.view_args or {}).get("symbol") or request.args.get("symbol")
+        if symbol is None and request.is_json and (request.content_length or 0) <= MAX_REQUEST_BYTES:
+            value = request.get_json(silent=True)
+            symbol = value.get("symbol") if isinstance(value, dict) else None
+        g.candle_symbol = symbol
+        if isinstance(symbol, str) and store.has_candle_reference(symbol):
+            return fail("K线与画线定位已升级，请刷新页面继续查看和编辑；已有计划已保留。", 426)
+
+    @bp.after_request
+    def protect_transition_during_request(response):
+        # The feed may publish its very first transition while a legacy GET is
+        # already running. Recheck immediately before returning any new data.
+        symbol = getattr(g, "candle_symbol", None)
+        if (response.status_code == 200 and not candle_client_current()
+                and isinstance(symbol, str) and store.has_candle_reference(symbol)):
+            response = jsonify(status="error", message="K线与画线定位已升级，请刷新页面继续查看和编辑；已有计划已保留。")
+            response.status_code = 426
+        return response
+
     def body():
         if not request.is_json:
             raise WorkspaceError("请求需要使用 JSON 格式")
@@ -424,6 +454,9 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
                 # either be included below or make wait_for_events return now.
                 marker = store.event_marker(scope)
                 try:
+                    if not candle_client_current() and store.has_candle_reference(symbol):
+                        yield 'event: unavailable\ndata: {"status":"reload_required"}\n\n'
+                        return
                     if now >= next_plan_check or checked_marker != marker[0]:
                         revision = store.event_state(token, scope)
                         if revision is None:

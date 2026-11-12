@@ -16,7 +16,7 @@
   function priceNumber(value){if(value===null||value===undefined||String(value).trim()==='')return null;const number=Number(value);return Number.isFinite(number)&&number>0?number:null;}
   function zoneBounds(object){if(!object||!Array.isArray(object.points)||object.points.length!==2)return null;const[a,b]=object.points;if(!finite(a.price)||!finite(b.price)||a.price<=0||b.price<=0||!finite(a.time)||!finite(b.time))return null;return{low:Math.min(a.price,b.price),high:Math.max(a.price,b.price),start:Math.min(a.time,b.time),end:Math.max(a.time,b.time)};}
   function timeScale(bars=[],period=null){
-    const times=bars.map(bar=>timestamp(bar.time??bar.dt)).filter(finite),step=INTERVAL[period]||1800000;
+    const times=bars.map(bar=>timestamp(typeof bar==='number'?bar:bar.time??bar.dt)).filter(finite),step=INTERVAL[period]||1800000;
     const position=time=>{
       if(!times.length)return time/step;
       if(time<=times[0])return (time-times[0])/step;
@@ -47,17 +47,31 @@
     };
     return{x,y,time,price:py=>view.max-(py-plot.y)/plot.h*(view.max-view.min)};
   }
+  function anchorSource(anchor,market){
+    const period=anchor?.period,basis=anchor?.basis||'native_v1',displayBasis=market?.candle_basis?.[period]||'native_v1';
+    const reference=market?.anchor_reference?.[period];
+    if(reference?.basis===basis&&reference.target_basis===displayBasis&&Array.isArray(reference.source_times)&&finite(reference.target_base_time))return{key:period+':'+basis+':reference',period,basis,displayBasis,reference,bars:reference.source_times};
+    return{key:period+':'+basis,period,basis,displayBasis,bars:basis===displayBasis?market?.periods?.[period]||[]:basis==='native_v1'?market?.anchor_periods?.[period]||[]:[]};
+  }
   function resolvePointTime(point,market,scales=null){
     const anchor=point?.chart_anchor;if(!anchor||!INTERVAL[anchor.period]||!finite(anchor.base_time)||!finite(anchor.offset))return point.time;
-    const scale=scales?.[anchor.period]||timeScale(market?.periods?.[anchor.period]||[],anchor.period);
+    const source=anchorSource(anchor,market),scale=scales?.[source.key]||timeScale(source.bars,anchor.period);
     if(!scale.indices.has(anchor.base_time))return point.time;
-    return scale.time(scale.indices.get(anchor.base_time)+anchor.offset);
+    const position=scale.indices.get(anchor.base_time)+anchor.offset;
+    if(source.reference&&position>scale.times.length-1){
+      const target=scales?.[anchor.period+':'+source.displayBasis]||timeScale(market?.periods?.[anchor.period]||[],anchor.period);
+      if(!target.indices.has(source.reference.target_base_time))return point.time;
+      // A frozen cutover reference keeps unfulfilled future slots anchored to
+      // one real target candle, rather than drifting with every latest quote.
+      return target.time(target.indices.get(source.reference.target_base_time)+position-(scale.times.length-1));
+    }
+    return scale.time(position);
   }
-  function anchorPoint(point,bars,period,preparedScale=null){
+  function anchorPoint(point,bars,period,preparedScale=null,basis=null){
     const result={...point,chart_anchor:null};
     const scale=preparedScale||timeScale(bars,period),last=scale.times.at(-1);
     const offset=finite(last)?scale.position(point.time)-(scale.times.length-1):null;
-    if(finite(last)&&point.time>last&&offset<=10000)result.chart_anchor={period,base_time:last,offset};
+    if(finite(last)&&point.time>last&&offset<=10000)result.chart_anchor={period,base_time:last,offset,...(basis?{basis}:{})};
     return result;
   }
   function preserveView(view,previous,bars,period,follow=false,previousScale=null,nextScale=null){
@@ -103,6 +117,29 @@
     const next=bars[index+1],previous=bars[index-1],slot=next?Math.abs(tx.x(next.time)-tx.x(bar.time)):previous?Math.abs(tx.x(bar.time)-tx.x(previous.time)):Math.abs(tx.x(bar.time+INTERVAL[period])-tx.x(bar.time));
     return Math.max(1,Math.min(plot.w*.8,slot*.76));
   }
+  function timeAxisTicks(bars,view,plot,period,tx,preparedScale=null){
+    if(!bars.length||!view||!tx||plot.w<=0)return[];
+    const scale=preparedScale||timeScale(bars,period),last=bars.at(-1).time,count=Math.max(1,Math.min(8,Math.floor(plot.w/(period==='day'?64:96)))),ticks=[],seen=new Set();
+    const labelAt=time=>{const date=new Date(time+8*3600000),pad=value=>String(value).padStart(2,'0'),day=pad(date.getUTCMonth()+1)+'/'+pad(date.getUTCDate());return period==='day'?day:day+' '+pad(date.getUTCHours())+':'+pad(date.getUTCMinutes());};
+    for(let index=0;index<count;index++){
+      const target=plot.x+plot.w*(index+.5)/count,time=tx.time(target);let tick;
+      if(time>last){
+        const offset=Math.max(1,Math.round(scale.position(time)-(scale.times.length-1)));
+        tick={kind:'future',offset,x:tx.x(scale.time(scale.times.length-1+offset)),label:'未来 +'+offset+'根'};
+      }else{
+        const at=barIndex(bars,time),candidates=[bars[at-1],bars[at]].filter(bar=>bar&&tx.x(bar.time)>=plot.x&&tx.x(bar.time)<=plot.x+plot.w);
+        candidates.sort((a,b)=>Math.abs(tx.x(a.time)-target)-Math.abs(tx.x(b.time)-target));
+        const bar=candidates[0];if(!bar)continue;
+        tick={kind:'history',time:bar.time,x:tx.x(bar.time),label:labelAt(bar.time)};
+      }
+      const key=tick.kind+':'+(tick.time??tick.offset),width=textWidth(tick.label,9);
+      if(seen.has(key)||tick.x<plot.x||tick.x>plot.x+plot.w||width>plot.w-4)continue;
+      tick.labelX=Math.max(plot.x+2,Math.min(tick.x-width/2,plot.x+plot.w-width-2));
+      if(ticks.length&&tick.labelX<ticks.at(-1).right+10)continue;
+      tick.right=tick.labelX+width;ticks.push(tick);seen.add(key);
+    }
+    return ticks;
+  }
   function validStopSide(direction,entry,stop){entry=priceNumber(entry);stop=priceNumber(stop);return Boolean(entry&&stop&&(direction==='long'?stop<entry:direction==='short'?stop>entry:false));}
   function planLevelStatus(plan){if(!priceNumber(plan.planned_entry_price))return{state:'missing-entry',text:'未设入场'};if(!['long','short'].includes(plan.direction))return{state:'missing-direction',text:'未选多空'};if(!priceNumber(plan.stop_price))return{state:'missing-stop',text:'未设止损'};return validStopSide(plan.direction,plan.planned_entry_price,plan.stop_price)?{state:'valid',text:''}:{state:'invalid-stop',text:plan.direction==='long'?'止损须低于计划入场价 · 方向仍为做多':'止损须高于计划入场价 · 方向仍为做空'};}
   function planLevelGeometry(plan,tx,plot,width){const levels=PLAN_FIELDS.map(field=>({field,price:priceNumber(plan[field])})).filter(object=>object.price).map(object=>({...object,y:tx.y(object.price)})).filter(object=>object.y>=plot.y&&object.y<=plot.y+plot.h).sort((a,b)=>a.y-b.y),height=28,gap=3;let previous=-Infinity;for(const level of levels){let y=Math.max(plot.y,Math.min(plot.y+plot.h-height,level.y-height/2));y=Math.max(y,previous+height+gap);level.label={x:plot.x+plot.w+2,y,w:Math.max(40,width-(plot.x+plot.w)-5),h:height};previous=y;}if(levels.length&&levels.at(-1).label.y+height>plot.y+plot.h){const shift=levels.at(-1).label.y+height-plot.y-plot.h;for(const level of levels)level.label.y-=shift;}return levels;}
@@ -115,6 +152,7 @@
   function adoptRemoteConflicts(pending,conflicts){const keys=new Set(conflicts);if(keys.has('base_revision'))return{changes:{},upsert_objects:[],delete_object_ids:[]};return{changes:Object.fromEntries(Object.entries(pending.changes||{}).filter(([key])=>!keys.has(key))),upsert_objects:(pending.upsert_objects||[]).filter(object=>!keys.has('objects:'+object.id)),delete_object_ids:(pending.delete_object_ids||[]).filter(id=>!keys.has('objects:'+id))};}
   function createSVG(tag,attrs={},text){const element=document.createElementNS(NS,tag);for(const[key,value]of Object.entries(attrs))element.setAttribute(key,String(value));if(text!==undefined)element.textContent=String(text);return element;}
   function priceLabel(value,tick){return finite(value)?value.toLocaleString('en-US',{maximumFractionDigits:Math.min(6,Math.max(0,(String(tick||1).split('.')[1]||'').length))}):'—';}
+  function indicatorLabel(value,tick){return finite(value)?value.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:Math.min(8,Math.max(2,(String(tick||1).split('.')[1]||'').length+2))}):'—';}
   function movingAverages(bars,length){let sum=0;return bars.map((bar,index)=>{sum+=bar.close;if(index>=length)sum-=bars[index-length].close;return index>=length-1?{time:bar.time,value:sum/length}:null;});}
   function infiniteSegment(a,b,plot){const dx=b.x-a.x,dy=b.y-a.y;if(Math.abs(dx)<.001)return[{x:a.x,y:plot.y},{x:a.x,y:plot.y+plot.h}];const at=x=>({x,y:a.y+(x-a.x)*dy/dx});return[at(plot.x),at(plot.x+plot.w)];}
   class Chart{
@@ -137,7 +175,7 @@
       if(reset||market?.symbol&&this.market?.symbol&&market.symbol!==this.market.symbol){this.clearTouchGesture({applyMarket:false});this.pendingMarket=null;}
       if(reset){this.linkedRange=null;this.hoverDayKey=null;this.crosshair=null;this.pendingMarket=null;}
       if(!reset&&(this.drag||this.path.length||this.pinch)){this.pendingMarket=market;this.plan=plan||{objects:[]};this.render();return;}
-      const previousBars=this.bars,previousScale=this.timelineBars===previousBars?this.timelineScale:null,planChanged=this.plan!==plan&&JSON.stringify(this.plan)!==JSON.stringify(plan||{objects:[]});
+      const previousBars=this.bars,previousScale=this.timelineBars===previousBars?this.timelineScale:null,previousBasis=this.market?.candle_basis?.[this.period]||'native_v1',planChanged=this.plan!==plan&&JSON.stringify(this.plan)!==JSON.stringify(plan||{objects:[]});
       this.market=market;this.plan=plan||{objects:[]};this.tick=market?.tick||1;this.anchorScales={};this.syncTitleEditor();
       const source=market?.periods?.[this.period]||[],rowKey=bar=>bar?['dt','time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':'):'',sourceSignature=[market?.symbol,market?.history_token,source.length,rowKey(source[0]),rowKey(source.at(-2)),rowKey(source.at(-1))].join('|');
       if(source!==this.sourceBars||sourceSignature!==this.sourceSignature){
@@ -148,10 +186,17 @@
       this.sourceBars=source;this.sourceSignature=sourceSignature;
       // Mapped forecasts also depend on their source timeframe. Its opening may
       // arrive before this chart's next candle, so invalidate that projection too.
-      const anchorTimelineSignature=Object.keys(INTERVAL).filter(period=>period!==this.period).map(period=>{const rows=market?.periods?.[period]||[];return[period,rows.length,...[rows[0],rows.at(-2),rows.at(-1)].map(row=>timestamp(row?.time??row?.dt))].join(':');}).join('|');
+      const timelineKey=rows=>[rows.length,...[rows[0],rows.at(-2),rows.at(-1)].map(row=>timestamp(row?.time??row?.dt))].join(':');
+      const anchorTimelineSignature=Object.keys(INTERVAL).map(period=>{const reference=market?.anchor_reference?.[period];return[period,market?.candle_basis?.[period]||'native_v1',period===this.period?'':timelineKey(market?.periods?.[period]||[]),timelineKey(market?.anchor_periods?.[period]||[]),reference?JSON.stringify([reference.basis,reference.target_basis,reference.target_base_time,reference.source_times?.length,reference.source_times?.[0],reference.source_times?.at(-1)]):''].join(':');}).join('|');
       const first=this.bars[0],last=this.bars.at(-1),previousLastTime=this.lastBarTime,signature=first&&last?`${first.time}:${first.open}:${last.time}:${this.bars.length}`:'',tailSignature=this.bars.slice(-2).map(bar=>['time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':')).join('|'),contentSignature=signature+`:${tailSignature}:${anchorTimelineSignature}:${market?.history_token}:${market?.fresh}:${market?.feed_status}:${market?.unavailable}`,unchanged=contentSignature===this.contentSignature;
       this.contentSignature=contentSignature;this.dataSignature=signature;
-      if(!reset&&this.view&&previousBars.length&&signature!==this.previousTimelineSignature)this.view=preserveView(this.view,previousBars,this.bars,this.period,this.viewCustomized!==true&&this.followLatest!==false,previousScale,this.getTimeScale());
+      if(!reset&&this.view&&previousBars.length&&signature!==this.previousTimelineSignature){
+        const reference=market?.anchor_reference?.[this.period],nextBasis=market?.candle_basis?.[this.period]||'native_v1';
+        if(previousBasis!==nextBasis&&reference?.basis===previousBasis&&reference.target_basis===nextBasis&&reference.source_times?.length){
+          const base=reference.source_times.at(-1),convert=time=>time>base?resolvePointTime({time,chart_anchor:{period:this.period,basis:previousBasis,base_time:base,offset:(time-base)/INTERVAL[this.period]}},market):time;
+          this.view={...this.view,start:convert(this.view.start),end:convert(this.view.end)};
+        }else this.view=preserveView(this.view,previousBars,this.bars,this.period,this.viewCustomized!==true&&this.followLatest!==false,previousScale,this.getTimeScale());
+      }
       this.previousTimelineSignature=signature;
       if(reset||!this.view)this.fit();
       else if(this.viewCustomized===true||this.followLatest===false){if(!unchanged||planChanged)this.render();}
@@ -244,9 +289,17 @@
     zoom(scale,point=null){if(!this.view)return;const inside=point&&this.plot&&point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h,rightBar=this.bars.filter(b=>b.time>=this.view.start&&b.time<=this.view.end).at(-1),anchor=inside?this.toValue(point,false):rightBar?{time:rightBar.time,price:rightBar.close}:null;this.view=this.priceFit(zoomView(this.view,this.period,scale,anchor,this.bars,this.zoomLimit()));this.autoPrice=true;this.viewCustomized=true;this.callbacks.viewChanged?.(this);this.render();}
     getTimeScale(){if(this.timelineBars!==this.bars||this.timelinePeriod!==this.period){this.timelineBars=this.bars;this.timelinePeriod=this.period;this.timelineScale=timeScale(this.bars,this.period);}return this.timelineScale;}
     getAverages(length){if(this.averageBars!==this.bars){this.averageBars=this.bars;this.averages=new Map();}if(!this.averages.has(length))this.averages.set(length,movingAverages(this.bars,length));return this.averages.get(length);}
-    pointTime(point){this.anchorScales??={};const period=point?.chart_anchor?.period;if(period&&INTERVAL[period]&&!this.anchorScales[period])this.anchorScales[period]=period===this.period?this.getTimeScale():timeScale(this.market?.periods?.[period]||[],period);return resolvePointTime(point,this.market,this.anchorScales);}
+    pointTime(point){
+      this.anchorScales??={};const anchor=point?.chart_anchor,period=anchor?.period;
+      if(period&&INTERVAL[period]){
+        const source=anchorSource(anchor,this.market),targetKey=period+':'+source.displayBasis;
+        if(!this.anchorScales[source.key])this.anchorScales[source.key]=period===this.period&&source.basis===source.displayBasis&&!source.reference?this.getTimeScale():timeScale(source.bars,period);
+        if(source.reference&&!this.anchorScales[targetKey])this.anchorScales[targetKey]=period===this.period?this.getTimeScale():timeScale(this.market?.periods?.[period]||[],period);
+      }
+      return resolvePointTime(point,this.market,this.anchorScales);
+    }
     zoomLimit(){const scale=this.getTimeScale();let left=0,right=this.bars.length;for(const object of this.objects())for(const point of object.points||[]){const position=scale.position(this.pointTime(point));if(finite(position)){left=Math.min(left,position);right=Math.max(right,position);}}return Math.max(10000,(right-left)*1.4+30);}
-    forecastPoint(point){return anchorPoint(point,this.bars,this.period,this.getTimeScale());}
+    forecastPoint(point){return anchorPoint(point,this.bars,this.period,this.getTimeScale(),this.market?.candle_basis?.[this.period]||null);}
     applyPendingMarket(){if(this.pendingMarket&&!this.drag&&!this.path.length&&!this.pinch){const market=this.pendingMarket;this.pendingMarket=null;this.setData(market,this.plan);}}
     editForecastPoints(object,segment,direction){
       // Preserve original coordinates by provenance, not geometric equality: an inserted
@@ -487,7 +540,7 @@
       const last=this.bars.at(-1),futureX=Math.max(plot.x,tx.x(last.time));layer.append(createSVG('rect',{x:futureX,y:plot.y,width:Math.max(0,plot.x+plot.w-futureX),height:plot.h,fill:'#a5adb5','fill-opacity':'.035'}));
       this.drawLinkedRange(layer);
       for(let index=0;index<=5;index++){const price=view.min+(view.max-view.min)*index/5,y=tx.y(price);this.svg.append(createSVG('line',{x1:plot.x,y1:y,x2:plot.x+plot.w,y2:y,stroke:'#2b333b','stroke-dasharray':'1 3','stroke-width':.6}),createSVG('text',{x:plot.x+plot.w+5,y:y+3,fill:'#7f8b96','font-size':10},priceLabel(price,this.tick)));}
-      for(let index=0;index<5;index++){const x=plot.x+plot.w*index/5,time=tx.time(x),date=new Date(time);this.svg.append(createSVG('line',{x1:x,y1:plot.y,x2:x,y2:plot.y+plot.h,stroke:'#293139','stroke-dasharray':'1 3','stroke-width':.6}),createSVG('text',{x:x+2,y:plot.y+plot.h+13,fill:'#75818c','font-size':9},this.period==='day'?`${date.getMonth()+1}/${date.getDate()}`:date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})));}
+      for(const tick of timeAxisTicks(this.bars,view,plot,this.period,tx,this.getTimeScale()))this.svg.append(createSVG('line',{'data-time-grid':tick.kind,x1:tick.x,y1:plot.y,x2:tick.x,y2:plot.y+plot.h,stroke:'#293139','stroke-dasharray':'1 3','stroke-width':.6}),createSVG('text',{'data-time-axis':tick.kind,...(tick.kind==='history'?{'data-bar-time':tick.time}:{'data-future-bars':tick.offset}),x:tick.labelX,y:plot.y+plot.h+13,fill:'#75818c','font-size':9},tick.label));
       const maStart=Math.max(0,barIndex(this.bars,view.start)-1),maEnd=Math.min(this.bars.length,barIndex(this.bars,view.end,true)+1);
       for(const[length,color]of[[5,'#dededb'],[10,'#d8c345'],[20,'#c65aba']]){const values=this.getAverages(length).slice(maStart,maEnd).filter(Boolean).map(point=>`${tx.x(point.time)},${tx.y(point.value)}`).join(' ');if(values)layer.append(createSVG('polyline',{points:values,fill:'none',stroke:color,'stroke-width':.65,opacity:.8}));}
       const visible=this.visibleBars(),body=candleWidth(this.bars,tx,plot,this.period);for(const bar of visible){const x=tx.x(bar.time);if(x<plot.x-body||x>plot.x+plot.w+body)continue;const up=bar.close>=bar.open,color=up?'#ef5350':'#22c55e',top=Math.min(tx.y(bar.open),tx.y(bar.close));layer.append(createSVG('line',{x1:x,y1:tx.y(bar.high),x2:x,y2:tx.y(bar.low),stroke:color,'stroke-width':.8}),createSVG('rect',{'data-candle':bar.time,x:x-body/2,y:top,width:body,height:Math.max(1,Math.abs(tx.y(bar.open)-tx.y(bar.close))),fill:up?'#111519':color,stroke:color,'stroke-width':.8}));}
@@ -553,5 +606,5 @@
       layer.append(outline);
     }
   }
-  return{isForecast,timeScale,resolvePointTime,anchorPoint,preserveView,dailyRange,rangeBars,fitVisiblePrice,candleWidth,wavePoints,Chart,timestamp,snap,priceNumber,zoneBounds,transform,fitView,zoomView,segmentDistance,infiniteSegment,editPathPoints,pathPeriodOpacity,visibleOnPeriod,priceLabel,mergePending,pendingAfterAck,adoptRemoteConflicts,validStopSide,planLevelStatus,planLevelGeometry,hitPlanLevel,beginLevelDrag,moveLevelDrag,levelCommit,PLAN_FIELDS,INTERVAL,TYPES};
+  return{isForecast,timeScale,resolvePointTime,anchorPoint,preserveView,dailyRange,rangeBars,fitVisiblePrice,candleWidth,timeAxisTicks,wavePoints,Chart,timestamp,snap,priceNumber,zoneBounds,transform,fitView,zoomView,segmentDistance,infiniteSegment,editPathPoints,pathPeriodOpacity,visibleOnPeriod,priceLabel,indicatorLabel,mergePending,pendingAfterAck,adoptRemoteConflicts,validStopSide,planLevelStatus,planLevelGeometry,hitPlanLevel,beginLevelDrag,moveLevelDrag,levelCommit,PLAN_FIELDS,INTERVAL,TYPES};
 }));

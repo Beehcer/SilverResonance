@@ -46,6 +46,7 @@ RUNTIME_PY_FILES = (
     "user_settings.py",
     "workspace_api.py",
     "workspace_backup.py",
+    "workspace_candles.py",
     "workspace_market.py",
     "workspace_rules.py",
     "workspace_store.py",

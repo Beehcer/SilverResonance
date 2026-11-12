@@ -11,8 +11,56 @@ function full(symbol=SYMBOL,price=101,counts={day:180,m30:6000,m3:10000}){
       open:100,high:110,low:90,close:price,volume:0,oi:100+index,closed:index<counts[period]-1}))]))};
 }
 const small=(symbol=SYMBOL,price=101)=>full(symbol,price,{day:3,m30:4,m3:5});
+function rebased(base=small(),id='reference-1'){
+  return{...copy(base),candle_basis:{m30:'trading_minutes_v1'},anchor_reference_id:id,
+    anchor_reference:{m30:{basis:'native_v1',target_basis:'trading_minutes_v1',source_times:base.periods.m30.map(row=>Date.parse(row.dt)),target_base_time:Date.parse(base.periods.m30.at(-1).dt)}}};
+}
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 async function writesDone(store){await Promise.all([...store.writes.values()]);await tick();}
+
+test('preview retains the entire fixed reference while limiting candles and isolates nested metadata',()=>{
+  const source=rebased(full()),preview=P.prepare(source,1000).market;
+  assert.equal(preview.periods.m30.length,240);assert.equal(preview.anchor_reference.m30.source_times.length,6000);
+  assert.deepEqual(preview.candle_basis,source.candle_basis);assert.equal(preview.anchor_reference_id,'reference-1');assert.equal(preview.fresh,false);
+  preview.anchor_reference.m30.source_times[0]=0;preview.candle_basis.m30='bad';
+  assert.notEqual(source.anchor_reference.m30.source_times[0],0);assert.equal(source.candle_basis.m30,'trading_minutes_v1');
+  for(const change of [value=>delete value.anchor_reference,value=>delete value.anchor_reference_id,value=>value.anchor_reference.m30.source_times.reverse(),value=>value.anchor_reference.m30.target_basis='wrong']){
+    const bad=rebased();change(bad);assert.equal(P.prepare(bad),null);
+  }
+});
+
+test('basis and reference transitions bypass preview throttle and old native packets cannot downgrade the cache',async()=>{
+  let now=1000;const saved=[],store=new P.Store({now:()=>now,storage:{put:async item=>saved.push(copy(item))}});
+  store.put(small());now++;store.put(rebased(small(SYMBOL,102)));now++;store.put(rebased(small(SYMBOL,103),'reference-2'));await writesDone(store);
+  assert.equal(saved.length,3);assert.equal((await store.get(SYMBOL)).anchor_reference_id,'reference-2');
+  now++;store.put(rebased(small(SYMBOL,104),'reference-2'));await writesDone(store);assert.equal(saved.length,3);
+  now+=31000;store.put(small(SYMBOL,99));await writesDone(store);assert.equal(saved.length,3);assert.equal((await store.get(SYMBOL)).price,103);
+});
+
+test('old native previews may appear before full data but cannot overwrite a new basis during an asynchronous disk read',async()=>{
+  let now=1000;const item=P.prepare(small(),now),pending=deferred();
+  const oldStore=new P.Store({now:()=>now,storage:{get:async()=>copy(item)}});assert.equal((await oldStore.get(SYMBOL)).client_cached,true);
+  const store=new P.Store({now:()=>now,storage:{get:()=>pending.promise,put:async()=>{}}}),reading=store.get(SYMBOL);
+  now++;store.put(rebased(small(SYMBOL,104)));pending.resolve(item);const latest=await reading;
+  assert.equal(latest.candle_basis.m30,'trading_minutes_v1');assert.equal(latest.price,104);await writesDone(store);
+  now+=P.TTL;const lateNative=P.prepare(small(),now);store.storage.get=async()=>lateNative;
+  assert.equal(await store.get(SYMBOL),null);
+});
+
+test('persistent preview round-trip retains its coordinate basis and reference independently of source objects',async()=>{
+  const idb=memoryIndexedDB(),store=new P.Store({indexedDB:idb,now:()=>1000}),market=rebased();
+  store.put(market);await writesDone(store);market.anchor_reference.m30.source_times[0]=0;
+  const loaded=await new P.Store({indexedDB:idb,now:()=>2000}).get(SYMBOL);
+  assert.equal(loaded.anchor_reference_id,'reference-1');assert.notEqual(loaded.anchor_reference.m30.source_times[0],0);
+  assert.equal(loaded.partial,true);assert.equal(loaded.history_token,null);assert.equal(loaded.fresh,false);
+});
+
+test('preview eviction does not allow delayed old native snapshots to restore the obsolete basis',async()=>{
+  let now=1000;const store=new P.Store({indexedDB:null,now:()=>now});store.put(rebased());
+  for(let i=0;i<16;i++){now++;store.put(small('TEST.preview'+i));}
+  assert.equal(store.memory.size,16);assert.equal(store.memory.has(SYMBOL),false);
+  now+=31000;store.put(small());assert.equal(store.memory.has(SYMBOL),false);assert.equal(await store.get(SYMBOL),null);
+});
 
 // Model the asynchronous IndexedDB request/transaction boundary, then exercise
 // Store's real disk adapter, including its cursor-based eviction policy.

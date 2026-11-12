@@ -682,7 +682,7 @@ test('forecast drag commits only the grabbed ID after peer edits, insertion and 
     if(timing==='before-move')chart.move(pointer(x+16,y+10));
     chart.up(pointer(x+16,y+10));
     assert.ok(local,`${kind}: ${timing}`);const pending=M.diff(remote,local),edit=pending.object_edits[0];
-    assert.deepEqual(edit.node_updates,[{id:'b',changes:{time:44,price:104}}]);
+    assert.deepEqual(edit.node_updates,[{id:'b',changes:{time:44,price:104,chart_anchor:null}}]);
     assert.deepEqual(edit.node_inserts,[]);assert.deepEqual(edit.node_deletes,[]);assert.deepEqual(edit.changes,{});
     const saved=M.apply(remote,pending).objects[0];assert.deepEqual(saved.points.map(point=>point.id),['a','peer-insert','b','c']);
     assert.deepEqual(saved.points.map(point=>point.label),['1','2','3','4']);assert.equal(saved.points[0].price,101);assert.equal(saved.name,'Peer title');assert.equal(saved.color,'#00cc88');
