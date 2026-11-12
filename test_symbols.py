@@ -17,7 +17,8 @@ TODAY = date(2026, 10, 19)
 CONTRACTS = ["SHFE.ag2611", "SHFE.au2612", "SHFE.rb2701", "CZCE.SA701",
              "CZCE.FG701", "SHFE.bu2612", "CZCE.CF701", "SHFE.sp2701",
              "SHFE.ss2611", "DCE.m2701", "DCE.jm2701", "CZCE.MA701",
-             "CZCE.RM705", "DCE.jd2612", "CZCE.AP612", "CZCE.TA705"]
+             "CZCE.RM705", "DCE.jd2612", "CZCE.AP612", "CZCE.TA705",
+             "DCE.l2705", "DCE.p2612"]
 
 
 def fake_api():
@@ -81,26 +82,31 @@ class SymbolsTests(unittest.TestCase):
         self.assertEqual(list(symbols.contracts_path().parent.glob("*.tmp")), [])
 
     def test_new_products_are_available_offline_with_correct_tick_value(self):
-        self.assertEqual(len(symbols.PRESETS), 16)
+        self.assertEqual(len(symbols.PRESETS), 18)
         self.assertEqual(
             [(row["symbol"], row["name"], row["tick"], row["tick_value"])
-             for row in symbols.PRESETS[-4:]],
+             for row in symbols.PRESETS[12:]],
             [("CZCE.RM701", "菜粕701", 1.0, 10.0),
              ("DCE.jd2701", "鸡蛋2701", 1.0, 10.0),
              ("CZCE.AP701", "苹果701", 1.0, 10.0),
-             ("CZCE.TA701", "PTA701", 2.0, 10.0)])
+             ("CZCE.TA701", "PTA701", 2.0, 10.0),
+             ("DCE.l2701", "塑料2701", 1.0, 5.0),
+             ("DCE.p2701", "棕榈2701", 1.0, 10.0)])
+        for row, multiplier in zip(symbols.PRESETS[-2:], (5, 10)):
+            self.assertEqual(row["tick_value"] / row["tick"], multiplier)
+            self.assertNotIn("expire_datetime", row, "Calendar defaults must not look SDK-verified.")
 
     def test_new_products_use_verified_main_and_live_contract_parameters(self):
         api, _, quotes = fake_api()
-        for quote, tick, multiplier in zip(quotes[-4:], (1, 1, 1, 2), (10, 10, 10, 5)):
+        for quote, tick, multiplier in zip(quotes[12:16], (1, 1, 1, 2), (10, 10, 10, 5)):
             quote.price_tick, quote.volume_multiple = tick, multiplier
         result = symbols.refresh_from_api(api, TODAY)
-        self.assertEqual(api.get_quote_list.call_args_list[0].args[0][-4:],
+        self.assertEqual(api.get_quote_list.call_args_list[0].args[0][12:16],
                          ["KQ.m@CZCE.RM", "KQ.m@DCE.jd", "KQ.m@CZCE.AP", "KQ.m@CZCE.TA"])
-        self.assertEqual([p["symbol"] for p in result[-4:]], CONTRACTS[-4:])
-        self.assertEqual([p["name"] for p in result[-4:]],
+        self.assertEqual([p["symbol"] for p in result[12:16]], CONTRACTS[12:16])
+        self.assertEqual([p["name"] for p in result[12:16]],
                          ["菜粕705", "鸡蛋2612", "苹果612", "PTA705"])
-        for row in result[-4:]:
+        for row in result[12:16]:
             with self.subTest(symbol=row["symbol"]):
                 cfg = SimpleNamespace(SYMBOL=row["symbol"])
                 symbols.apply_symbol_params(cfg)
@@ -109,21 +115,45 @@ class SymbolsTests(unittest.TestCase):
         self.assertEqual(symbols.rollover_if_expired("DCE.jd2601"), "DCE.jd2612")
         self.assertEqual(symbols.rollover_if_expired("CZCE.TA601"), "CZCE.TA705")
 
-    def test_original_twelve_product_cache_survives_expansion_without_rewrite(self):
+    def test_plastic_and_palm_resolve_actual_main_and_parameters_in_one_atomic_batch(self):
+        api, _, quotes = fake_api()
+        # Deliberately differ from calendar codes and one offline tick: the SDK
+        # owns both contract selection and risk metadata, including future changes.
+        quotes[-2].price_tick, quotes[-2].volume_multiple = 1, 5
+        quotes[-1].price_tick, quotes[-1].volume_multiple = 2, 10
+        result = symbols.refresh_from_api(api, TODAY)
+        self.assertEqual(api.get_quote_list.call_count, 2)
+        self.assertEqual(api.get_quote_list.call_args_list[0].args[0][-2:], ["KQ.m@DCE.l", "KQ.m@DCE.p"])
+        self.assertEqual(api.get_quote_list.call_args_list[1].args[0][-2:], CONTRACTS[-2:])
+        self.assertEqual([(p["symbol"], p["name"], p["tick"], p["tick_value"]) for p in result[-2:]],
+                         [("DCE.l2705", "塑料2705", 1, 5), ("DCE.p2612", "棕榈2612", 2, 20)])
+        for old, expected in (("DCE.l2609", CONTRACTS[-2]), ("DCE.p2609", CONTRACTS[-1])):
+            self.assertEqual(symbols.rollover_if_expired(old), expected)
+            cfg = SimpleNamespace(SYMBOL=expected)
+            symbols.apply_symbol_params(cfg)
+            self.assertEqual((cfg.PRICE_TICK, cfg.TICK_VALUE),
+                             (symbols.find(expected)["tick"], symbols.find(expected)["tick_value"]))
+        saved = json.loads(symbols.contracts_path().read_text(encoding="utf-8"))
+        self.assertEqual(saved["presets"], result)
+        self.assertEqual(len(saved["presets"]), 18)
+
+    def test_original_twelve_and_sixteen_product_caches_survive_expansion_without_rewrite(self):
         payload = self.populate_cache()
-        payload["presets"] = payload["presets"][:12]
-        symbols.contracts_path().write_text(json.dumps(payload), encoding="utf-8")
-        saved = symbols.contracts_path().read_bytes()
-        result = symbols.refresh_months(TODAY)
-        self.assertEqual(result[:12], payload["presets"])
-        self.assertEqual(result[12:], symbols._build_presets(TODAY)[12:])
-        self.assertEqual(symbols.contracts_path().read_bytes(), saved)
-        self.assertEqual(symbols.refresh_months(TODAY + timedelta(days=8)),
-                         symbols._build_presets(TODAY + timedelta(days=8)))
+        for count in (12, 16):
+            with self.subTest(count=count):
+                legacy = {**payload, "presets": payload["presets"][:count]}
+                symbols.contracts_path().write_text(json.dumps(legacy), encoding="utf-8")
+                saved = symbols.contracts_path().read_bytes()
+                result = symbols.refresh_months(TODAY)
+                self.assertEqual(result[:count], legacy["presets"])
+                self.assertEqual(result[count:], symbols._build_presets(TODAY)[count:])
+                self.assertEqual(symbols.contracts_path().read_bytes(), saved)
+                self.assertEqual(symbols.refresh_months(TODAY + timedelta(days=8)),
+                                 symbols._build_presets(TODAY + timedelta(days=8)))
 
     def test_other_incomplete_or_invalid_legacy_caches_are_rejected(self):
         good = self.populate_cache()
-        for count in (11, 13, 15):
+        for count in (11, 13, 15, 17):
             payload = deepcopy(good)
             payload["presets"] = payload["presets"][:count]
             symbols.contracts_path().write_text(json.dumps(payload), encoding="utf-8")
@@ -194,12 +224,18 @@ class SymbolsTests(unittest.TestCase):
                     symbols.refresh_from_api(api, TODAY)
                 self.assertEqual(symbols.PRESETS, before)
                 self.assertEqual(symbols.contracts_path().read_bytes(), saved)
-        api, _, actual = fake_api()
-        actual[-1].expired = True  # 新增的最后一项无效时，前十五项也不能先写入。
-        with self.assertRaises(ValueError):
-            symbols.refresh_from_api(api, TODAY)
-        self.assertEqual(symbols.PRESETS, before)
-        self.assertEqual(symbols.contracts_path().read_bytes(), saved)
+        for index in (-2, -1):
+            for target in ("actual", "main"):
+                with self.subTest(new_product=CONTRACTS[index], target=target):
+                    api, main, actual = fake_api()
+                    if target == "actual":
+                        actual[index].expired = True
+                    else:
+                        main[index].underlying_symbol = CONTRACTS[-1 if index == -2 else -2]
+                    with self.assertRaises(ValueError):
+                        symbols.refresh_from_api(api, TODAY)
+                    self.assertEqual(symbols.PRESETS, before)
+                    self.assertEqual(symbols.contracts_path().read_bytes(), saved)
 
     def test_incomplete_batch_and_api_failure_leave_presets_unchanged(self):
         before = deepcopy(symbols.PRESETS)
@@ -237,7 +273,7 @@ class SymbolsTests(unittest.TestCase):
         with patch("socket.socket", side_effect=AssertionError("network forbidden")), \
                 patch.object(symbols.user_settings, "load_settings", side_effect=AssertionError("credentials forbidden")):
             loaded = runpy.run_path(symbols.__file__)
-        self.assertEqual(len(loaded["PRESETS"]), 16)
+        self.assertEqual(len(loaded["PRESETS"]), 18)
         self.assertFalse(symbols.contracts_path().exists())
 
 

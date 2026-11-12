@@ -9,7 +9,7 @@
   - SHFE rb / ss          : 1月 / 5月 / 10月 切换
   - SHFE bu               : 6月 / 9月 / 12月 切换
   - SHFE sp               : 5月 / 9月 切换
-  - DCE  m / jm / jd      : 1月 / 5月 / 9月 切换
+  - DCE  m / jm / jd / l / p: 1月 / 5月 / 9月 切换
   - CZCE SA / FG / CF / MA / RM / TA: 1月 / 5月 / 9月 切换
   - CZCE AP              : 1月 / 5月 / 10月 切换
 
@@ -64,11 +64,14 @@ _TEMPLATES = [
     ("jd", "DCE",  "jd", "鸡蛋",   1.0,  10.0, (1, 5, 9)),
     ("AP", "CZCE", "AP", "苹果",   1.0,  10.0, (1, 5, 10)),
     ("TA", "CZCE", "TA", "PTA",    2.0,  10.0, (1, 5, 9)),
+    ("l",  "DCE",  "l",  "塑料",   1.0,   5.0, (1, 5, 9)),
+    # 棕榈油自2026-04-10交易日起最小变动价位为1元/吨，每手10吨。
+    ("p",  "DCE",  "p",  "棕榈",   1.0,  10.0, (1, 5, 9)),
 ]
 
-# 扩充品种前的缓存固定为以上前 12 项；仅兼容这个已发布版本，
+# 扩充品种前的缓存固定为以上前 12 或 16 项；仅兼容这些已发布版本，
 # 不把任意残缺列表当成有效缓存。新增项仍等待行情线程核实真实主力。
-_LEGACY_CACHE_SIZE = 12
+_LEGACY_CACHE_SIZES = (12, 16)
 
 
 def _next_rollover(rot_months, today=None):
@@ -186,7 +189,7 @@ def _load_cached(now):
         if fetched.utcoffset() != timedelta(hours=8) or not timedelta(0) <= now - fetched <= _CACHE_MAX_AGE:
             return None
         rows = data["presets"]
-        if not isinstance(rows, list) or len(rows) not in (_LEGACY_CACHE_SIZE, len(_TEMPLATES)):
+        if not isinstance(rows, list) or len(rows) not in (*_LEGACY_CACHE_SIZES, len(_TEMPLATES)):
             return None
         validated = [_validated_preset(row, template, now) for row, template in zip(rows, _TEMPLATES)]
         # 不重写缓存、延长缓存有效期或把日历占位保存成已核验主力。

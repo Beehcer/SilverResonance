@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>共振 · 多周期计划工作台</title>
-  <link rel="stylesheet" href="/static/workspace.css?v=20261112-20">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261112-24">
   <link rel="stylesheet" href="/static/workspace-cases.css?v=20261111-4">
 </head>
 <body>
@@ -51,9 +51,11 @@
       <a id="setup-market-link" class="setup-market-link" href="/setup" hidden>主机：配置行情来源 →</a>
       <div class="board-bar"><label class="mobile-only mobile-symbol-control" for="symbol"><span>品种</span><select id="symbol" aria-label="选择品种"></select></label><label class="board-select-control">当前计划 <select id="board-select" aria-label="选择共享计划"><option value="">默认计划</option></select></label><button id="new-board">＋ 新计划</button><button id="copy-board">复制预案</button><button id="share-board" title="伙伴打开链接后进入同一合约、同一共享计划">复制计划链接</button><button id="archive-board">归档</button><label><input id="show-archived" type="checkbox">已归档</label><span id="board-state"></span><div class="board-view-tools"><details id="layout-picker" class="layout-picker"><summary aria-label="切换多周期布局"><span class="layout-glyph">▦</span><span id="layout-name">30 分主图</span><span>⌄</span></summary><div id="layout-menu" class="layout-menu" role="group" aria-label="多周期布局"></div></details></div></div>
       <div id="follow-banner" class="follow-banner" hidden><span id="follow-label"></span><button id="stop-following">退出跟随</button></div><div id="draft-recovery" class="notice" hidden>有未提交的本机草稿。<button id="restore-draft">恢复草稿</button><button id="dismiss-draft">忽略</button><button id="export-draft" type="button">导出草稿</button></div><p id="plan-error" class="error" role="alert"></p>
-      <div id="wave-edit-bar" class="wave-edit-bar" hidden role="toolbar" aria-label="预期线编辑"><strong>1234 预期走势</strong><span id="wave-edit-hint"></span><button id="wave-unlock" type="button">编辑预期线</button><button id="wave-insert" type="button">＋ 新增点</button><button id="wave-remove" type="button">− 删除点</button><button id="wave-lock" type="button">锁定</button><button id="wave-done" type="button">完成</button></div>
-      <div id="drawing-draft" class="drawing-draft" hidden role="status"><span id="drawing-draft-label"></span><button id="finish-drawing" type="button">完成绘制</button><button id="cancel-drawing" type="button">取消绘制</button><small>双击或 Enter 完成并同步给伙伴</small></div>
       <section class="chart-grid" aria-label="多周期行情">
+        <div class="chart-tool-overlays">
+          <div id="wave-edit-bar" class="wave-edit-bar" hidden role="toolbar" aria-label="预期线编辑"><strong>1234 预期走势</strong><span id="wave-edit-hint"></span><button id="wave-unlock" type="button">编辑预期线</button><button id="wave-insert" type="button">＋ 新增点</button><button id="wave-remove" type="button">− 删除点</button><button id="wave-lock" type="button">锁定</button><button id="wave-done" type="button">完成</button></div>
+          <div id="drawing-draft" class="drawing-draft" hidden role="status"><span id="drawing-draft-label"></span><button id="finish-drawing" type="button">完成绘制</button><button id="cancel-drawing" type="button">取消绘制</button><small>双击或 Enter 完成并同步给伙伴</small></div>
+        </div>
         <div id="market-loading" class="market-loading" hidden role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><div><strong id="market-loading-title"></strong><p id="market-loading-detail"></p></div><button id="retry-market" type="button" hidden>重新加载</button></div>
         <article class="chart-panel" data-period="day">
           <header class="chart-heading"><div class="chart-contract"><strong data-symbol-label>—</strong><button class="period-button" title="切换此图放大 / 多图">日线 ⛶</button><span id="quote-day" class="chart-quote"></span></div><div class="chart-actions"><button data-chart-tool="select" title="选择">↖</button><button data-chart-tool="pan" title="平移">✋</button><button data-chart-tool="trend" title="趋势线">╱</button><button data-chart-tool="horizontal" title="水平线">━</button><button data-chart-action="fit" title="复位">⌂</button><button data-chart-action="zoom-out" title="缩小">−</button><button data-chart-action="zoom-in" title="放大">＋</button></div></header>
