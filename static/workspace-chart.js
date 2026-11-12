@@ -120,16 +120,23 @@
   class Chart{
     constructor(host,period,callbacks={}){
       this.host=host;this.period=period;this.callbacks=callbacks;this.bars=[];this.plan={objects:[]};this.view=null;this.tick=1;this.tool='select';this.toolOpacity=1;this.autoPrice=true;this.selected=null;this.selectedAnchor=null;this.path=[];this.drag=null;this.market=null;this.size={w:0,h:0};this.uid='chart-'+period;this.readOnly=false;this.hostTouchAction=host.style.touchAction||'';
-      this.svg=createSVG('svg',{'aria-label':period+' K线、指标与共享绘图',role:'img'});this.svg.style.touchAction='none';host.replaceChildren(this.svg);this.observer=new ResizeObserver(()=>this.render());this.observer.observe(host);
+      this.svg=createSVG('svg',{'aria-label':period+' K线、指标与共享绘图',role:'img'});this.svg.style.touchAction='none';host.replaceChildren(this.svg);this.observer=new ResizeObserver(()=>{if(this.pinch&&(this.pinch.width!==Math.round(host.clientWidth)||this.pinch.height!==Math.round(host.clientHeight))){this.touchBlocked=true;this.finishPinch();}this.render();});this.observer.observe(host);
       this.svg.addEventListener('pointerdown',event=>this.down(event));this.svg.addEventListener('pointermove',event=>this.move(event));this.svg.addEventListener('pointerup',event=>this.up(event));
       this.svg.addEventListener('pointercancel',()=>this.cancelGesture());this.svg.addEventListener('lostpointercapture',()=>{if(this.drag)this.cancelGesture();});this.svg.addEventListener('pointerleave',()=>{this.hoverPath=null;this.pathControl=null;this.snapPreview=null;this.crosshair=null;this.hoverDayKey=null;this.callbacks.hoverDay?.(null);if(!this.drag){this.clearPresence();}if(!this.drag){this.placementPreview=null;this.callbacks.previewLevel?.(null,null);this.render();}});
       this.svg.addEventListener('dblclick',event=>this.doubleClick(event));this.host.addEventListener('contextmenu',event=>this.contextMenu(event));
       this.svg.addEventListener('wheel',event=>{if(this.readOnly)return;event.preventDefault();this.callbacks.interaction?.();this.callbacks.activate?.(period);if(!this.drag)this.zoom(event.deltaY>0?.9:1.11,this.point(event));},{passive:false});
       host.addEventListener('keydown',event=>this.keydown(event));
+      this.touchIds=new Set();
+      // Track outside the SVG: its candle children are replaced on every redraw.
+      document.addEventListener?.('touchstart',event=>{if(this.pinch&&(event.touches.length!==2||!this.pinch.ids.every(id=>Array.from(event.touches).some(touch=>touch.identifier===id)))){this.touchBlocked=true;this.finishPinch();}},{passive:false});
+      document.addEventListener?.('touchmove',event=>this.touchMove(event),{passive:false});
+      document.addEventListener?.('touchend',event=>this.touchEnd(event),{passive:false});
+      document.addEventListener?.('touchcancel',event=>this.touchEnd(event,true),{passive:false});
     }
     setData(market,plan,reset=false){
+      if(reset||market?.symbol&&this.market?.symbol&&market.symbol!==this.market.symbol){this.clearTouchGesture({applyMarket:false});this.pendingMarket=null;}
       if(reset){this.linkedRange=null;this.hoverDayKey=null;this.crosshair=null;this.pendingMarket=null;}
-      if(!reset&&(this.drag||this.path.length)){this.pendingMarket=market;this.plan=plan||{objects:[]};this.render();return;}
+      if(!reset&&(this.drag||this.path.length||this.pinch)){this.pendingMarket=market;this.plan=plan||{objects:[]};this.render();return;}
       const previousBars=this.bars,previousScale=this.timelineBars===previousBars?this.timelineScale:null,planChanged=this.plan!==plan&&JSON.stringify(this.plan)!==JSON.stringify(plan||{objects:[]});
       this.market=market;this.plan=plan||{objects:[]};this.tick=market?.tick||1;this.anchorScales={};this.syncTitleEditor();
       const source=market?.periods?.[this.period]||[],rowKey=bar=>bar?['dt','time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':'):'',sourceSignature=[market?.symbol,market?.history_token,source.length,rowKey(source[0]),rowKey(source.at(-2)),rowKey(source.at(-1))].join('|');
@@ -174,11 +181,56 @@
       this.svg.append(createSVG('rect',{'data-linked-volume':range.label,x,y:this.indicator.y,width:right-x,height:this.indicator.h,fill:'#509fce','fill-opacity':'.12','pointer-events':'none'}));
     }
     setPresence(peers){const next=peers||[],signature=JSON.stringify(next);if(signature===this.presenceSignature)return;this.presenceSignature=signature;this.peers=next;if(this.peerLayer&&this.tx)this.renderPresence();}
-    setReadOnly(enabled){enabled=Boolean(enabled);if(enabled===this.readOnly)return;this.readOnly=enabled;this.host.setAttribute?.('data-read-only',String(enabled));this.host.style.touchAction=enabled?'pan-y pinch-zoom':this.hostTouchAction;this.svg.style.touchAction=enabled?'pan-y pinch-zoom':'none';this.beginUpdate();try{this.setTool('select');if(this.capturedPointerId!=null)this.releasePointer({pointerId:this.capturedPointerId});this.selected=null;this.selectedAnchor=null;this.selectedLevel=null;this.hoverLevel=null;this.lastTitleClick=null;this.secondaryPress=null;this.pathControls=null;this.clearPresence();this.render();}finally{this.endUpdate();}}
+    setReadOnly(enabled){enabled=Boolean(enabled);if(enabled===this.readOnly)return;this.readOnly=enabled;this.host.setAttribute?.('data-read-only',String(enabled));this.host.style.touchAction=enabled?'pan-y':this.hostTouchAction;this.svg.style.touchAction=enabled?'pan-y':'none';if(enabled)this.ensureTouchSurface();if(this.touchSurface)this.touchSurface.hidden=!enabled;this.beginUpdate();try{this.setTool('select');if(this.capturedPointerId!=null)this.releasePointer({pointerId:this.capturedPointerId});this.selected=null;this.selectedAnchor=null;this.selectedLevel=null;this.hoverLevel=null;this.lastTitleClick=null;this.secondaryPress=null;this.pathControls=null;this.clearPresence();this.render();}finally{this.endUpdate();}}
+    ensureTouchSurface(){
+      if(this.touchSurface)return;
+      const surface=document.createElement('div');surface.setAttribute('aria-hidden','true');surface.setAttribute('data-chart-touch',this.period);
+      Object.assign(surface.style,{position:'absolute',inset:'0',zIndex:'1',touchAction:'pan-y'});this.host.append(surface);this.touchSurface=surface;
+      surface.addEventListener('pointerdown',event=>this.down(event));surface.addEventListener('pointermove',event=>this.move(event));surface.addEventListener('pointerup',event=>this.up(event));
+      surface.addEventListener('pointerleave',()=>{if(!this.pinch){this.crosshair=null;this.hoverDayKey=null;this.callbacks.hoverDay?.(null);this.clearPresence();this.scheduleRender();}});
+      surface.addEventListener('touchstart',event=>this.touchStart(event),{passive:false});
+    }
+    touchStart(event){
+      if(!this.readOnly)return;
+      for(const touch of Array.from(event.changedTouches||[]))if(touch.target===this.touchSurface)this.touchIds.add(touch.identifier);
+      const touches=Array.from(event.touches||[]);if(touches.length<2)return;
+      if(event.cancelable!==false)event.preventDefault();
+      if(this.pinch||this.touchBlocked)return;
+      if(touches.length!==2||event.cancelable===false||!touches.every(touch=>this.touchIds.has(touch.identifier))||!this.view||!this.tx){this.touchBlocked=true;return;}
+      const points=touches.map(touch=>this.point(touch)),plot={...this.plot},inside=point=>finite(point.x)&&finite(point.y)&&point.x>=plot.x&&point.x<=plot.x+plot.w&&point.y>=plot.y&&point.y<=plot.y+plot.h,distance=Math.hypot(points[1].x-points[0].x,points[1].y-points[0].y);
+      if(!points.every(inside)||distance<8){this.touchBlocked=true;return;}
+      const midpoint={x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2};
+      this.callbacks.interaction?.();this.callbacks.activate?.(this.period);
+      this.pinch={ids:touches.map(touch=>touch.identifier),distance,midpoint,plot,width:Math.round(this.host.clientWidth),height:Math.round(this.host.clientHeight),view:{...this.view},anchor:{time:this.tx.time(midpoint.x),price:this.tx.price(midpoint.y)},bars:this.bars,scale:this.getTimeScale(),limit:this.zoomLimit(),autoPrice:this.autoPrice,changed:false};this.autoPrice=false;
+      this.crosshair=null;this.hoverDayKey=null;this.callbacks.hoverDay?.(null);this.clearPresence();this.scheduleRender();
+    }
+    touchMove(event){
+      const gesture=this.pinch;if(!this.readOnly||!gesture)return;
+      const touches=Array.from(event.touches||[]);
+      if(event.cancelable===false||touches.length!==2||!gesture.ids.every(id=>touches.some(touch=>touch.identifier===id))){this.touchBlocked=true;this.finishPinch();return;}
+      event.preventDefault();const points=gesture.ids.map(id=>this.point(touches.find(touch=>touch.identifier===id)));
+      if(!points.every(point=>finite(point.x)&&finite(point.y))){this.touchBlocked=true;this.finishPinch();return;}
+      const midpoint={x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2},distance=Math.hypot(points[1].x-points[0].x,points[1].y-points[0].y),factor=Math.max(.02,Math.min(50,distance/gesture.distance));
+      const view=zoomView(gesture.view,this.period,factor,gesture.anchor,gesture.bars,gesture.limit),scale=gesture.scale,span=scale.position(view.end)-scale.position(view.start),shift=(midpoint.x-gesture.midpoint.x)/gesture.plot.w*span,priceShift=(midpoint.y-gesture.midpoint.y)/gesture.plot.h*(view.max-view.min);
+      const next={start:scale.time(scale.position(view.start)-shift),end:scale.time(scale.position(view.end)-shift),min:view.min+priceShift,max:view.max+priceShift};
+      if(!Object.values(next).every(finite)||next.end<=next.start||next.max<=next.min)return;
+      if(['start','end','min','max'].every(key=>next[key]===this.view[key]))return;
+      this.view=next;this.autoPrice=false;this.followLatest=false;this.viewCustomized=true;gesture.changed=true;this.scheduleRender();
+    }
+    touchEnd(event,cancelled=false){
+      if(!this.touchIds?.size&&!this.pinch)return;
+      for(const touch of Array.from(event.changedTouches||[]))this.touchIds.delete(touch.identifier);
+      const touches=Array.from(event.touches||[]);
+      if(this.pinch&&(cancelled||touches.length!==2||!this.pinch.ids.every(id=>touches.some(touch=>touch.identifier===id)))){this.touchBlocked=true;this.finishPinch();}
+      if(cancelled||!touches.length)this.touchIds.clear();
+      if(!this.touchIds.size)this.touchBlocked=false;
+    }
+    finishPinch({notify=true,applyMarket=true}={}){const gesture=this.pinch;this.pinch=null;if(!gesture)return;if(!gesture.changed)this.autoPrice=gesture.autoPrice;this.crosshair=null;if(applyMarket)this.applyPendingMarket();if(notify&&gesture.changed)this.callbacks.viewChanged?.(this);this.scheduleRender();}
+    clearTouchGesture({applyMarket=true}={}){this.finishPinch({notify:false,applyMarket});this.touchIds?.clear();this.touchBlocked=false;}
     beginUpdate(){this.updateDepth=(this.updateDepth||0)+1;}
     endUpdate(){this.updateDepth=Math.max(0,(this.updateDepth||0)-1);if(!this.updateDepth&&this.renderDeferred){this.renderDeferred=false;this.render();}}
     setPlan(plan){this.plan=plan||{objects:[]};this.syncTitleEditor();this.render();}
-    setTool(tool,options={}){if(this.readOnly)tool='select';this.snapPreview=null;this.lastPathClick=null;if(this.period==='day'&&this.hoverDayKey){this.hoverDayKey=null;this.callbacks.hoverDay?.(null);}if(this.drag)this.cancelGesture();this.closeTextEditor();this.closeTitleEditor();this.cancelPath({render:false});this.placementPreview=null;this.tool=tool;this.toolDirection=['long','short'].includes(options.direction)?options.direction:null;this.toolName=options.name||null;this.toolColor=options.color||null;this.toolOpacity=drawingOpacity(options.opacity);this.hoverPath=null;this.pathControl=null;this.insertWave=null;this.draft=null;this.host.style.cursor=tool==='pan'?'grab':tool==='select'?'default':'crosshair';this.render();}
+    setTool(tool,options={}){this.clearTouchGesture({applyMarket:false});if(this.readOnly)tool='select';this.snapPreview=null;this.lastPathClick=null;if(this.period==='day'&&this.hoverDayKey){this.hoverDayKey=null;this.callbacks.hoverDay?.(null);}if(this.drag)this.cancelGesture();this.closeTextEditor();this.closeTitleEditor();this.cancelPath({render:false});this.placementPreview=null;this.tool=tool;this.toolDirection=['long','short'].includes(options.direction)?options.direction:null;this.toolName=options.name||null;this.toolColor=options.color||null;this.toolOpacity=drawingOpacity(options.opacity);this.hoverPath=null;this.pathControl=null;this.insertWave=null;this.draft=null;this.host.style.cursor=tool==='pan'?'grab':tool==='select'?'default':'crosshair';this.render();}
     fit(includeDrawings=false){
       this.followLatest=true;this.viewCustomized=false;this.autoPrice=!includeDrawings;
       const drawings=(this.plan.objects||[]).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period)),levels=includeDrawings?[this.plan.entry_low,this.plan.entry_high,this.plan.stop_price,this.plan.planned_entry_price,this.plan.main_level,this.plan.trigger_price,this.plan.obstacle_price,...drawings.flatMap(object=>object.points.map(point=>point.price))]:[];
@@ -192,7 +244,7 @@
     pointTime(point){this.anchorScales??={};const period=point?.chart_anchor?.period;if(period&&INTERVAL[period]&&!this.anchorScales[period])this.anchorScales[period]=period===this.period?this.getTimeScale():timeScale(this.market?.periods?.[period]||[],period);return resolvePointTime(point,this.market,this.anchorScales);}
     zoomLimit(){const scale=this.getTimeScale();let left=0,right=this.bars.length;for(const object of this.objects())for(const point of object.points||[]){const position=scale.position(this.pointTime(point));if(finite(position)){left=Math.min(left,position);right=Math.max(right,position);}}return Math.max(10000,(right-left)*1.4+30);}
     forecastPoint(point){return anchorPoint(point,this.bars,this.period,this.getTimeScale());}
-    applyPendingMarket(){if(this.pendingMarket&&!this.drag&&!this.path.length){const market=this.pendingMarket;this.pendingMarket=null;this.setData(market,this.plan);}}
+    applyPendingMarket(){if(this.pendingMarket&&!this.drag&&!this.path.length&&!this.pinch){const market=this.pendingMarket;this.pendingMarket=null;this.setData(market,this.plan);}}
     editForecastPoints(object,segment,direction){const rendered=object.points.map(point=>({...point,time:this.pointTime(point)})),edited=editPathPoints(rendered,segment,direction,this.tick,INTERVAL[this.period]);return edited.map(point=>{const index=rendered.findIndex(old=>old.id===point.id&&old.time===point.time&&old.price===point.price);return index>=0?{...object.points[index]}:this.forecastPoint(point);});}
     priceFit(view){return fitVisiblePrice(this.bars,view,this.tick,this.period,this.objects(),point=>this.pointTime(point),this.getTimeScale());}
     locateObject(object){const points=object?.points||[];if(!points.length||!this.view)return;const times=points.map(point=>this.pointTime(point)),prices=points.map(point=>point.price),scale=this.getTimeScale(),positions=times.map(time=>scale.position(time)),left=Math.min(...positions),right=Math.max(...positions),span=Math.max(8,(right-left)*1.3),low=Math.min(...prices),high=Math.max(...prices),pad=Math.max(this.tick*4,(high-low)*.15);this.view={start:scale.time((left+right-span)/2),end:scale.time((left+right+span)/2),min:low-pad,max:high+pad};this.autoPrice=false;this.followLatest=false;this.viewCustomized=true;this.render();}
@@ -290,7 +342,7 @@
       const points=object.points.filter((p,i)=>i!==this.selectedAnchor);this.selectedAnchor=null;this.callbacks.update?.(object.id,{points:wavePoints(points)});this.callbacks.anchorSelected?.(object.id,null);this.render();
     }
     adjustPathControl(control){if(this.readOnly)return;const object=this.plan.objects?.find(item=>item.id===control.id&&['path','wave'].includes(item.kind));if(!object||object.locked)return;let points;if(Number.isInteger(control.index)&&control.direction<0){points=JSON.parse(JSON.stringify(object.points));if(points.length<=2)return;points.splice(control.index,1);}else{const segment=Number.isInteger(control.index)?(control.index<object.points.length-1?control.index:null):control.segment;points=this.editForecastPoints(object,segment,control.direction);}if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});this.hoverPath=null;this.pathControl=null;this.pathControls=null;}
-    inspectPointer(event,activate=false){if(!this.view||!this.tx)return;const point=this.point(event);if(point.x<this.plot.x||point.x>this.plot.x+this.plot.w||point.y<this.plot.y||point.y>this.plot.y+this.plot.h)return;if(activate){this.callbacks.interaction?.();this.callbacks.activate?.(this.period);}this.crosshair=point;this.host.style.cursor='default';if(this.period==='day'){const range=this.dayAt(point),key=range?.label||null;if(key!==this.hoverDayKey){this.hoverDayKey=key;this.callbacks.hoverDay?.(range);}}this.callbacks.presence?.({object_id:null,cursor:this.toValue(point,false,true),preview_object:null,editing:false});this.scheduleRender();}
+    inspectPointer(event,activate=false){if(this.pinch||this.touchBlocked||!this.view||!this.tx)return;const point=this.point(event);if(point.x<this.plot.x||point.x>this.plot.x+this.plot.w||point.y<this.plot.y||point.y>this.plot.y+this.plot.h)return;if(activate){this.callbacks.interaction?.();this.callbacks.activate?.(this.period);}this.crosshair=point;this.host.style.cursor='default';if(this.period==='day'){const range=this.dayAt(point),key=range?.label||null;if(key!==this.hoverDayKey){this.hoverDayKey=key;this.callbacks.hoverDay?.(range);}}this.callbacks.presence?.({object_id:null,cursor:this.toValue(point,false,true),preview_object:null,editing:false});this.scheduleRender();}
     down(event){
       if(this.readOnly){if(event.button===0)this.inspectPointer(event,true);return;}
       // Open on secondary press: live SVG redraws can remove the native contextmenu target.

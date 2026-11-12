@@ -4,6 +4,27 @@ const source=fs.readFileSync('static/workspace.js','utf8'),M=require('./static/w
 function helper(name){const line=source.split(/\r?\n/).find(line=>new RegExp('^  (?:async )?function '+name+'\\(').test(line));assert.ok(line,name);if(line.trimEnd().endsWith('}'))return line;const start=source.indexOf(line);return source.slice(start,source.indexOf('\n  }',start)+4);}
 function context(values,names){const c=vm.createContext(values);for(const name of names)vm.runInContext(helper(name),c);return c;}
 
+test('mobile page blocks only multi-touch zoom, without stopping chart handlers or single-finger scroll',()=>{
+  const listeners=new Map(),original='width=device-width, initial-scale=1, viewport-fit=cover';let content=original;
+  const doc={querySelector:()=>({getAttribute:()=>content,setAttribute:(key,value)=>{content=value;}}),addEventListener:(name,callback,options)=>listeners.set(name,{callback,options})};
+  const c=context({},['installPageZoomGuard']),guard=c.installPageZoomGuard(doc);
+  const fire=(name,touches,cancelable=true)=>{let cancelled=0;listeners.get(name).callback({touches:Array.from({length:touches}),cancelable,preventDefault(){cancelled++;},stopPropagation(){assert.fail('Chart must receive the gesture');}});return cancelled;};
+  assert.equal(fire('touchmove',2),0,'Desktop browser zoom remains available');
+  guard.setReadOnly(true);assert.match(content,/maximum-scale=1/);assert.match(content,/user-scalable=no/);
+  for(const name of ['touchstart','touchmove']){assert.equal(listeners.get(name).options.passive,false);assert.equal(fire(name,1),0);assert.equal(fire(name,2),1);assert.equal(fire(name,3),1);assert.equal(fire(name,2,false),0);}
+  for(const name of ['gesturestart','gesturechange','gestureend']){assert.equal(listeners.get(name).options.passive,false);assert.equal(fire(name,0),1);assert.equal(fire(name,0,false),0);}
+  guard.setReadOnly(false);assert.equal(content,original);assert.equal(fire('touchmove',2),0);assert.equal(fire('gesturechange',0),0);
+  assert.equal(listeners.size,5,'Mode changes do not multiply listeners');
+});
+
+test('mobile zoom changes only the touched period even when desktop linked views were enabled',()=>{
+  const state={viewOnly:true},sourceChart={period:'m30',view:{start:10,end:20}},other={view:{start:1,end:99},render(){}};
+  let saves=0,presences=0,stops=0;
+  const c=context({state,charts:{m30:sourceChart,m3:other},$:()=>({classList:{contains:()=>true}}),stopFollowing(){stops++;},saveViews(){saves++;},sendPresence(){presences++;}},['syncView']);
+  c.syncView(sourceChart);assert.equal(other.view.start,1);assert.equal(other.view.end,99);assert.equal(saves,1);assert.equal(presences,1);assert.equal(stops,1);
+  state.viewOnly=false;c.syncView(sourceChart);assert.equal(other.view.start,10);assert.equal(other.view.end,20,'Desktop linking still works');
+});
+
 test('phone landscape, Android tablet, iPad desktop UA and narrow windows stay view-only',()=>{
   const c=context({navigator:{},window:{innerWidth:1400}},['mobileDevice']);
   assert.equal(c.mobileDevice(),false);

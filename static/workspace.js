@@ -5,10 +5,20 @@
   const PREFIX='resonance-workspace-v1:', PERIODS={day:'日线',m30:'30 分钟',m3:'3 分钟'};
   const state={session:null,symbol:null,plan:null,saved:null,revision:0,market:null,evaluation:null,rules:null,risk:null,dirty:false,conflict:false,selected:null,active:'m30',generation:0,polling:false,saving:false,riskDirty:false,mode:'login',alerts:[],lastSignal:null,lastSuccess:0,viewOnly:mobileDevice()};
   const charts={};
+  const pageZoomGuard=installPageZoomGuard(document);
   let marketCache=new WorkspaceMarketCache.Store({limit:16});
   const marketPreview=new WorkspaceMarketPreview.Store();
   const marketRequests=new Map(),documentCache=new Map(),readRequests=new Set();
   function mobileDevice(){return Boolean(navigator.userAgentData?.mobile||/Android|iPhone|iPad|iPod|Windows Phone|IEMobile|BlackBerry|BB10|Opera Mini|Mobi|Tablet|Kindle|Silk|webOS/i.test(navigator.userAgent||'')||navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1||navigator.maxTouchPoints>0&&window.matchMedia?.('(pointer: coarse)').matches||window.innerWidth<=900);}
+  function installPageZoomGuard(doc){
+    let enabled=false;const viewport=doc.querySelector('meta[name="viewport"]'),original=viewport?.getAttribute('content');
+    // Keep events bubbling to the chart's own pinch handler; one finger belongs to native scrolling.
+    const multiTouch=event=>{if(enabled&&event.touches?.length>1&&event.cancelable)event.preventDefault();};
+    const safariGesture=event=>{if(enabled&&event.cancelable)event.preventDefault();};
+    for(const name of ['touchstart','touchmove'])doc.addEventListener(name,multiTouch,{passive:false});
+    for(const name of ['gesturestart','gesturechange','gestureend'])doc.addEventListener(name,safariGesture,{passive:false});
+    return{setReadOnly(value){const next=Boolean(value);if(next===enabled)return;enabled=next;if(!viewport)return;if(next)viewport.setAttribute('content','width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');else if(original===null)viewport.removeAttribute('content');else viewport.setAttribute('content',original);}};
+  }
   function renderMobilePlan(){
     const node=$('mobile-plan-summary');if(!node)return;node.replaceChildren();
     if(!state.planReady||!currentPlan()){node.append(el('p',state.planLoadError?'计划暂未加载，正在重试':'正在读取当前品种的共享计划…'));return;}
@@ -32,7 +42,7 @@
       state.pending=emptyPending();state.outbox=null;state.dirty=false;state.saving=false;state.retryAt=0;
       if(state.saved)state.plan=clone(state.saved);if(!state.bootstrapping)state.generation++;closeObjectContext();$('delete-all-dialog').close();$('draft-recovery').hidden=true;
     }
-    state.viewOnly=next;if(changed&&!next)openPanel(state.panel||'quick-plan-panel',false);document.documentElement.classList.toggle('mobile-view-only',next);$('workspace').classList.toggle('mobile-view-only',next);
+    state.viewOnly=next;pageZoomGuard.setReadOnly(next);if(changed&&!next)openPanel(state.panel||'quick-plan-panel',false);document.documentElement.classList.toggle('mobile-view-only',next);$('workspace').classList.toggle('mobile-view-only',next);
     for(const chart of Object.values(charts))chart.setReadOnly(next);
     setLayout(next?'mobile':storageGet('layout','main'));renderMobilePlan();renderSyncStatus();
     if(changed&&!state.bootstrapping&&state.session&&state.symbol)void switchSymbol(state.symbol,state.board||'',{skipSaveViews:true});
@@ -350,7 +360,7 @@
   function viewKey(){return (state.viewOnly?'mobile:':'')+'view:'+state.session?.user.id+':'+state.symbol+':'+(state.layout||'main');}
   function saveViews(){if(state.following||state.loading||!state.session||!state.symbol)return;storageSet(viewKey(),Object.fromEntries(Object.entries(charts).map(([p,c])=>[p,{view:c.view,followLatest:c.followLatest,viewCustomized:c.viewCustomized,autoPrice:c.autoPrice}])));}
   function restoreViews(){const saved=storageGet(viewKey(),{});for(const[p,c]of Object.entries(charts)){const v=saved[p];if(v?.view&&['start','end','min','max'].every(k=>Number.isFinite(v.view[k]))&&v.view.end>v.view.start&&v.view.max>v.view.min){Object.assign(c,v);c.render();}}}
-  function syncView(source){stopFollowing(false);if($('link-views').classList.contains('selected')&&source.view)for(const chart of Object.values(charts))if(chart!==source&&chart.view){chart.view={...chart.view,start:source.view.start,end:source.view.end};chart.followLatest=false;chart.viewCustomized=true;chart.autoPrice=true;chart.render();}saveViews();sendPresence({period:source.period});}
+  function syncView(source){stopFollowing(false);if(!state.viewOnly&&$('link-views').classList.contains('selected')&&source.view)for(const chart of Object.values(charts))if(chart!==source&&chart.view){chart.view={...chart.view,start:source.view.start,end:source.view.end};chart.followLatest=false;chart.viewCustomized=true;chart.autoPrice=true;chart.render();}saveViews();sendPresence({period:source.period});}
   for(const period of ['day','m30','m3'])charts[period]=new C.Chart($('chart-'+period),period,{activate,interaction:()=>stopFollowing(false),select:selectObject,add:addObject,update:updateObject,presence:(update,force)=>sendPresence({...update,period},force),placeLevel,previewLevel,dragLevel,draftChanged:renderDrawingState,context:objectContext,anchorSelected:selectWaveAnchor,deleteObject,notice,viewChanged:syncView,hoverDay:range=>{if(period==='day'){for(const target of ['m30','m3'])charts[target]?.setLinkedRange(range);}},snapEnabled:()=>$('snap-toggle').checked,cancelTool:()=>{setQuickTool(null);renderWaveTools();}});
   function beginExpectation(){if(state.viewOnly)return;if(state.loading||!state.plan)return;const short=state.plan.direction==='short',name='预期走势',color=short?'#22c55e':'#ef5350';chooseTool('wave',{name,color});}
   function chooseTool(tool,options={}){if(state.viewOnly)return;if(state.loading&&tool!=='select')return;finishDrawings();stopFollowing(false);state.quickTool=null;state.quickSequence=false;state.levelPreview=null;state.ticketError='';renderQuickPlan();document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool===tool));for(const c of Object.values(charts))c.setTool(tool,{opacity:drawingOpacity(),...options});$('chart-help').textContent=tool==='wave'?'在任意位置自由点选，不吸附 K 线；双击或 Enter 完成；拖编号点修改，双击线段插点、双击编号点删点，Delete 删除选中点或整条线，编号自动更新。':tool==='path'?'路径自由绘制，不吸附 K 线。双击或 Enter 完成；Esc 保留已有点。悬停节点下方可用 + / − 插点或删点，单击拖点、双击拖整体。':tool==='segment'?'拖出水平线段；选中后拖两端改长度，拖线身改价位，右端显示线段价格。':tool==='trend'||tool==='reference'?'拖动绘制；开启吸附时落在 K 线的开高低收，选中后拖端点可重新吸附。':tool==='text'?'点击图中位置添加文本，可在属性中修改内容。':'滚轮缩放 K 线数量，高度自动适配；空白拖动平移；右键绘图打开菜单。';}

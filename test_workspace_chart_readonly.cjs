@@ -27,7 +27,7 @@ const walk=node=>[node,...node.children.flatMap(walk)];
 test('read-only API cancels a wave draft, releases capture and restores desktop tool behaviour',()=>fixture(({chart,host,event,emit,changes,drafts})=>{
   assert.equal(chart.readOnly,false);chart.setTool('wave');emit('pointerdown',event(180,80));emit('pointerdown',event(230,100,{timeStamp:1800}));assert.equal(chart.path.length,2);
   chart.setReadOnly(true);assert.equal(chart.path.length,0);assert.equal(drafts.at(-1).count,0);assert.equal(changes.length,0);assert.equal(chart.tool,'select');assert.equal(chart.svg.capture,null);
-  assert.equal(host.attrs['data-read-only'],'true');assert.equal(host.style.touchAction,'pan-y pinch-zoom');assert.equal(chart.svg.style.touchAction,'pan-y pinch-zoom');
+  assert.equal(host.attrs['data-read-only'],'true');assert.equal(host.style.touchAction,'pan-y');assert.equal(chart.svg.style.touchAction,'pan-y');assert.equal(chart.touchSurface.style.touchAction,'pan-y');
   for(const tool of ['horizontal','segment','trend','reference','zone','text','wave','path','planned-entry','planned-stop','pan']){chart.setTool(tool);assert.equal(chart.tool,'select');}
   chart.setReadOnly(false);assert.equal(host.style.touchAction,'manipulation');assert.equal(chart.svg.style.touchAction,'none');assert.equal(chart.tool,'select');
   chart.setTool('horizontal');emit('pointerdown',event());assert.equal(changes.length,1);assert.equal(changes[0].object.kind,'horizontal');
