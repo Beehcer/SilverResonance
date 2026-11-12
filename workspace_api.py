@@ -2,6 +2,7 @@
 import functools
 import hmac
 import json
+import re
 import secrets
 import time
 from urllib.parse import urlsplit
@@ -18,6 +19,8 @@ MAX_REQUEST_BYTES = 128 * 1024
 EVENT_RECHECK_SECONDS = 1
 EVENT_HEARTBEAT_SECONDS = 5
 EVENT_STREAM_SECONDS = 120
+MOBILE_USER_AGENT = re.compile(r"Android|iPhone|iPad|iPod|Windows Phone|IEMobile|BlackBerry|BB10|Opera Mini|Mobi|Tablet|Kindle|Silk/|webOS", re.IGNORECASE)
+VIEW_ONLY_MESSAGE = "移动端仅供查看，请在桌面端编辑计划、图层和个人设置。"
 
 
 def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None,
@@ -68,10 +71,19 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         if request.content_length and request.content_length > MAX_REQUEST_BYTES:
             raise RequestEntityTooLarge()
         request.max_content_length = MAX_REQUEST_BYTES
+        # Presentation permissions belong to this request, not the anonymous
+        # identity: opening a phone must never revoke that user's desktop edits.
+        g.workspace_mobile_device = bool(MOBILE_USER_AGENT.search(request.headers.get("User-Agent", "")))
+        g.workspace_view_only = g.workspace_mobile_device or request.headers.get("X-Workspace-View-Only", "").strip() == "1"
         g.workspace_token = request.cookies.get(COOKIE_NAME, "")
         g.workspace_user = store.authenticate(g.workspace_token)
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
             same_origin()
+            # All current persistent writes (profile, risk, plans, boards and
+            # comments) are blocked. Only the transient viewer heartbeat is safe.
+            viewer_presence = request.method == "POST" and request.endpoint == "workspace.presence"
+            if g.workspace_view_only and not viewer_presence:
+                raise PermissionError(VIEW_ONLY_MESSAGE)
             if g.workspace_user:
                 supplied = request.headers.get("X-Workspace-CSRF", "")
                 if len(supplied) > 128 or not hmac.compare_digest(supplied.encode("utf-8"), csrf_token(g.workspace_token).encode("ascii")):
@@ -81,7 +93,7 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     def private_response(response):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Vary"] = "Cookie"
+        response.headers["Vary"] = "Cookie, User-Agent, X-Workspace-View-Only"
         return response
 
     @bp.errorhandler(WorkspaceError)
@@ -111,6 +123,8 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         user = store.authenticate(token)
         value = store.session(user)
         value["csrf_token"] = csrf_token(token) if user else None
+        value["view_only"] = g.workspace_view_only
+        value["mobile_device"] = g.workspace_mobile_device
         response = jsonify(value)
         if user and token != g.workspace_token:
             response.set_cookie(COOKIE_NAME, token, httponly=True, secure=request.is_secure,
@@ -287,6 +301,12 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         if request.method == "GET":
             return jsonify(status="ok", presence=store.presence(selected_key(symbol_requested())))
         value = body()
+        if g.workspace_view_only:
+            # A viewer can share a cursor/viewport and appear online, but cannot
+            # claim an editing target or send a ghost object to collaborators.
+            value.pop("editing", None)
+            value["object_id"] = None
+            value["preview_object"] = None
         allowed_fields(value, ("symbol", "period", "object_id", "cursor", "preview_object", "view"))
         symbol = symbol_requested(value.get("symbol"))
         result = store.update_presence(g.workspace_user, selected_key(symbol), value.get("period"), value.get("object_id"),

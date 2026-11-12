@@ -42,6 +42,22 @@ test('net-zero edits clear the old local draft so reload cannot resurrect an und
   assert.equal(h.storage.has(h.key()),false);
 });
 
+test('an early cached-market symbol cannot delete a desktop disk draft before its shared plan loads',()=>{
+  const h=harness(),server=clone(h.state.saved);h.state.plan.notes='unsent desktop note';h.state.pending=M.diff(server,h.state.plan);h.context.persistDraft();const original=h.storage.get(h.key());
+  // enter() clears plan readiness; preloadSavedMarket may already expose symbol.
+  h.state.plan=null;h.state.planReady=false;h.state.pending=M.empty();h.state.outbox=null;h.context.persistDraft();assert.equal(h.storage.get(h.key()),original);
+  h.state.plan={...server,notes:''};h.context.persistDraft();assert.equal(h.storage.get(h.key()),original,'A provisional matching default plan is not loaded server state.');
+  h.state.plan=clone(server);h.state.saved=clone(server);h.state.planReady=true;h.load('restoreDraft');h.context.restoreDraft({key:h.context.draftKey(),draft:JSON.parse(original)});
+  assert.equal(h.state.plan.notes,'unsent desktop note');assert.equal(h.calls.flush,1);assert.equal(h.state.dirty,true);
+});
+
+test('draft cleanup requires a current loaded document and retains normal net-zero cleanup',()=>{
+  const h=harness(),server=clone(h.state.saved),original=JSON.stringify({version:2,pending:{changes:{notes:'unsent'}}});
+  for(const plan of [null,{...server,symbol:'SHFE.au2612'},{...server,board_id:'other'}]){h.storage.set(h.key(),original);h.state.plan=plan;h.state.planReady=true;h.context.persistDraft();assert.equal(h.storage.get(h.key()),original);}
+  h.state.plan=server;h.state.planReady=false;h.context.persistDraft();assert.equal(h.storage.get(h.key()),original);
+  h.state.planReady=true;h.context.persistDraft();assert.equal(h.storage.has(h.key()),false,'Known clean current document still clears an undone edit.');
+});
+
 test('empty pending still persists an unknown commit and its original baseline',()=>{
   const h=harness(),base=clone(h.state.saved),sent=M.diff(base,{...base,notes:'B'});
   h.state.outbox={id:'unknown',pending:sent,base,base_revision:1};h.context.persistDraft();
