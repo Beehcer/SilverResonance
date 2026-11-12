@@ -651,7 +651,42 @@ class WorkspaceStore:
         member["last_seen"] = now
         return plan
 
-    def save_plan(self, symbol, base_revision, raw, user_id, rule_version):
+    @staticmethod
+    def _guard_forecast_coordinates(previous, incoming, cutoffs=None):
+        """Old tabs must not erase a repaired coordinate or add naked future nodes."""
+        old_objects = {o["id"]: o for o in (previous or {}).get("objects", [])}
+        for obj in incoming.get("objects", []):
+            if obj.get("kind") not in ("wave", "path"):
+                continue
+            prior = old_objects.get(obj["id"], {}).get("points", [])
+            points = obj.get("points", [])
+            old_points = {p["id"]: p for p in prior if isinstance(p.get("id"), str) and p["id"]}
+            prior_anchored = any(point.get("chart_anchor") is not None for point in prior)
+            # Before stable node IDs existed, a style/price edit could replace
+            # the whole path. Only an identical X sequence proves it untouched.
+            same_legacy_x = (len(prior) == len(points) and all(not p.get("id") for p in prior + points)
+                             and [p.get("time") for p in prior] == [p.get("time") for p in points])
+            period = obj.get("source_period") if obj.get("source_period") in ("day", "m30", "m3") else obj.get("period")
+            cutoff = (cutoffs or {}).get(period)
+            for index, point in enumerate(points):
+                identity = point.get("id") if isinstance(point.get("id"), str) else None
+                before = prior[index] if same_legacy_x else old_points.get(identity)
+                if "chart_anchor" in point:
+                    continue  # An explicit null represents an intentional absolute/history coordinate.
+                if prior_anchored and not identity:
+                    # A legacy full replacement may strip both IDs and anchors.
+                    # Historical raw timestamps cannot prove those are new nodes.
+                    raise WorkspaceError("预测线节点定位信息缺失，请刷新页面后重试；线上已有线条已保留。")
+                if before and before.get("chart_anchor") is not None:
+                    raise WorkspaceError("预测线定位信息缺失，请刷新页面后重试；线上已有线条已保留。")
+                if before and before.get("time") == point.get("time"):
+                    continue  # Colour, price and notes must not reinterpret an untouched legacy X coordinate.
+                if cutoffs is not None and cutoff is None:
+                    raise WorkspaceError("无法确认预测线的固定位置，请刷新页面后重试；线上已有线条已保留。")
+                if cutoff is not None and point["time"] > cutoff:
+                    raise WorkspaceError("预测线需要固定未来位置，请刷新页面后重新定位该点；线上已有线条已保留。")
+
+    def save_plan(self, symbol, base_revision, raw, user_id, rule_version, coordinate_cutoffs=None):
         if not _integer(base_revision):
             raise WorkspaceError("保存计划必须提供有效版本号")
         def operation(state):
@@ -660,6 +695,7 @@ class WorkspaceStore:
             if base_revision != revision:
                 raise RevisionConflict(current)
             clean = self._clean_plan(raw, rule_version, (current or {}).get("objects", []))
+            self._guard_forecast_coordinates(current, clean, coordinate_cutoffs)
             clean["comments"] = copy.deepcopy((current or {}).get("comments", []))
             return self._commit_plan(state, symbol, clean, user_id)
         return self._change(operation)
@@ -762,7 +798,7 @@ class WorkspaceStore:
                 point["label"] = str(index + 1)
         return result
 
-    def patch_plan(self, symbol, base_revision, changes, upserts, deletes, user_id, rule_version, conflict_policy="detect", object_edits=None, mutation_id=None):
+    def patch_plan(self, symbol, base_revision, changes, upserts, deletes, user_id, rule_version, conflict_policy="detect", object_edits=None, mutation_id=None, coordinate_cutoffs=None):
         from workspace_rules import PLAN_KEYS
         if not _integer(base_revision):
             raise WorkspaceError("保存修改必须提供有效版本号")
@@ -837,6 +873,7 @@ class WorkspaceStore:
                 current_objects.pop(identity, None)
             merged["objects"] = list(current_objects.values())
             clean = self._clean_plan(merged, rule_version, latest.get("objects", []))
+            self._guard_forecast_coordinates(latest, clean, coordinate_cutoffs)
             unchanged = {key: value for key, value in latest.items() if key not in _METADATA}
             result = current if current and clean == unchanged else self._commit_plan(state, symbol, clean, user_id)
             if receipt_key:

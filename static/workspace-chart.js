@@ -54,7 +54,7 @@
     return scale.time(scale.indices.get(anchor.base_time)+anchor.offset);
   }
   function anchorPoint(point,bars,period,preparedScale=null){
-    const result={...point};if(Object.hasOwn(result,'chart_anchor'))result.chart_anchor=null;
+    const result={...point,chart_anchor:null};
     const scale=preparedScale||timeScale(bars,period),last=scale.times.at(-1);
     const offset=finite(last)?scale.position(point.time)-(scale.times.length-1):null;
     if(finite(last)&&point.time>last&&offset<=10000)result.chart_anchor={period,base_time:last,offset};
@@ -146,7 +146,10 @@
         this.normalizedRows=normalized;
       }
       this.sourceBars=source;this.sourceSignature=sourceSignature;
-      const first=this.bars[0],last=this.bars.at(-1),previousLastTime=this.lastBarTime,signature=first&&last?`${first.time}:${first.open}:${last.time}:${this.bars.length}`:'',tailSignature=this.bars.slice(-2).map(bar=>['time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':')).join('|'),contentSignature=signature+`:${tailSignature}:${market?.history_token}:${market?.fresh}:${market?.feed_status}:${market?.unavailable}`,unchanged=contentSignature===this.contentSignature;
+      // Mapped forecasts also depend on their source timeframe. Its opening may
+      // arrive before this chart's next candle, so invalidate that projection too.
+      const anchorTimelineSignature=Object.keys(INTERVAL).filter(period=>period!==this.period).map(period=>{const rows=market?.periods?.[period]||[];return[period,rows.length,...[rows[0],rows.at(-2),rows.at(-1)].map(row=>timestamp(row?.time??row?.dt))].join(':');}).join('|');
+      const first=this.bars[0],last=this.bars.at(-1),previousLastTime=this.lastBarTime,signature=first&&last?`${first.time}:${first.open}:${last.time}:${this.bars.length}`:'',tailSignature=this.bars.slice(-2).map(bar=>['time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':')).join('|'),contentSignature=signature+`:${tailSignature}:${anchorTimelineSignature}:${market?.history_token}:${market?.fresh}:${market?.feed_status}:${market?.unavailable}`,unchanged=contentSignature===this.contentSignature;
       this.contentSignature=contentSignature;this.dataSignature=signature;
       if(!reset&&this.view&&previousBars.length&&signature!==this.previousTimelineSignature)this.view=preserveView(this.view,previousBars,this.bars,this.period,this.viewCustomized!==true&&this.followLatest!==false,previousScale,this.getTimeScale());
       this.previousTimelineSignature=signature;
@@ -245,7 +248,12 @@
     zoomLimit(){const scale=this.getTimeScale();let left=0,right=this.bars.length;for(const object of this.objects())for(const point of object.points||[]){const position=scale.position(this.pointTime(point));if(finite(position)){left=Math.min(left,position);right=Math.max(right,position);}}return Math.max(10000,(right-left)*1.4+30);}
     forecastPoint(point){return anchorPoint(point,this.bars,this.period,this.getTimeScale());}
     applyPendingMarket(){if(this.pendingMarket&&!this.drag&&!this.path.length&&!this.pinch){const market=this.pendingMarket;this.pendingMarket=null;this.setData(market,this.plan);}}
-    editForecastPoints(object,segment,direction){const rendered=object.points.map(point=>({...point,time:this.pointTime(point)})),edited=editPathPoints(rendered,segment,direction,this.tick,INTERVAL[this.period]);return edited.map(point=>{const index=rendered.findIndex(old=>old.id===point.id&&old.time===point.time&&old.price===point.price);return index>=0?{...object.points[index]}:this.forecastPoint(point);});}
+    editForecastPoints(object,segment,direction){
+      // Preserve original coordinates by provenance, not geometric equality: an inserted
+      // midpoint may coincide with another legacy node that has no stable ID.
+      const rendered=object.points.map((point,index)=>({...point,time:this.pointTime(point),sourceIndex:index})),edited=editPathPoints(rendered,segment,direction,this.tick,INTERVAL[this.period]);
+      return edited.map(({sourceIndex,...point})=>Number.isInteger(sourceIndex)?{...object.points[sourceIndex]}:this.forecastPoint(point));
+    }
     priceFit(view){return fitVisiblePrice(this.bars,view,this.tick,this.period,this.objects(),point=>this.pointTime(point),this.getTimeScale());}
     locateObject(object){const points=object?.points||[];if(!points.length||!this.view)return;const times=points.map(point=>this.pointTime(point)),prices=points.map(point=>point.price),scale=this.getTimeScale(),positions=times.map(time=>scale.position(time)),left=Math.min(...positions),right=Math.max(...positions),span=Math.max(8,(right-left)*1.3),low=Math.min(...prices),high=Math.max(...prices),pad=Math.max(this.tick*4,(high-low)*.15);this.view={start:scale.time((left+right-span)/2),end:scale.time((left+right+span)/2),min:low-pad,max:high+pad};this.autoPrice=false;this.followLatest=false;this.viewCustomized=true;this.render();}
     point(event){const bounds=this.svg.getBoundingClientRect(),box=this.svg.viewBox?.baseVal,sx=box?.width&&bounds.width?box.width/bounds.width:1,sy=box?.height&&bounds.height?box.height/bounds.height:1;return{x:(event.clientX-bounds.left)*sx+(box?.x||0),y:(event.clientY-bounds.top)*sy+(box?.y||0)};}

@@ -2,9 +2,11 @@
 import functools
 import hmac
 import json
+import math
 import re
 import secrets
 import time
+from datetime import datetime
 from urllib.parse import urlsplit
 
 from flask import Blueprint, Response, g, jsonify, request, stream_with_context
@@ -44,6 +46,95 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     def allowed_fields(value, fields):
         if set(value) - set(fields):
             raise WorkspaceError("请求包含未知字段")
+
+    def coordinate_cutoffs(symbol, value):
+        # Only old coordinate payloads need a cached-market lookup; modern drawing
+        # events and price/colour/note edits keep the fast, market-independent path.
+        objects = value.get("upsert_objects", [])
+        if isinstance(value.get("plan"), dict):
+            objects = value["plan"].get("objects", [])
+        objects = objects if isinstance(objects, list) else []
+        bare = lambda p: isinstance(p, dict) and "time" in p and "chart_anchor" not in p
+        identity = lambda item: item.get("id") if isinstance(item.get("id"), str) else None
+        candidates = [o for o in objects if isinstance(o, dict) and o.get("kind") in ("wave", "path") and
+                      isinstance(o.get("points"), list) and any(bare(p) for p in o["points"])]
+        edits = []
+        for edit in value.get("object_edits", []) if isinstance(value.get("object_edits", []), list) else []:
+            if not isinstance(edit, dict):
+                continue
+            changes = edit.get("changes", {})
+            candidate = False
+            if isinstance(changes, dict) and isinstance(changes.get("points"), list):
+                candidate |= any(bare(p) for p in changes["points"])
+            for update in edit.get("node_updates", []) if isinstance(edit.get("node_updates", []), list) else []:
+                candidate |= isinstance(update, dict) and bare(update.get("changes"))
+            for insert in edit.get("node_inserts", []) if isinstance(edit.get("node_inserts", []), list) else []:
+                candidate |= isinstance(insert, dict) and bare(insert.get("point"))
+            if candidate:
+                edits.append(edit)
+        if not candidates and not edits:
+            return {}
+        # The store performs the final check again under its write lock. This
+        # read is only an optimization: unrelated drawing kinds never need K-lines.
+        previous = store.plan(selected_key(symbol)) or {}
+        old_objects = {obj["id"]: obj for obj in previous.get("objects", [])}
+
+        def changed_bare_points(points, prior):
+            valid = [point for point in points if isinstance(point, dict)]
+            if (len(valid) == len(points) == len(prior) and all(not p.get("id") for p in valid + prior)
+                    and [p.get("time") for p in valid] == [p.get("time") for p in prior]):
+                return False
+            old_points = {identity(point): point for point in prior if identity(point)}
+            return any(bare(point) and (not identity(point) or identity(point) not in old_points
+                                       or old_points[identity(point)].get("time") != point["time"]) for point in valid)
+
+        needed = any(changed_bare_points(obj["points"], old_objects.get(identity(obj), {}).get("points", []))
+                     for obj in candidates)
+        for edit in edits:
+            obj = old_objects.get(identity(edit))
+            if obj is None or obj.get("kind") not in ("wave", "path"):
+                continue
+            prior = obj.get("points", [])
+            nodes = {identity(point): point for point in prior if identity(point)}
+            changes = edit.get("changes", {})
+            if isinstance(changes, dict) and isinstance(changes.get("points"), list):
+                needed |= changed_bare_points(changes["points"], prior)
+            for update in edit.get("node_updates", []) if isinstance(edit.get("node_updates", []), list) else []:
+                if isinstance(update, dict) and bare(update.get("changes")) and identity(update) in nodes:
+                    needed |= nodes[identity(update)].get("time") != update["changes"]["time"]
+            for insert in edit.get("node_inserts", []) if isinstance(edit.get("node_inserts", []), list) else []:
+                if isinstance(insert, dict) and bare(insert.get("point")):
+                    needed |= identity(insert["point"]) not in nodes
+        if not needed:
+            return {}
+        try:
+            # Existing preview providers accept one symbol and cap history at
+            # 240 rows per period. Do not copy 16,000 rows merely to read last K.
+            provider = market_preview_provider or market_provider
+            market = provider(symbol)
+            if (market.get("symbol") != symbol or market.get("incremental")
+                    or market.get("partial") and market_preview_provider is None):
+                return {}
+            result = {}
+            for period in ("day", "m30", "m3"):
+                bars = market.get("periods", {}).get(period, [])
+                if not bars:
+                    continue
+                raw = bars[-1].get("dt", bars[-1].get("time"))
+                if isinstance(raw, str):
+                    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        continue
+                    cutoff = parsed.timestamp() * 1000
+                else:
+                    cutoff = raw
+                if isinstance(cutoff, (int, float)) and not isinstance(cutoff, bool) and math.isfinite(cutoff):
+                    result[period] = cutoff
+            return result
+        except Exception:
+            # A feed outage must not prevent unrelated stored-plan editing.
+            # Anchor-loss protection in the store still applies without a feed.
+            return {}
 
     def same_origin():
         fetch_site = request.headers.get("Sec-Fetch-Site")
@@ -214,7 +305,7 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         allowed_fields(value, ("base_revision", "plan"))
         rules = current_rules()
         version = rules.get("version") if rules.get("available", True) and rules.get("compatible", True) else None
-        plan = store.save_plan(selected_key(symbol), value.get("base_revision"), value.get("plan"), g.workspace_user["id"], version)
+        plan = store.save_plan(selected_key(symbol), value.get("base_revision"), value.get("plan"), g.workspace_user["id"], version, coordinate_cutoffs(symbol, value))
         # Saving and reviewing are separate actions. A market failure cannot turn a
         # committed revision into an apparent failed save that the client retries.
         return jsonify(status="ok", plan=plan)
@@ -292,7 +383,7 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         plan = store.patch_plan(selected_key(symbol), value.get("base_revision"), value.get("changes", {}),
                                 value.get("upsert_objects", []), value.get("delete_object_ids", []),
                                 g.workspace_user["id"], version, value.get("conflict_policy", "detect"),
-                                value.get("object_edits", []), value.get("mutation_id"))
+                                value.get("object_edits", []), value.get("mutation_id"), coordinate_cutoffs(symbol, value))
         return jsonify(status="ok", plan=plan)
 
     @bp.route("/presence", methods=["GET", "POST"])

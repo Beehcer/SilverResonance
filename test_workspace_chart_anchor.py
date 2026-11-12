@@ -98,7 +98,7 @@ class WorkspaceChartAnchorTests(unittest.TestCase):
             wave["points"][0]["chart_anchor"] = anchor(offset=offset)
             self.assertEqual(validate_plan({"objects": [wave]})["objects"][0]["points"][0]["chart_anchor"]["offset"], offset)
 
-    def test_anchor_only_edit_is_rejected_and_legacy_time_only_clears_anchor(self):
+    def test_anchor_only_and_legacy_time_only_edits_cannot_erase_a_fixed_coordinate(self):
         wave = collaboration.wave()
         wave["points"][0]["chart_anchor"] = anchor()
         self.assertEqual(self.save({"objects": [wave]}).status_code, 200)
@@ -108,10 +108,12 @@ class WorkspaceChartAnchorTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400, response.json)
             self.assertEqual(self.store.plan(SYMBOL), baseline)
         response = self.send([{"id": "wave", "node_updates": [{"id": "a", "changes": {"time": 1794389999000}}]}])
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertIn("刷新", response.json["message"])
+        self.assertEqual(self.store.plan(SYMBOL), baseline)
+        response = self.send([{"id": "wave", "node_updates": [{"id": "a", "changes": {"time": 1794389999000, "chart_anchor": None}}]}])
         self.assertEqual(response.status_code, 200, response.json)
-        point = response.json["plan"]["objects"][0]["points"][0]
-        self.assertNotIn("chart_anchor", point)
-        self.assertEqual(point["time"], 1794389999000)
+        self.assertIsNone(response.json["plan"]["objects"][0]["points"][0]["chart_anchor"])
 
     def test_same_revision_horizontal_edits_remain_complete_pairs_and_price_merges(self):
         wave = collaboration.wave()

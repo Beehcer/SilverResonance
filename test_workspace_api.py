@@ -45,7 +45,8 @@ class WorkspaceApiTests(unittest.TestCase):
 
     def market(self, symbol):
         self.market_calls.append(symbol)
-        return {"symbol": symbol, "source": "fixture", "connected": False, "stale": True}
+        return {"symbol": symbol, "source": "fixture", "connected": False, "stale": True,
+                "periods": {key: [{"time": 1893456000000}] for key in ("day", "m30", "m3")}}
 
     @staticmethod
     def evaluate(plan, market, risk, version):

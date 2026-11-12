@@ -180,3 +180,139 @@ test('setData redraws a corrected penultimate candle even when token and latest 
     assert.equal(renders,1,'identical refreshed tail must still skip a redundant render');
   }
 });
+
+// Anonymous trading-session fixture: drawings made after the night close must
+// survive each later opening, not merely the first gap in a single snapshot.
+const lateHistory=['2026-11-04T21:00:00','2026-11-04T21:30:00','2026-11-04T22:00:00','2026-11-04T22:30:00'].map(value=>bar(ms(value)));
+const reopenTimes=['2026-11-05T09:00:00','2026-11-05T09:30:00','2026-11-05T10:00:00','2026-11-05T10:30:00','2026-11-05T11:00:00','2026-11-05T13:30:00','2026-11-05T14:00:00','2026-11-05T14:30:00','2026-11-05T21:00:00','2026-11-05T21:30:00','2026-11-05T22:00:00','2026-11-05T22:30:00','2026-11-06T09:00:00'].map(ms);
+function lateWave(){return{id:'anonymous-forecast',kind:'wave',period:'m30',points:C.wavePoints([1.25,5.5,9.75,14.5].map((offset,index)=>C.anchorPoint({time:lateHistory.at(-1).time+offset*step,price:[3040,3062,3010,3050][index]},lateHistory,'m30')))};}
+function fixedLateChart(data=market(lateHistory),plan={objects:[]},period='m30'){
+  const chart=chartAt(period,data,plan);chart.autoPrice=false;chart.followLatest=false;
+  chart.view={start:lateHistory[0].time,end:lateHistory.at(-1).time+20*step,min:2980,max:3070};chart.render();return chart;
+}
+function eventChart(data=market(lateHistory),plan={objects:[]},period='m30'){
+  const chart=fixedLateChart(data,plan,period),added=[],updates=[];
+  chart.host.style={};chart.host.focus=()=>{};chart.svg={getBoundingClientRect:()=>({left:0,top:0,width:800,height:300}),setPointerCapture(){},hasPointerCapture:()=>false};
+  chart.callbacks={snapEnabled:()=>false,add(object){added.push(object);chart.plan.objects.push({...object,id:'created-'+added.length});},update(id,patch){updates.push({id,patch});const object=chart.plan.objects.find(o=>o.id===id);if(object)Object.assign(object,patch);}};
+  const event=(point,at=1000)=>({clientX:point.x,clientY:point.y,button:0,pointerId:1,timeStamp:at,detail:1,preventDefault(){}});
+  return{chart,added,updates,event};
+}
+
+test('midnight snapshot, morning, lunch and successive night openings preserve every forecast node',()=>{
+  const wave=lateWave(),plan={objects:[wave]},chart=fixedLateChart(market(lateHistory),plan),before=chart.objectPoints(wave),saved=JSON.stringify(plan);
+  const snapshots=[lateHistory,...reopenTimes.map((_,index)=>[...lateHistory,...reopenTimes.slice(0,index+1).map(bar)])];
+  for(const rows of snapshots){
+    chart.setData(market(rows),JSON.parse(saved));
+    chart.objectPoints(chart.plan.objects[0]).forEach((point,index)=>{close(point.x,before[index].x);close(point.y,before[index].y);});
+    assert.equal(JSON.stringify(chart.plan),saved,'a market refresh cannot convert or overwrite user coordinates');
+    const reloaded=chartAt('m30',market(structuredClone(rows)),JSON.parse(saved));reloaded.view={...chart.view};reloaded.autoPrice=false;reloaded.followLatest=false;reloaded.render();
+    reloaded.objectPoints(reloaded.plan.objects[0]).forEach((point,index)=>{close(point.x,before[index].x);close(point.y,before[index].y);});
+  }
+});
+
+test('peers with different history prefixes agree across repeated session openings while the base candle is retained',()=>{
+  const wave=lateWave(),saved=JSON.stringify(wave);
+  for(const count of [1,6,9,13]){
+    const rows=[...lateHistory,...reopenTimes.slice(0,count).map(bar)],prefix=[bar(lateHistory[0].time-2*step),bar(lateHistory[0].time-step),...rows];
+    const full=fixedLateChart(market(rows),{objects:[wave]});
+    for(const peerRows of [prefix,rows.slice(2)]){
+      const peer=fixedLateChart(market(peerRows),{objects:[JSON.parse(saved)]});peer.view={...full.view};peer.render();
+      assert.deepEqual(peer.plan.objects[0].points.map(point=>peer.pointTime(point)),wave.points.map(point=>full.pointTime(point)));
+      peer.objectPoints(peer.plan.objects[0]).forEach((point,index)=>close(point.x,full.objectPoints(wave)[index].x));
+    }
+  }
+  assert.equal(JSON.stringify(wave),saved);
+});
+
+test('cross-period reload uses source anchors after morning, lunch and night opens',()=>{
+  const wave=lateWave();
+  for(const count of [1,6,9,13]){
+    const source=[...lateHistory,...reopenTimes.slice(0,count).map(bar)],m3=source.flatMap(row=>Array.from({length:10},(_,index)=>bar(row.time+index*C.INTERVAL.m3))),data=market(source,m3);
+    const sourceChart=fixedLateChart(data,{objects:[wave]}),peer=chartAt('m3',JSON.parse(JSON.stringify(data)),{objects:[JSON.parse(JSON.stringify(wave))]});
+    const resolved=wave.points.map(point=>sourceChart.pointTime(point));
+    assert.deepEqual(peer.plan.objects[0].points.map(point=>peer.pointTime(point)),resolved);
+    peer.objectPoints(peer.plan.objects[0]).forEach((point,index)=>close(point.x,peer.tx.x(resolved[index])));
+  }
+});
+
+test('source-period-only refresh redraws mapped anchors even when target candles and plan are unchanged',()=>{
+  const wave=lateWave(),m3=[bar(lateHistory.at(-1).time),bar(lateHistory.at(-1).time+C.INTERVAL.m3)],chart=fixedLateChart(market(lateHistory,m3),{objects:[wave]},'m3');
+  const render=chart.render;let renders=0,painted=chart.objectPoints(wave);
+  chart.render=function(){renders++;render.call(this);painted=this.objectPoints(wave);};
+  const before=painted.map(point=>point.x);
+  chart.setData(market([...lateHistory,bar(reopenTimes[0])],m3),chart.plan);
+  assert.equal(renders,1,'the source timeframe is part of the drawing render dependency');
+  assert.notDeepEqual(painted.map(point=>point.x),before);
+  painted.forEach((point,index)=>close(point.x,chart.tx.x(chart.pointTime(wave.points[index]))));
+  chart.setData(market([...lateHistory,bar(reopenTimes[0])],m3),chart.plan);
+  assert.equal(renders,1,'an identical source timeline does not redraw');
+});
+
+test('new historical forecast coordinates carry explicit null while each future coordinate carries its source anchor',()=>{
+  for(const time of [lateHistory[0].time,lateHistory.at(-1).time,lateHistory.at(-1).time+step*.25]){
+    const point=C.anchorPoint({time,price:3040},lateHistory,'m30');
+    assert.ok(Object.hasOwn(point,'chart_anchor'));
+    if(time<=lateHistory.at(-1).time)assert.equal(point.chart_anchor,null);
+    else assert.deepEqual(point.chart_anchor,{period:'m30',base_time:lateHistory.at(-1).time,offset:.25});
+  }
+});
+
+test('actual wave and legacy path drawing events anchor every new future node before double-click completion',()=>{
+  for(const kind of ['wave','path']){
+    const {chart,added,event}=eventChart();chart.tool=kind;
+    const values=[{time:lateHistory[1].time,price:3037},...[[2.25,3057],[5.5,3021],[10,3052]].map(([offset,price])=>({time:lateHistory.at(-1).time+offset*step,price}))];
+    values.forEach((value,index)=>{const point={x:chart.tx.x(value.time),y:chart.tx.y(value.price)};chart.down(event(point,1000+index*1000));chart.up(event(point,1100+index*1000));});
+    const last=values.at(-1),point={x:chart.tx.x(last.time),y:chart.tx.y(last.price)};
+    chart.down(event(point,4200));chart.doubleClick(event(point,4201));
+    assert.equal(added.length,1);assert.equal(added[0].points.length,4);assert.equal(chart.path.length,0);
+    assert.equal(added[0].points[0].chart_anchor,null);
+    added[0].points.slice(1).forEach((point,index)=>{assert.equal(point.time,values[index+1].time);assert.equal(point.chart_anchor.period,'m30');assert.equal(point.chart_anchor.base_time,lateHistory.at(-1).time);});
+    if(kind==='wave')assert.deepEqual(added[0].points.map(point=>point.label),['1','2','3','4']);
+    const before=chart.objectPoints(added[0]);chart.setData(market([...lateHistory,bar(reopenTimes[0])]),chart.plan);
+    chart.objectPoints(added[0]).forEach((point,index)=>close(point.x,before[index].x));
+  }
+});
+
+test('actual horizontal node drag and double-click insertion emit anchored points and keep untouched node IDs',()=>{
+  const wave=lateWave(),{chart,updates,event}=eventChart(market(lateHistory),{objects:[wave]}),before=structuredClone(chart.plan.objects[0]);
+  const start=chart.objectPoints(before)[1],end={x:start.x+25,y:start.y+5};
+  chart.down(event(start,1000));chart.move(event(end,1100));chart.up(event(end,1200));
+  assert.equal(updates.length,1);const moved=chart.plan.objects[0];assert.equal(moved.points[1].id,before.points[1].id);assert.ok(moved.points[1].chart_anchor);assert.notEqual(moved.points[1].time,before.points[1].time);
+  assert.deepEqual(moved.points[0],before.points[0]);assert.deepEqual(moved.points[2],before.points[2]);
+  const screen=chart.objectPoints(moved),middle={x:(screen[1].x+screen[2].x)/2,y:(screen[1].y+screen[2].y)/2};chart.doubleClick(event(middle,2000));
+  assert.equal(updates.length,2);const inserted=chart.plan.objects[0].points;
+  assert.equal(inserted.length,5);assert.ok(inserted[2].chart_anchor);assert.equal(inserted[2].chart_anchor.period,'m30');assert.equal(inserted[3].id,before.points[2].id);assert.deepEqual(inserted.map(point=>point.label),['1','2','3','4','5']);
+  const positions=chart.objectPoints(chart.plan.objects[0]);chart.setData(market([...lateHistory,...reopenTimes.slice(0,9).map(bar)]),chart.plan);
+  chart.objectPoints(chart.plan.objects[0]).forEach((point,index)=>close(point.x,positions[index].x));
+});
+
+test('legacy path midpoint coinciding with an existing bare node is still a newly anchored coordinate',()=>{
+  const base=lateHistory.at(-1).time,path={id:'legacy-path',kind:'path',period:'m30',points:[{time:base+2*step,price:3040},{time:base+6*step,price:3060},{time:base+4*step,price:3050}]};
+  const chart=fixedLateChart(market(lateHistory),{objects:[path]}),points=chart.editForecastPoints(path,0,1);
+  assert.equal(points.length,4);assert.deepEqual(points[0],path.points[0]);assert.deepEqual(points[2],path.points[1]);assert.deepEqual(points[3],path.points[2]);
+  assert.deepEqual(points[1].chart_anchor,{period:'m30',base_time:base,offset:4});
+  assert.ok(points.every(point=>!Object.hasOwn(point,'sourceIndex')),'temporary provenance never leaks into shared data');
+});
+
+test('mapped wave horizontal edits in a smaller chart explicitly distinguish its history from its future',()=>{
+  const wave=lateWave(),m3=[...lateHistory,...Array.from({length:20},(_,index)=>bar(reopenTimes[0]+index*C.INTERVAL.m3))],data=market([...lateHistory,bar(reopenTimes[0])],m3);
+  const chart=chartAt('m3',data,{objects:[wave]});chart.autoPrice=false;chart.followLatest=false;chart.render();
+  const start=chart.objectPoints(wave)[0];
+  for(const time of [m3.at(-5).time,m3.at(-1).time+C.INTERVAL.m3*2.5]){
+    const value={time,price:3041},point={x:chart.tx.x(time),y:chart.tx.y(value.price)},moved=chart.objectDragPreview({object:structuredClone(wave),anchor:0,origin:{time:chart.pointTime(wave.points[0]),price:wave.points[0].price},value,start,point});
+    assert.equal(moved.points[0].id,wave.points[0].id);assert.equal(moved.points[0].time,time);assert.ok(Object.hasOwn(moved.points[0],'chart_anchor'));
+    if(time<=m3.at(-1).time)assert.equal(moved.points[0].chart_anchor,null);
+    else assert.deepEqual(moved.points[0].chart_anchor,{period:'m3',base_time:m3.at(-1).time,offset:2.5});
+  }
+});
+
+test('completing a drawing after a buffered opening preserves the frame in which its points were placed',()=>{
+  const {chart,added,event}=eventChart();chart.tool='wave';
+  const values=[{time:lateHistory.at(-1).time+2.5*step,price:3040},{time:lateHistory.at(-1).time+8.5*step,price:3060}],expected=values.map(value=>({x:chart.tx.x(value.time),y:chart.tx.y(value.price)}));
+  chart.down(event(expected[0],1000));chart.setData(market([...lateHistory,bar(reopenTimes[0])]),chart.plan);
+  assert.equal(chart.bars.at(-1).time,lateHistory.at(-1).time);
+  chart.down(event(expected[1],2000));chart.down(event(expected[1],2200));
+  assert.equal(added.length,1);assert.equal(chart.pendingMarket,null);assert.equal(chart.bars.at(-1).time,reopenTimes[0]);
+  added[0].points.forEach((point,index)=>{assert.equal(point.time,values[index].time);assert.equal(point.chart_anchor.base_time,lateHistory.at(-1).time);});
+  chart.objectPoints(added[0]).forEach((point,index)=>{close(point.x,expected[index].x);close(point.y,expected[index].y);});
+});
