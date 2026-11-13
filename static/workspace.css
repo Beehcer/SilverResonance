@@ -41,9 +41,9 @@
 .layer-controls input{min-width:0;flex:1;width:50%;padding:5px}
 .layer-controls select{max-width:120px;min-width:0;font-size:11px}
 .layer-result{font-size:11px;color:#8097a8;padding:3px 0 6px}
-.object-list{max-height:32vh;overflow:auto;scrollbar-gutter:stable}
+.object-list{max-height:32vh;min-width:0;max-width:100%;overflow-x:hidden;overflow-y:auto;scrollbar-gutter:stable}
 .object-row.layer-row{display:flex;align-items:center;gap:2px;min-width:0;padding:3px 0}
-.layer-row .layer-main{flex:1;min-width:60px;overflow:hidden;text-align:left}
+.layer-row .layer-main{flex:1;min-width:0;overflow:hidden;text-align:left}
 .layer-row .layer-main span,.layer-row .layer-main small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .layer-row .layer-drag{cursor:grab;padding:4px 2px;color:#6c8795}
 .layer-row .layer-locate,.layer-row .layer-visibility,.layer-row .layer-lock{font-size:11px;padding:4px;flex:none}
@@ -60,6 +60,9 @@
 .object-row.layer-row>.layer-drag{flex:0 0 16px;min-width:16px;padding:3px 0;text-align:center}
 .object-list .layer-main{display:block;padding:6px 4px}
 .object-list .layer-main small{white-space:normal;line-height:1.4;margin-top:3px}
+/* Leave room for layer names and every action in the compact inspector. */
+.workspace-dock .layer-row .layer-locate{width:20px;min-width:20px;padding-inline:0;justify-content:center}
+.workspace-dock .layer-row .layer-visibility,.workspace-dock .layer-row .layer-lock{width:30px;min-width:30px;padding-inline:0;justify-content:center}
 
 .app-rail .cases-entry{margin-top:auto;margin-bottom:5px;flex-shrink:0;color:#e9c952;border-top:1px solid #39424b;background:#1c242b}
 .app-rail .cases-entry:hover,.app-rail .cases-entry:focus-visible{background:#373523;outline:1px solid #c5a43c}

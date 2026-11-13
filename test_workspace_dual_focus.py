@@ -5,18 +5,20 @@ import unittest
 
 
 class ShellFocusTests(unittest.TestCase):
-    def run_scenario(self, scenario):
+    def run_scenario(self, scenario, *, delayed_ready=False):
         source = (Path(__file__).parent / 'static/workspace-dual-shell.js').read_text(encoding='utf-8')
         core = source[source.index('  const M ='):source.index('  function makeFrame(')]
         transition = source[source.index('  async function transition('):source.index('  function targetAt(')]
+        make_frame = source[source.index('  function makeFrame('):source.index('  async function waitReady(')] if delayed_ready else ''
         messages = source[source.index("  window.addEventListener('message'"):source.index("  $('drop-shield').addEventListener")]
         model = (Path(__file__).parent / 'static/workspace-dual-model.js').as_posix()
         harness = r"""
 const assert = require('node:assert/strict');
-const events={}, saved=[], notices=[], raf=[];
+const events={}, saved=[], notices=[], raf=[], appended=[], readyWaits=[];
 const node=()=>({hidden:false,textContent:'',style:{},attributes:{},setAttribute(key,value){this.attributes[key]=value;},classList:{add(){},remove(){},toggle(){}},getBoundingClientRect:()=>({left:0,top:25,width:1400,height:1000})});
 const nodes={stage:node(),toast:node(),startup:node(),'sidebar-left-toggle':node(),'sidebar-right-toggle':node()};
-const document={getElementById:id=>nodes[id],body:node()};
+nodes.stage.append=frame=>appended.push({frame,hidden:frame.hidden,inert:frame.inert});
+const document={getElementById:id=>nodes[id],body:node(),createElement:tag=>{assert.equal(tag,'iframe');return record('pane-b').frame;}};
 const window={DualWorkspaceModel:require(MODEL),addEventListener:(type,fn)=>events[type]=fn};
 const location={origin:'http://localhost'};
 const localStorage={setItem:(key,value)=>saved.push(JSON.parse(value))};
@@ -37,20 +39,35 @@ function record(id) {
     prepareDeactivate:async()=>{calls.deactivate++;return api.closeAllowed;},
     focusMaximizeButton:()=>{calls.focus++;},
     switchSymbol:async(...args)=>{calls.switches.push(args);return true;}};
-  const frame={hidden:false,inert:false,style:{cssText:''},className:'',title:'',
+  const frame={hidden:false,inert:false,style:{cssText:''},className:'',title:'',dataset:{},
     setAttribute:(key,value)=>attrs[key]=value,removeAttribute:key=>delete attrs[key],
     getBoundingClientRect:()=>({left:0,top:25,width:1400,height:1000}),
     remove:()=>{frame.removed=true;},contentWindow:{FullWorkspace:api,focus(){}}};
   return {frame,api,calls,attrs,ready:true,symbol:id==='pane-a'?'MA':'SP'};
 }
-function makeFrame(pane){const result=record(pane.id);result.symbol=pane.symbol;frames.set(pane.id,result);return result;}
-async function waitReady(){return true;}
 ids=['MA','SP','AU'];symbols=ids;
 state={panes:[{id:'pane-a',symbol:'MA'},{id:'pane-b',symbol:'SP'}],activeId:'pane-a'};
 const a=record('pane-a'),b=record('pane-b');frames.set('pane-a',a);frames.set('pane-b',b);
 layout();
 """
-        script = harness + core + transition + messages + fixtures + '\n(async()=>{\n' + scenario + '\n})().catch(error=>{console.error(error);process.exitCode=1;});'
+        if delayed_ready:
+            frame_lifecycle = make_frame + r"""
+function waitReady(record){return new Promise((resolve,reject)=>readyWaits.push({record,resolve,reject}));}
+async function pendingLoad(){
+  for(let tick=0;tick<20&&!readyWaits.length;tick++)await Promise.resolve();
+  assert.equal(readyWaits.length,1,'The new pane must be waiting for its first ready message');
+  return readyWaits[0];
+}
+function onlyOriginalPane(){
+  frames.delete('pane-b');state={panes:[{id:'pane-a',symbol:'MA'}],activeId:'pane-a'};layout();
+}
+"""
+        else:
+            frame_lifecycle = r"""
+function makeFrame(pane){const result=record(pane.id);result.symbol=pane.symbol;frames.set(pane.id,result);return result;}
+async function waitReady(){return true;}
+"""
+        script = harness + core + transition + messages + fixtures + frame_lifecycle + '\n(async()=>{\n' + scenario + '\n})().catch(error=>{console.error(error);process.exitCode=1;});'
         result = subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8', capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
@@ -171,6 +188,78 @@ a.api.hideAllowed=true;restoreMaximized();assert.equal(workspaceMaximized,false)
 events.message({origin:location.origin,source:a.frame.contentWindow,data:{type:'full-workspace:dock-toggle',paneId:'pane-a',open:true}});
 assert.equal(a.api.ui.dockOpen,false);
 """)
+
+    def test_slow_second_pane_load_keeps_original_workspace_visible_until_ready(self):
+        self.run_scenario(r"""
+onlyOriginalPane();const before=JSON.stringify(state),originalWindow=a.frame.contentWindow;
+const pending=transition(M.dropSymbol(state,'SP','pane-a',ids));
+const waiting=await pendingLoad(),newFrame=waiting.record.frame;
+assert.equal(appended[0].hidden,true,'The loading iframe must be concealed before it enters the DOM');
+assert.equal(appended[0].inert,true);
+const opening=new URL(newFrame.src,location.origin).searchParams;
+assert.equal(opening.get('active'),'false');assert.equal(opening.get('count'),'2');
+assert.equal(opening.get('slot'),'bottom');assert.equal(opening.get('symbol'),'SP');
+assert.equal(JSON.stringify(state),before,'Loading a second pane must not activate it yet');
+assert.equal(a.frame.hidden,false);assert.equal(a.frame.inert,false);assert.equal(a.api.mode.count,1);
+assert.equal(a.frame.contentWindow,originalWindow);assert.equal(a.frame.removed,undefined);
+assert.equal(newFrame.hidden,true,'A new connection screen must never cover the loaded pane');
+assert.equal(newFrame.inert,true);assert.equal(saved.length,0);assert.equal(busy,true);
+waiting.record.ready=true;waiting.resolve(true);await pending;
+assert.deepEqual(state.panes.map(p=>p.symbol),['MA','SP']);assert.equal(state.activeId,'pane-b');
+assert.equal(frames.size,2);assert.equal(a.frame.hidden,false);assert.equal(newFrame.hidden,false);
+assert.equal(a.api.mode.count,2);assert.equal(saved.length,1);assert.equal(busy,false);
+""", delayed_ready=True)
+
+    def test_second_pane_timeout_discards_only_loading_frame_and_preserves_fullscreen(self):
+        self.run_scenario(r"""
+onlyOriginalPane();maximizeWorkspace('pane-a');setFullscreenSidebar('left',true);
+const before=JSON.stringify(state),sidebars=JSON.stringify(fullscreenSidebars);
+const pending=transition(M.dropSymbol(state,'SP','pane-a',ids));
+const waiting=await pendingLoad();waiting.resolve(false);await pending;
+assert.equal(JSON.stringify(state),before);assert.equal(frames.size,1);assert.equal(frames.get('pane-a'),a);
+assert.equal(waiting.record.frame.removed,true);assert.equal(a.frame.removed,undefined);
+assert.equal(a.frame.hidden,false);assert.equal(a.frame.inert,false);assert.equal(a.api.mode.count,1);
+assert.equal(workspaceMaximized,true);assert.equal(JSON.stringify(fullscreenSidebars),sidebars);
+assert.equal(saved.length,0);assert.equal(busy,false);
+assert.match(nodes.toast.textContent,/加载|连接|原窗口|保留/);
+events.message({origin:location.origin,source:waiting.record.frame.contentWindow,data:{type:'full-workspace:ready',paneId:'pane-b'}});
+assert.equal(JSON.stringify(state),before);assert.equal(frames.size,1,'Late readiness cannot resurrect a discarded pane');
+""", delayed_ready=True)
+
+    def test_second_pane_load_exception_cleans_up_uncommitted_frame(self):
+        self.run_scenario(r"""
+onlyOriginalPane();const before=JSON.stringify(state);
+const pending=transition(M.dropSymbol(state,'SP','pane-a',ids));
+const waiting=await pendingLoad();waiting.reject(new Error('Simulated iframe readiness failure'));await pending;
+assert.equal(JSON.stringify(state),before);assert.equal(frames.size,1);assert.equal(frames.get('pane-a'),a);
+assert.equal(waiting.record.frame.removed,true);assert.equal(a.frame.hidden,false);assert.equal(a.frame.inert,false);
+assert.equal(a.api.mode.count,1);assert.equal(saved.length,0);assert.equal(busy,false);
+""", delayed_ready=True)
+
+    def test_new_draft_while_second_pane_loads_cancels_activation_without_touching_draft(self):
+        self.run_scenario(r"""
+onlyOriginalPane();const before=JSON.stringify(state);
+const pending=transition(M.dropSymbol(state,'SP','pane-a',ids));
+const waiting=await pendingLoad();a.api.allowed=false;
+waiting.record.ready=true;waiting.resolve(true);await pending;
+assert.equal(JSON.stringify(state),before);assert.equal(frames.size,1);assert.equal(frames.get('pane-a'),a);
+assert.equal(waiting.record.frame.removed,true);assert.equal(a.frame.hidden,false);assert.equal(a.frame.inert,false);
+assert.equal(a.calls.deactivate,0);assert.equal(a.api.allowed,false);assert.equal(a.api.mode.count,1);
+assert.equal(saved.length,0);assert.equal(busy,false);
+assert.match(nodes.toast.textContent,/编辑|保留/);
+""", delayed_ready=True)
+
+    def test_second_pane_adopts_sidebar_changes_made_during_loading(self):
+        self.run_scenario(r"""
+onlyOriginalPane();const pending=transition(M.dropSymbol(state,'SP','pane-a',ids));
+const waiting=await pendingLoad();
+Object.assign(a.api.ui,{group:'favorites',search:'银',panel:'objects-details',dockOpen:false,dockWidth:240});
+waiting.record.ready=true;waiting.resolve(true);await pending;
+const newUI=waiting.record.frame.contentWindow.FullWorkspace.snapshot().ui;
+assert.equal(newUI.group,'favorites');assert.equal(newUI.search,'银');assert.equal(newUI.panel,'objects-details');
+assert.equal(newUI.dockOpen,false);assert.equal(newUI.dockWidth,240);
+assert.equal(a.frame.removed,undefined);assert.equal(frames.size,2);assert.equal(saved.length,1);
+""", delayed_ready=True)
 
 
 if __name__ == '__main__':

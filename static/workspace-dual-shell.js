@@ -94,10 +94,13 @@
     workspaceMaximized = false; layout();
     bridge(activeFrame())?.applyUI(normalDockUI); normalDockUI = null; layout();
   }
-  function makeFrame(pane) {
+  function makeFrame(pane, {layoutState = state, staged = false} = {}) {
     const frame = document.createElement('iframe'); frame.className = 'workspace-frame is-active'; frame.title = name(pane.symbol) + '完整工作台'; frame.dataset.paneId = pane.id;
+    // A new pane must finish connecting before it can cover or resize the
+    // current workspace. Loading a hidden iframe still runs its bootstrap.
+    if (staged) { frame.hidden = true; frame.inert = true; frame.setAttribute('aria-hidden', 'true'); frame.setAttribute('tabindex', '-1'); }
     const url = new URL('/workspace', location.origin); url.searchParams.set('pane', pane.id); url.searchParams.set('symbol', pane.symbol);
-    url.searchParams.set('active', String(pane.id === state.activeId)); url.searchParams.set('slot', state.panes[0].id === pane.id ? 'top' : 'bottom'); url.searchParams.set('count', String(state.panes.length));
+    url.searchParams.set('active', String(!staged && pane.id === layoutState.activeId)); url.searchParams.set('slot', layoutState.panes[0].id === pane.id ? 'top' : 'bottom'); url.searchParams.set('count', String(layoutState.panes.length));
     // An explicit empty board means the shared default plan. Omitting it would
     // incorrectly restore this visitor's previously selected named plan.
     if (typeof pane.board === 'string') url.searchParams.set('board', pane.board);
@@ -113,9 +116,9 @@
   async function transition(next) {
     if (busy || !state || JSON.stringify(next) === JSON.stringify(state)) return;
     busy = true; document.body.classList.add('is-busy');
+    const staged = []; let committed = false, loadingMessage = '';
     try {
       const oldActive = activeFrame();
-      const sharedUI = bridge(oldActive)?.snapshot().ui;
       const affected = state.panes.filter(old => {
         const destination = next.panes.find(pane => pane.id === old.id);
         return !destination || destination.symbol !== old.symbol || old.id === state.activeId && next.activeId !== old.id;
@@ -124,6 +127,16 @@
       // pane cannot silently commit the active pane's unfinished drawing.
       for (const old of affected) {
         if (!bridge(frames.get(old.id))?.canChangeFocus({notify: true})) { announce('请先完成或取消这个品种的当前编辑，原窗口已保留。'); return; }
+      }
+      for (const pane of next.panes) if (!frames.has(pane.id)) {
+        const record = makeFrame(pane, {layoutState: next, staged: true}); staged.push({id: pane.id, record});
+        loadingMessage = '正在加载 ' + name(pane.symbol) + '，原窗口可继续查看。'; announce(loadingMessage);
+        if (!await waitReady(record)) { announce('新窗口没有及时加载，保留原窗口，可稍后再拖入。'); return; }
+      }
+      // The original pane stays usable during loading. Do not steal focus if
+      // the user has started a drawing, text composition or another draft.
+      for (const old of affected) {
+        if (!bridge(frames.get(old.id))?.canChangeFocus({notify: true})) { announce('加载期间有新的编辑，原窗口已保留。'); return; }
       }
       for (const old of affected) {
         const destination = next.panes.find(pane => pane.id === old.id), runtime = bridge(frames.get(old.id));
@@ -143,13 +156,8 @@
           record.symbol = destination.symbol; record.frame.title = name(destination.symbol) + '完整工作台';
         }
       }
-      const previous = state; state = next;
-      for (const pane of state.panes) if (!frames.has(pane.id)) {
-        const record = makeFrame(pane); layout();
-        if (!await waitReady(record)) {
-          record.frame.remove(); frames.delete(pane.id); state = previous; layout(); announce('新窗口没有及时加载，保留原窗口，可稍后再拖入。'); return;
-        }
-      }
+      const sharedUI = bridge(oldActive)?.snapshot().ui;
+      state = next; committed = true;
       for (const [id, record] of frames) if (!state.panes.some(pane => pane.id === id)) { record.frame.remove(); frames.delete(id); }
       // Restore the shared dock before measuring the newly active workspace.
       // Otherwise an old dock width causes a second resize after activation.
@@ -157,7 +165,13 @@
       persist(); layout();
       if (oldActive !== activeFrame()) activeFrame()?.frame.contentWindow.focus();
     } catch (error) { announce('切换暂未完成，请留意计划的同步状态。'); console.error(error); }
-    finally { busy = false; document.body.classList.remove('is-busy'); scheduleLayout(); }
+    finally {
+      if (!committed) for (const {id, record} of staged) {
+        record.frame.remove(); if (frames.get(id) === record) frames.delete(id);
+      }
+      if (loadingMessage && $('toast').textContent === loadingMessage) { clearTimeout(toastTimer); $('toast').hidden = true; }
+      busy = false; document.body.classList.remove('is-busy'); scheduleLayout();
+    }
   }
   function targetAt(x, y) {
     const box = workspaceRect(); if (!box || x < box.left || x > box.left + box.width || y < box.top || y > box.top + box.height) return null;
