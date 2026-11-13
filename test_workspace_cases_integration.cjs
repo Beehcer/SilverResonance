@@ -44,7 +44,7 @@ test('the introductory definition never inherits executable entry controls or la
   assert.match(content.innerHTML,/2B = 突破失败 = 原方向依据减弱；<\/strong><b>不等于行情一定反转/);
   assert.match(content.innerHTML,/2B 入门/);
   assert.doesNotMatch(content.innerHTML,/示例条件已满足|示例入场|保护止损|cases-price-strip|cases-risk|class="long"/);
-  assert.equal((content.innerHTML.match(/data-period=/g)||[]).length,2);
+  assert.equal((content.innerHTML.match(/data-period=/g)||[]).length,6);
   const svg=Cases.conceptChartSvg(concept,'m30');
   assert.doesNotMatch(svg,/编号4为条件预期|已完成触发/);
   controller.selected=data.cases.find(c=>!c.educational).id;
@@ -52,20 +52,14 @@ test('the introductory definition never inherits executable entry controls or la
   assert.match(content.innerHTML,/示例条件已满足/);
 });
 
-test('the seconds example can be opened and switched back without granting an entry',()=>{
-  const Cases=require('./static/workspace-cases.js'),data=require('./static/workspace-cases-data.js'),handlers={};
-  let focused='';
-  const buttons=['standard','quick'].map(key=>({dataset:{conceptExample:key},addEventListener:(name,fn)=>{handlers[key]=fn;}}));
-  const content={innerHTML:'',querySelectorAll:selector=>selector==='[data-concept-example]'?buttons:[],querySelector:selector=>({focus:()=>{focused=selector;}})};
-  const controller={data,selected:data.cases[0].id,content,layers:{},renderCharts(){},renderRule(){},renderCase(){Cases.Controller.prototype.renderCase.call(this);}};
-  controller.renderCase();
-  assert.match(content.innerHTML,/data-period="m30"/);
-  handlers.quick();
-  assert.equal(controller.conceptExample,'quick');assert.match(focused,/quick/);
-  assert.match(content.innerHTML,/data-period="seconds"/);assert.match(content.innerHTML,/data-period="live-m3"/);
-  assert.match(content.innerHTML,/尚未收盘/);assert.match(content.innerHTML,/18秒/);
-  assert.doesNotMatch(content.innerHTML,/示例条件已满足|保护止损|cases-price-strip|cases-risk/);
-  handlers.standard();
-  assert.equal(controller.conceptExample,'standard');assert.match(content.innerHTML,/data-period="m30"/);
-  assert.doesNotMatch(content.innerHTML,/data-period="seconds"/);
+test('both 2B directions and quick candle examples share one long page without toggles',()=>{
+ const Cases=require('./static/workspace-cases.js'),data=require('./static/workspace-cases-data.js');
+ const content={innerHTML:'',querySelectorAll:()=>[]};
+ Cases.Controller.prototype.renderCase.call({data,selected:data.cases[0].id,content,layers:{},renderCharts(){},renderRule(){}});
+ assert.match(content.innerHTML,/底部2B：做多线索/);assert.match(content.innerHTML,/顶部2B：做空线索/);
+ assert.equal((content.innerHTML.match(/data-period="quick-m3"/g)||[]).length,2);
+ assert.doesNotMatch(content.innerHTML,/data-concept-example|data-period="seconds"|data-period="live-m3"|18秒|示例条件已满足/);
+ const slots=[{dataset:{side:'bottom',period:'quick-m3'}},{dataset:{side:'top',period:'quick-m3'}}];
+ Cases.Controller.prototype.renderCharts.call({content:{querySelectorAll:()=>slots}},data.cases[0]);
+ assert.match(slots[0].innerHTML,/下刺98/);assert.match(slots[1].innerHTML,/上刺102/);
 });

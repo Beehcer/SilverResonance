@@ -13,7 +13,7 @@ test('2B comparison shows the same support in both periods and only the aggregat
   const support=svg=>svg.match(/<line x1="22" x2="495" y1="([^"]+)"/)[1];
   assert.equal(support(small),support(large));
   assert.match(large,/长下影针/);assert.match(small,/同一段30分钟/);
-  assert.equal(V.filterCases(D.cases,{query:'2B：先突破'})[0],c);
+  assert.equal(V.filterCases(D.cases,{query:'2B：多空'})[0],c);
   assert.ok(!V.filterCases(D.cases,{mode:'reversal_a'}).includes(c));
 });
 
@@ -26,17 +26,6 @@ test('case filters preserve the long/short mirrors and separate base modes from 
   assert.equal(V.filterCases(tradingCases,{mode:'range',family:'2b-zone'}).length,0);
 });
 
-test('the seconds path remains quotes and its 3-minute pin is visibly unfinished',()=>{
-  const c=D.cases[0],path=V.quickConceptSvg(c,'seconds'),pin=V.quickConceptSvg(c,'live-m3');
-  assert.equal(V.filterCases(D.cases,{query:'18秒'})[0],c);
-  assert.match(path,/data-quote-path="true"/);assert.doesNotMatch(path,/data-bar=/);
-  assert.equal((pin.match(/data-bar=/g)||[]).length,1);assert.match(pin,/data-completed="false"/);
-  assert.match(pin,/现价 100.6/);assert.match(pin,/仅过18秒 · 尚未收盘/);
-  assert.doesNotMatch(pin,/收在100上方|已完成触发|条件预期/);
-  for(const svg of [path,pin])assert.doesNotMatch(svg,/NaN|Infinity|undefined/);
-  const support=svg=>svg.match(/<line x1="22" x2="495" y1="([^\"]+)"/)[1];
-  assert.equal(support(path),support(pin));
-});
 
 test('the top 2B diagrams explain a failed upward break without turning it into a sell signal',()=>{
   const c=D.get('2b-top-definition');
@@ -46,13 +35,10 @@ test('the top 2B diagrams explain a failed upward break without turning it into 
     assert.doesNotMatch(svg,/NaN|Infinity|undefined|前低|下影针|收回100上方|入场 [\d,.]+|已完成触发/);
     assert.match(svg,period==='m30'?/长上影针/:/跌回100下方/);
   }
-  for(const period of ['seconds','live-m3']){
-    const svg=V.quickConceptSvg(c,period);
-    assert.doesNotMatch(svg,/NaN|Infinity|undefined|前低|下刺/);
-    assert.match(svg,/前高 100/);
-    if(period==='live-m3'){assert.match(svg,/data-completed="false"/);assert.match(svg,/现价 99.4/);}
-    else assert.match(svg,/18秒：跌回100下方/);
-  }
+  const svg=V.quickConceptSvg(c);
+  assert.equal((svg.match(/data-bar=/g)||[]).length,c.quickExample.bars.length);
+  assert.match(svg,/同根收回100下方/);assert.doesNotMatch(svg,/data-quote-path|秒|NaN|Infinity|undefined/);
+
 });
 
 test('a changed or unavailable rule source cannot be presented as checked',()=>{
