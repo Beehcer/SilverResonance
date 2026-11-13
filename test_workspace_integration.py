@@ -17,7 +17,7 @@ class WorkspaceIntegrationTests(unittest.TestCase):
             for route in ("/", "/workspace"):
                 response = self.client.get(route, environ_overrides={"REMOTE_ADDR": "192.168.1.99"})
                 self.assertEqual(response.status_code, 200)
-                self.assertIn(b"workspace.js", response.data)
+                self.assertIn(b"workspace-dual-shell.js", response.data)
 
     def test_shared_visitors_cannot_read_or_change_host_tools(self):
         for route in ("/monitor", "/setup", "/api/trading/settings", "/api/positions", "/api/overview", "/board-demo"):

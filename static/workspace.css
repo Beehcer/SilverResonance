@@ -193,3 +193,34 @@ html.mobile-view-only #members-panel .member-row button{min-height:38px;padding:
 html.mobile-view-only #members-panel .mobile-members-help{margin:12px 0 0;color:#91a9b9;line-height:1.7;font-size:12px}
 
 #workspace.mobile-view-only .period-button:disabled{opacity:1;color:inherit;cursor:default}
+
+/* Personal symbol groups: fixed sectors plus two independently maintained lists. */
+.quote-sidebar{width:180px}
+.quote-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:4px 6px 6px;gap:3px;border-bottom:1px solid #303a43}
+.quote-groups button{font-size:12px;padding:5px 3px;line-height:18px;border:1px solid transparent;border-radius:3px;color:#99a8b6}
+.quote-groups .custom-group{background:#1c242c;color:#c9d5df;border-color:#2c3945}
+.quote-groups #all-symbols{grid-column:1/-1;padding:3px;font-size:11px}
+.quote-groups .active{color:#f5d066;background:#332e1b;border-color:#69582c}
+.quote-groups .quote-group-drop{color:#fff1bd;background:#615322;border-color:#e6c458;outline:1px solid #e6c458}
+.quote-entry .quote-row{font-size:12px;padding:8px 5px;grid-template-columns:minmax(0,1fr) 44px;gap:3px}
+.quote-entry .quote-name{min-width:0}
+.quote-entry .quote-star,.quote-entry .quote-default{width:20px;padding:1px;flex:none;border-radius:0;font-size:14px}
+.quote-entry .quote-default{color:#91a2b0;font-size:16px}
+.quote-entry .quote-star[aria-pressed=true]{color:#e4ba43}
+.quote-entry .quote-star:focus-visible,.quote-entry .quote-default:focus-visible,.quote-row:focus-visible,.quote-groups button:focus-visible{outline:1px solid #e6c458;outline-offset:-2px}
+.quote-columns{grid-template-columns:minmax(0,1fr) 44px 36px;padding:5px 6px;gap:3px}
+.quote-columns span:last-child{font-size:10px}
+.quote-foot{display:flex;justify-content:space-between;align-items:center;padding:7px 8px;font-size:11px;color:#8798a6}.quote-foot span{float:none}.quote-foot b{font-weight:500}
+.quote-empty-action{display:block;margin:8px auto 0;color:#d5b963;border:1px solid #5c5030;padding:4px 9px}
+.symbol-group-status{position:absolute;clip-path:inset(50%);height:1px;width:1px;overflow:hidden;white-space:nowrap}
+@media(max-width:1200px){.quote-sidebar{width:160px}.quote-entry .quote-row{font-size:11px;grid-template-columns:minmax(0,1fr) 42px}.quote-groups button{padding:4px 3px}}
+@media(max-width:950px){.quote-sidebar{width:140px}.quote-entry .quote-row{display:block}.quote-entry .quote-price{text-align:left}}
+
+/* Plan management stays available to the existing controller but takes no row. */
+.board-bar[hidden]{display:none!important}
+.market-strip-actions{display:flex;align-items:center;flex-wrap:nowrap;gap:5px;flex:none}
+.market-strip-actions .board-view-tools{position:relative;flex:none;margin-left:0}
+.market-strip-actions .layout-picker>summary{height:26px;padding:3px 7px;gap:5px;font-size:11px}
+.market-strip-actions .layout-picker .layout-menu{right:0;top:calc(100% + 4px);max-width:min(440px,calc(100vw - 32px))}
+#workspace.mobile-view-only .market-strip>.mobile-symbol-control{display:flex!important;flex:1 0 100%;flex-direction:column;gap:5px;min-width:0;color:#9bb0be;font-size:11px}
+#workspace.mobile-view-only .market-strip>.mobile-symbol-control select{width:100%;min-width:0;min-height:42px;font-size:16px;padding:7px 8px;background:#19242d;border-color:#405464;border-radius:4px}

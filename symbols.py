@@ -12,6 +12,7 @@
   - DCE  m / jm / jd / l / p / pp: 1月 / 5月 / 9月 切换
   - CZCE SA / FG / CF / MA / RM / TA: 1月 / 5月 / 9月 切换
   - CZCE AP              : 1月 / 5月 / 10月 切换
+  - GFEX lc              : 全年月度合约，离线采用下一可用月份占位
 
 日历规则只作为离线兜底，不代表交易所当前真实主力。
 """
@@ -68,11 +69,14 @@ _TEMPLATES = [
     # 棕榈油自2026-04-10交易日起最小变动价位为1元/吨，每手10吨。
     ("p",  "DCE",  "p",  "棕榈",   1.0,  10.0, (1, 5, 9)),
     ("pp", "DCE",  "pp", "聚丙烯", 1.0,   5.0, (1, 5, 9)),
+    # 广期所合约：1吨/手，最小变动20元/吨；真实主力与参数仍以SDK核验为准。
+    # https://www.gfex.com.cn/gfex/sytslqhhy/202307/9ad927b8ec4c458594e172fd1ada2a9b.shtml
+    ("lc", "GFEX", "lc", "碳酸锂", 20.0, 20.0, tuple(range(1, 13))),
 ]
 
-# 扩充品种前的缓存固定为以上前 12、16 或 18 项；仅兼容这些已知版本，
+# 扩充品种前的缓存固定为以上前 12、16、18 或 19 项；仅兼容这些已知版本，
 # 不把任意残缺列表当成有效缓存。新增项仍等待行情线程核实真实主力。
-_LEGACY_CACHE_SIZES = (12, 16, 18)
+_LEGACY_CACHE_SIZES = (12, 16, 18, 19)
 
 
 def _next_rollover(rot_months, today=None):
@@ -107,7 +111,7 @@ def _next_rollover(rot_months, today=None):
 def _format_contract(code, exch, year, month):
     """
     按交易所规则格式化合约代码：
-      SHFE / DCE  : 4 位数字  yymm  （如 ag2612, m2601）
+      SHFE / DCE / GFEX : 4 位数字 yymm（如 ag2612, m2601, lc2612）
       CZCE        : 3 位数字  ymm   （如 SA701, MA701；2020 年起改 3 位）
     """
     yy = year % 100

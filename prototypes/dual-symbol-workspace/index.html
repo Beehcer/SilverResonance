@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>共振 · 双品种本地样板</title>
+  <link rel="stylesheet" href="/styles.css?v=20261113-1">
+</head>
+<body>
+<div id="preview" class="dl-preview is-single">
+  <header class="dl-topbar">
+    <div class="dl-brand"><span class="dl-logo" aria-hidden="true">R</span><strong>共振</strong><span>多周期工作台</span></div>
+    <span class="dl-preview-badge">本地样板 · 模拟行情</span>
+    <span class="dl-local-note">仅保存在本机</span>
+  </header>
+  <div class="dl-toolbar" role="toolbar" aria-label="图表绘制工具">
+    <button type="button" data-tool="select" aria-pressed="true" title="选择 (V)">↖ 选择</button>
+    <button type="button" data-tool="horizontal" aria-pressed="false" title="水平线 (H)">━ 水平线</button>
+    <button type="button" data-tool="trend" aria-pressed="false" title="趋势线 (T)">╱ 趋势线</button>
+    <button type="button" data-tool="zone" aria-pressed="false" title="区域 (Z)">▧ 区域</button>
+    <span class="dl-tool-divider" aria-hidden="true"></span>
+    <button id="undo" type="button" disabled title="撤销当前品种的最近修改 (Ctrl+Z)">↶ 撤销</button>
+    <span class="dl-tool-target">正在编辑 <strong id="active-symbol">—</strong></span>
+  </div>
+  <div class="dl-content">
+    <aside class="dl-sidebar" aria-label="品种列表">
+      <label class="dl-search"><span class="dl-sr-only">搜索品种</span><input id="symbol-search" type="search" placeholder="名称 / 合约" autocomplete="off" aria-label="搜索品种"></label>
+      <nav id="symbol-groups" class="dl-groups" aria-label="品种分组">
+        <button type="button" data-symbol-group="default" aria-pressed="true">默认</button>
+        <button type="button" data-symbol-group="favorites" aria-pressed="false">☆ 喜爱</button>
+        <button type="button" data-symbol-group="energy" aria-pressed="false">能源</button>
+        <button type="button" data-symbol-group="chemical" aria-pressed="false">化工</button>
+        <button type="button" data-symbol-group="agriculture" aria-pressed="false">农产品</button>
+        <button type="button" data-symbol-group="precious" aria-pressed="false">贵金属</button>
+        <button type="button" data-symbol-group="all" aria-pressed="false">全部</button>
+      </nav>
+      <div class="dl-quote-heading"><span>品种</span><span>最新</span><span>分组</span></div>
+      <div id="symbol-list" class="dl-symbol-list"><p class="dl-empty">正在读取品种…</p></div>
+      <div class="dl-sidebar-hint">拖入图表，同时查看</div>
+    </aside>
+    <main id="workspace" class="dl-workspace" aria-label="双品种图表工作区">
+      <div id="panes" class="dl-panes"></div>
+      <div id="pane-empty-hint" class="dl-add-hint">拖入另一个品种，在下方同时查看</div>
+      <div id="drop-preview" class="dl-drop-preview" hidden aria-live="polite"></div>
+    </main>
+    <aside class="dl-plan-dock" aria-label="当前品种计划与图层">
+      <section class="dl-ticket" aria-labelledby="ticket-title">
+        <div class="dl-section-title"><h2 id="ticket-title">入场 · 止损</h2><span id="ticket-direction" class="dl-direction">未设置</span></div>
+        <button id="mark-entry" class="dl-mark-entry" type="button">添加开仓计划</button>
+        <div id="ticket-hint" class="dl-ticket-hint" aria-live="polite">先点入场，再点止损</div>
+        <div class="dl-price-field"><label for="ticket-entry">入场</label><input id="ticket-entry" type="number" step="any" min="0" inputmode="decimal" placeholder="未标价"></div>
+        <div class="dl-price-field"><label for="ticket-stop">止损</label><input id="ticket-stop" type="number" step="any" min="0" inputmode="decimal" placeholder="未标价"></div>
+        <div class="dl-ticket-actions"><button id="clear-plan" type="button" class="dl-quiet-button" title="清除当前品种的入场与止损价位">清除价位</button><span class="dl-save-note">自动保存</span></div>
+      </section>
+      <section class="dl-layers" aria-labelledby="layers-title">
+        <div class="dl-section-title"><h2 id="layers-title">图层</h2><button id="delete-selected" type="button" class="dl-quiet-button" disabled title="删除当前选中的图层">删除选中</button></div>
+        <div id="layer-list" class="dl-layer-list"><p class="dl-empty">暂无标记</p></div>
+      </section>
+    </aside>
+  </div>
+  <footer class="dl-statusbar"><span id="workspace-status" role="status" aria-live="polite">正在准备本地样板…</span><span class="dl-status-help">滚轮缩放 · 拖动空白平移</span></footer>
+  <div id="drag-ghost" class="dl-drag-ghost" hidden aria-hidden="true"></div>
+</div>
+
+<template id="pane-template">
+  <article class="dl-pane" aria-label="品种图表窗口">
+    <header class="dl-pane-heading">
+      <button type="button" class="pane-title" title="切换到此品种进行编辑">—</button>
+      <span class="pane-price">—</span>
+      <span class="pane-current">当前操作</span>
+      <button type="button" class="close-pane" aria-label="关闭品种窗口" title="关闭窗口，保留计划" hidden>×</button>
+    </header>
+    <div class="dl-chart-grid">
+      <section class="chart-panel" data-period="day">
+        <header class="chart-heading"><strong>日线</strong><span>方向</span></header>
+        <div class="chart-stats" data-stats="day"></div>
+        <div class="chart-host" data-chart="day" tabindex="0" aria-label="日线行情与绘图"></div>
+        <footer class="chart-footer"><span>VOL · CCL</span></footer>
+      </section>
+      <section class="chart-panel" data-period="m30">
+        <header class="chart-heading"><strong>30 分钟</strong><span>主战场</span></header>
+        <div class="chart-stats" data-stats="m30"></div>
+        <div class="chart-host" data-chart="m30" tabindex="0" aria-label="30分钟行情与绘图"></div>
+        <footer class="chart-footer"><span>VOL · CCL</span></footer>
+      </section>
+      <section class="chart-panel" data-period="m3">
+        <header class="chart-heading"><strong>3 分钟</strong><span>扳机</span></header>
+        <div class="chart-stats" data-stats="m3"></div>
+        <div class="chart-host" data-chart="m3" tabindex="0" aria-label="3分钟行情与绘图"></div>
+        <footer class="chart-footer"><span>VOL · CCL</span></footer>
+      </section>
+    </div>
+    <div class="pane-loading" hidden role="status"><span class="pane-loading-text">正在准备行情…</span><button class="retry-pane" type="button" hidden>重试</button></div>
+  </article>
+</template>
+<script src="/assets/plan-board-model.js"></script>
+<script src="/assets/workspace-chart.js"></script>
+<script src="/assets/workspace-symbols.js"></script>
+<script src="/assets/workspace-shortcuts.js"></script>
+<script src="/model.js?v=20261113-1"></script>
+<script src="/app.js?v=20261113-1"></script>
+</body>
+</html>

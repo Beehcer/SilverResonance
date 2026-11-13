@@ -21,11 +21,14 @@
 !/workspace_candles.py
 !/workspace_market.py
 !/workspace_rules.py
+!/workspace_runtime.py
 !/workspace_store.py
+!/workspace_web.py
 !/requirements.txt
 !/requirements-server.txt
 !/templates/
 !/templates/workspace.html
+!/templates/workspace-dual.html
 !/static/
 !/static/workspace.css
 !/static/workspace-cases.css
@@ -48,3 +51,8 @@
 !/static/workspace-market-preview.js
 !/static/workspace-symbols.js
 !/static/workspace-shortcuts.js
+!/static/workspace-dual-model.js
+!/static/workspace-dual-shell.js
+!/static/workspace-dual-shell.css
+!/static/workspace-dual-embed.js
+!/static/workspace-dual-embed.css

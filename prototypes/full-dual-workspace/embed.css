@@ -1,0 +1,658 @@
+/* Local preview adapter. Loaded after workspace.css; production files stay intact. */
+html.dual-embedded {
+  --dual-gap: 6px;
+  --dual-status-height: 25px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+html.dual-embedded body {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+html.dual-embedded #workspace {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+html.dual-embedded .terminal-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+html.dual-embedded .market-workspace {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* This wrapper owns only one symbol's existing workspace contents. */
+html.dual-embedded #dual-pane-surface {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #0b0e12;
+  box-shadow: inset 0 0 0 1px #34424d;
+}
+
+html.dual-embedded.dual-active #dual-pane-surface {
+  box-shadow: inset 0 0 0 1px #a78b43;
+}
+
+html.dual-embedded.dual-active[data-dual-count="2"] #dual-pane-surface {
+  inset: auto 0;
+  height: calc(50% - 3px);
+}
+
+html.dual-embedded.dual-active[data-dual-count="2"][data-dual-slot="top"] #dual-pane-surface {
+  top: 0;
+}
+
+html.dual-embedded.dual-active[data-dual-count="2"][data-dual-slot="bottom"] #dual-pane-surface {
+  bottom: 0;
+}
+
+/* Keep one full-width status/shortcut bar outside the two visual chart slots.
+   Its original DOM may remain inside #dual-pane-surface. The fixed bar and
+   terminal-body padding keep the main workspace rect usable by the parent. */
+html.dual-embedded.dual-active .terminal-body {
+  padding-bottom: var(--dual-status-height);
+}
+
+html.dual-embedded.dual-active .terminal-status {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 80;
+  display: flex;
+  width: 100%;
+  height: var(--dual-status-height);
+  min-height: var(--dual-status-height);
+  max-height: var(--dual-status-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+html.dual-embedded.dual-active .terminal-status::-webkit-scrollbar {
+  display: none;
+}
+
+/* The passive frame renders into its own chart slot. Its controls are reached
+   through the active frame after activation; no duplicate app chrome is shown. */
+html.dual-embedded.dual-passive .terminal-header,
+html.dual-embedded.dual-passive .terminal-menu,
+html.dual-embedded.dual-passive .quote-sidebar,
+html.dual-embedded.dual-passive .app-rail,
+html.dual-embedded.dual-passive .workspace-dock,
+html.dual-embedded.dual-passive .terminal-status {
+  display: none !important;
+}
+
+html.dual-embedded.dual-passive #workspace,
+html.dual-embedded.dual-passive .terminal-body,
+html.dual-embedded.dual-passive .market-workspace {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+html.dual-embedded.dual-passive .terminal-body {
+  display: flex;
+  flex: 1 1 auto;
+}
+
+html.dual-embedded.dual-passive .market-workspace {
+  flex: 1 1 auto;
+}
+
+html.dual-embedded.dual-passive #dual-pane-surface {
+  inset: 0;
+  height: auto;
+}
+
+/* Moving the old main children one level down must not lose direct-child rules. */
+html.dual-embedded #dual-pane-surface > .notice {
+  position: static;
+  flex: none;
+  max-height: 65px;
+  overflow: auto;
+}
+
+html.dual-embedded #dual-pane-surface > #plan-error,
+html.dual-embedded #dual-pane-surface > #draft-recovery {
+  flex: none;
+  padding: 6px 8px;
+}
+
+html.dual-embedded #dual-pane-surface > #plan-error:empty {
+  display: none;
+}
+
+/* Width-based production rules must not change a passive iframe's layout.
+   Respect every original layout choice and original single-chart expansion. */
+html.dual-embedded #dual-pane-surface > .chart-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  grid-template-columns: var(--layout-columns, 1fr 1fr 1fr);
+  grid-template-rows: var(--layout-rows, 1fr);
+  grid-template-areas: var(--layout-areas, "day m30 m3");
+}
+
+html.dual-embedded #dual-pane-surface > .chart-grid[data-expanded] {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: "focus";
+}
+
+html.dual-embedded .chart-heading .chart-actions button[data-chart-action] {
+  display: inline-block;
+}
+
+html.dual-embedded .chart-heading .chart-contract {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+html.dual-embedded .chart-heading .chart-actions {
+  flex: none;
+}
+
+/* Existing plan, review, and layout controls remain available in either slot.
+   Only the active instance shows the shared full-height plan/layer dock. */
+html.dual-embedded #dual-pane-surface > .market-strip {
+  flex: none;
+  min-height: 36px;
+  padding-right: 36px;
+}
+
+html.dual-embedded .market-strip-actions {
+  display: flex;
+}
+
+html.dual-embedded .board-bar {
+  flex: none;
+  min-width: 0;
+}
+
+html.dual-embedded .board-bar > label:last-of-type:not(.mobile-only) {
+  display: flex;
+}
+
+html.dual-embedded .decision-bottom {
+  max-height: calc(100% - 44px);
+  overflow: auto;
+}
+
+html.dual-embedded .layout-menu {
+  max-height: max(140px, calc(50vh - 100px));
+  overflow-y: auto;
+}
+
+/* Fixed-position descendants must still obey their details disclosure state. */
+html.dual-embedded #layout-picker:not([open]) > .layout-menu {
+  display: none !important;
+}
+
+html.dual-embedded #layout-picker[open] > .layout-menu {
+  display: grid;
+}
+
+html.dual-embedded .chart-tool-overlays {
+  bottom: 8px;
+}
+
+/* The only new persistent pane action. Closing does not delete saved plans. */
+html.dual-embedded .dual-close {
+  position: absolute;
+  z-index: 35;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  color: #aab8c3;
+  background: #17212a;
+  border: 1px solid #3b4854;
+  border-radius: 3px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+html.dual-embedded .dual-close:hover {
+  color: #f2e1aa;
+  background: #343124;
+  border-color: #9d8443;
+}
+
+html.dual-embedded .dual-close:focus-visible {
+  outline: 2px solid #e2bd58;
+  outline-offset: 2px;
+}
+
+html.dual-embedded[data-dual-count="1"] .dual-close {
+  display: none;
+}
+
+html.dual-embedded[data-dual-count="1"] #dual-pane-surface > .market-strip {
+  padding-right: 8px;
+}
+
+/* A passive iframe is smaller than the full workspace viewport. Its media
+   queries must not remove rows or change the height of the same visible pane. */
+html.dual-embedded #dual-pane-surface > .market-strip {
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  flex: 0 0 40px;
+  flex-wrap: nowrap;
+  gap: 7px;
+  padding-block: 5px;
+}
+
+html.dual-embedded .active-symbol {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+html.dual-embedded .active-symbol > strong,
+html.dual-embedded #favorite-current {
+  flex: none;
+}
+
+html.dual-embedded #market-stamp {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+html.dual-embedded .decision {
+  min-width: 95px;
+  flex: 0 1 210px;
+}
+
+html.dual-embedded .market-strip-actions {
+  flex: none;
+}
+
+html.dual-embedded .board-bar {
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  flex: 0 0 40px;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 3px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+html.dual-embedded .board-bar > * {
+  flex-shrink: 0;
+}
+
+html.dual-embedded .board-bar select {
+  width: 120px;
+  max-width: 120px;
+}
+
+html.dual-embedded .board-bar button {
+  padding: 4px 8px;
+}
+
+html.dual-embedded .board-bar #board-state {
+  display: inline-block;
+  max-width: 100px;
+}
+
+html.dual-embedded .chart-panel {
+  container-type: inline-size;
+}
+
+html.dual-embedded .chart-heading {
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
+  flex: 0 0 28px;
+  padding: 0 4px;
+  gap: 4px;
+}
+
+html.dual-embedded .chart-heading .chart-contract strong {
+  display: inline-block;
+  max-width: 90px;
+  font-size: 11px;
+}
+
+html.dual-embedded .chart-heading .chart-actions button {
+  padding: 1px 3px;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+html.dual-embedded .chart-stats {
+  height: 21px;
+  min-height: 21px;
+  max-height: 21px;
+  flex: 0 0 21px;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+html.dual-embedded .chart-footer {
+  display: flex;
+  height: 22px;
+  min-height: 22px;
+  max-height: 22px;
+  flex: 0 0 22px;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+/* Repeated symbol names may truncate, but do not appear/disappear on activation. */
+@container (max-width: 260px) {
+  html.dual-embedded .chart-heading .chart-contract strong {
+    max-width: 50px;
+  }
+}
+
+/* Popups are positioned inside their owning pane/dock by embed.js. They never
+   require hiding the other iframe, and modal backdrops do not dim that pane. */
+html.dual-embedded .dual-scoped-popup {
+  box-sizing: border-box;
+  overscroll-behavior: contain;
+}
+
+html.dual-embedded dialog::backdrop,
+html.dual-embedded #cases-dialog::backdrop {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+html.dual-embedded dialog.dual-scoped-popup,
+html.dual-embedded #members-panel.dual-scoped-popup {
+  overflow: auto;
+}
+
+html.dual-embedded #cases-dialog.dual-scoped-popup {
+  container: dual-cases / inline-size;
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: 0 5px 20px #0008;
+}
+
+html.dual-embedded #cases-dialog .cases-header {
+  padding: 8px 12px;
+}
+
+html.dual-embedded #cases-dialog .cases-header h2 {
+  font-size: 17px;
+}
+
+html.dual-embedded #cases-dialog .cases-header h2 small {
+  display: inline;
+  margin: 0 0 0 10px;
+}
+
+html.dual-embedded #cases-dialog .cases-notice {
+  gap: 5px 10px;
+  padding: 6px 12px;
+}
+
+html.dual-embedded #cases-dialog .cases-notice > span {
+  display: inline;
+}
+
+html.dual-embedded #cases-dialog .cases-rule-state {
+  margin-left: 0;
+}
+
+html.dual-embedded #cases-dialog .cases-body {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.dual-embedded #cases-dialog .cases-sidebar {
+  width: 190px;
+  max-height: none;
+  border-right: 1px solid #2c3a46;
+  border-bottom: 0;
+}
+
+html.dual-embedded #cases-dialog .cases-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+}
+
+html.dual-embedded #cases-dialog .cases-list {
+  display: block;
+  min-height: 0;
+  overflow: auto;
+}
+
+html.dual-embedded #cases-dialog .cases-sidebar-foot {
+  display: block;
+}
+
+html.dual-embedded #cases-dialog .cases-content {
+  overflow: auto;
+  padding: 10px 12px 20px;
+}
+
+html.dual-embedded #cases-dialog .cases-steps {
+  flex-wrap: wrap;
+}
+
+html.dual-embedded #cases-dialog .cases-steps button {
+  flex: 1 0 30%;
+}
+
+html.dual-embedded #cases-dialog .cases-chart-side,
+html.dual-embedded #cases-dialog .cases-explanation {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.dual-embedded #cases-dialog .cases-footer {
+  padding: 7px 10px;
+  gap: 8px;
+}
+
+html.dual-embedded #cases-dialog .cases-footer button {
+  padding: 5px;
+  font-size: 10px;
+}
+
+html.dual-embedded #cases-dialog .cases-source {
+  min-width: 0;
+  max-width: 60%;
+  font-size: 9px;
+}
+
+@container dual-cases (max-width: 560px) {
+  html.dual-embedded #cases-dialog .cases-sidebar {
+    width: 150px;
+  }
+  html.dual-embedded #cases-dialog .cases-header h2 small {
+    display: block;
+    margin: 2px 0 0;
+  }
+}
+
+/* Keep the shared inspector compact; its controls reflow instead of clipping. */
+html.dual-embedded.dual-active .workspace-dock {
+  width: 204px;
+  min-width: 204px;
+  max-width: 38vw;
+  overflow-x: hidden;
+}
+
+html.dual-embedded .workspace-dock > .quick-plan,
+html.dual-embedded .workspace-dock > .chart-help-details {
+  padding-inline: 8px;
+}
+
+html.dual-embedded .workspace-dock .ticket-heading {
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+html.dual-embedded .workspace-dock .ticket-heading strong {
+  font-size: 13px;
+}
+
+html.dual-embedded .workspace-dock .entry-ticket {
+  padding: 8px;
+}
+
+html.dual-embedded .workspace-dock .ticket-price-field {
+  gap: 6px;
+}
+
+html.dual-embedded .workspace-dock .ticket-price-field input {
+  min-width: 0;
+  font-size: 16px;
+  padding-inline: 5px;
+}
+
+html.dual-embedded .workspace-dock .mark-entry-stop,
+html.dual-embedded .workspace-dock .add-expectation {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+html.dual-embedded .workspace-dock .ticket-footer,
+html.dual-embedded .workspace-dock .ticket-guide,
+html.dual-embedded .workspace-dock .mapping-hint,
+html.dual-embedded .workspace-dock .error,
+html.dual-embedded .workspace-dock .chart-help {
+  overflow-wrap: anywhere;
+}
+
+html.dual-embedded .workspace-dock .object-editor .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.dual-embedded .workspace-dock .form-grid input,
+html.dual-embedded .workspace-dock .form-grid select,
+html.dual-embedded .workspace-dock .form-grid textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+html.dual-embedded .workspace-dock .layer-controls {
+  flex-wrap: wrap;
+}
+
+html.dual-embedded .workspace-dock .layer-controls input,
+html.dual-embedded .workspace-dock .layer-controls select {
+  flex: 1 0 100%;
+  width: 100%;
+  max-width: 100%;
+}
+
+html.dual-embedded .workspace-dock .wave-node-row {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+html.dual-embedded .workspace-dock .wave-node-row > input:nth-child(2) {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+html.dual-embedded .workspace-dock .wave-node-row > input:nth-child(3) {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+html.dual-embedded .workspace-dock .section-heading,
+html.dual-embedded .workspace-dock .editor-actions {
+  flex-wrap: wrap;
+}
+
+/* Fullscreen belongs to the whole workbench. Keep both symbol slots and the
+   sidebars; only remove the information header above the drawing toolbar. */
+html.dual-embedded.dual-active.dual-maximized .terminal-header {
+  display: none !important;
+}
+
+/* The parent owns fullscreen sidebar state and the two edge buttons. Only the
+   active full-size iframe reserves the strips; the passive chart slot does not. */
+html.dual-embedded.dual-active.dual-maximized.dual-left-collapsed .app-rail,
+html.dual-embedded.dual-active.dual-maximized.dual-left-collapsed .quote-sidebar {
+  display: none !important;
+}
+
+html.dual-embedded.dual-active.dual-maximized[data-dual-count] #dual-pane-surface {
+  left: 18px;
+  right: 18px;
+}
+
+html.dual-embedded .market-strip-actions .dual-maximize {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 3px;
+  color: #acbfcd;
+  border-color: #3b4b58;
+  background: #192630;
+}
+
+html.dual-embedded .market-strip-actions .dual-maximize[aria-pressed="true"] {
+  color: #f0d27c;
+  border-color: #8e773a;
+  background: #302d1d;
+}
+
+html.dual-embedded .market-strip-actions .dual-maximize:hover {
+  color: #ecf6ff;
+  border-color: #7c99ad;
+}
+
+html.dual-embedded .market-strip-actions .dual-maximize:focus-visible {
+  outline: 2px solid #e2bd58;
+  outline-offset: 2px;
+}
+
+/* A single stable title row; compact by actual pane width, not iframe viewport. */
+html.dual-embedded .board-bar[hidden] { display: none !important; }
+html.dual-embedded .market-strip-actions { align-items: center; gap: 5px; }
+html.dual-embedded .market-strip-actions .board-view-tools { margin-left: 0; }
+html.dual-embedded .market-strip-actions .layout-picker > summary { height: 26px; max-width: 130px; padding: 3px 7px; gap: 5px; }
+html.dual-embedded #layout-name { overflow: hidden; text-overflow: ellipsis; }
+html.dual-embedded .dual-compact-heading .decision { min-width: 32px; flex: 0 0 32px; }
+html.dual-embedded .dual-compact-heading .decision-title { gap: 0; padding-inline: 0; }
+html.dual-embedded .dual-compact-heading .decision-title h1,
+html.dual-embedded .dual-compact-heading .decision-title > i { display: none; }
+html.dual-embedded .dual-compact-heading .market-strip-actions { gap: 3px; }
+html.dual-embedded .dual-compact-heading .market-strip-actions button:not(.dual-maximize):not(.dual-close) { padding-inline: 5px; font-size: 11px; }
+html.dual-embedded .dual-tight-heading #layout-name { display: none; }
+html.dual-embedded .dual-tight-heading .market-strip-actions .layout-picker > summary { gap: 3px; padding-inline: 5px; }

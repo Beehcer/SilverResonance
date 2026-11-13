@@ -33,6 +33,7 @@ import plan_board_demo as board_demo
 import workspace_rules
 import workspace_store
 import workspace_api
+import workspace_web
 from workspace_market import MAX_APPEND_BARS, WorkspaceMarketCache, data_length_for_period
 
 _trading_store = trading.TradingStore(os.path.join(user_settings.app_dir(), "state", "trading_state.json"))
@@ -56,6 +57,7 @@ def _resource_dir():
 
 app = Flask(__name__, template_folder=os.path.join(_resource_dir(), "templates"),
             static_folder=os.path.join(_resource_dir(), "static"))
+workspace_web.register_workspace_assets(app)
 
 
 @app.before_request
@@ -1895,7 +1897,7 @@ def start_data_thread():
 @app.route("/")
 @app.route("/workspace")
 def workspace_index():
-    return render_template("workspace.html")
+    return workspace_web.render_workspace_page()
 
 
 @app.route("/monitor")

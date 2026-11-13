@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>共振 · 多周期计划工作台</title>
-  <link rel="stylesheet" href="/static/workspace.css?v=20261112-24">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261113-major-2">
   <link rel="stylesheet" href="/static/workspace-cases.css?v=20261111-4">
+  {% if dual_pane %}<link rel="stylesheet" href="/static/workspace-dual-embed.css?v=20261113-major-2">{% endif %}
 </head>
 <body>
 <div id="auth-screen" class="connection-screen"><div class="brand-mark">R<span>共振 / RESONANCE</span></div><h1>正在连接共同画板</h1><p id="connection-message">无需注册或密码。打开即加入，同步你和伙伴的计划。</p><button id="retry-connection" hidden>重新连接</button></div>
@@ -37,19 +38,25 @@
     <nav class="app-rail" aria-label="应用导航"><button class="active" title="期货行情">期货</button><button id="rail-plan" title="图上计划">计划</button><button id="rail-objects" title="绘制对象大纲">画线</button><a {% if config.WORKSPACE_PRODUCTION %}hidden{% endif %} id="monitor-link" href="/monitor" target="_blank" rel="noopener" title="主机监控">主机</a><button id="cases-button" class="cases-entry" type="button" aria-haspopup="dialog" title="查看交易系统开仓案例">案例</button></nav>
     <aside class="quote-sidebar">
       <div class="quote-search"><input id="symbol-search" type="search" placeholder="输入合约代码 / 名称" aria-label="搜索品种"><span>⌕</span></div>
-      <div class="quote-tabs"><button id="all-symbols" class="active">全部合约</button><button id="favorite-symbols">我的自选</button></div>
-      <div class="quote-columns"><span>名称</span><span>最新</span><span>收藏</span></div>
+      <div class="quote-tabs quote-groups" role="group" aria-label="品种分组">
+        <button id="default-symbols" class="active custom-group" data-symbol-group="default" aria-pressed="true" title="我的默认分组 · 拖入添加，组内拖动排序">默认</button><button id="favorite-symbols" class="custom-group" data-symbol-group="favorites" aria-pressed="false" title="我的喜爱分组 · 拖入添加，组内拖动排序">☆ 喜爱</button>
+        <button data-symbol-group="energy" aria-pressed="false">能源</button><button data-symbol-group="chemical" aria-pressed="false">化工</button><button data-symbol-group="agriculture" aria-pressed="false">农产品</button><button data-symbol-group="precious" aria-pressed="false">贵金属</button>
+        <button id="all-symbols" data-symbol-group="all" aria-pressed="false" title="全部可用品种，包括未归类品种">全部</button>
+      </div>
+      <div class="quote-columns"><span>品种</span><span>最新</span><span title="星标加入喜爱；加减号加入或移出默认">分组</span></div>
       <div id="symbol-list" class="symbol-list"><div class="quote-loading">正在读取品种…</div></div>
-      <div class="quote-foot">共享计划 <span id="shared-plan-count">—</span></div>
+      <div class="quote-foot"><span title="默认、喜爱的成员与顺序仅在你自己的浏览器保存">我的分组</span><span><b id="symbol-group-count">—</b> 项</span><span id="shared-plan-count" hidden></span></div><div id="symbol-group-status" class="symbol-group-status" role="status" aria-live="polite"></div>
     </aside>
     <main class="market-workspace">
       <section class="market-strip">
+        <label class="mobile-only mobile-symbol-control" for="symbol"><span>品种</span><select id="symbol" aria-label="选择品种"></select></label>
         <div class="active-symbol"><strong id="active-symbol-name">—</strong><span id="market-stamp">等待行情</span><button id="favorite-current" title="收藏当前合约">☆</button></div>
         <section class="decision" id="decision" data-status="WAIT"><button id="decision-toggle" class="decision-title" aria-expanded="false"><span id="decision-code" class="status-code">等待</span><h1 id="decision-title">等待数据</h1><span id="decision-reason">正在读取行情与计划。</span><i>⌄</i></button><div id="decision-detail" class="decision-bottom" hidden><div class="checklist" id="checklist" aria-label="三步条件检查"></div><div id="check-details" class="check-details"></div><div class="next-step"><strong id="next-action">等待连接</strong><span id="evaluation-time" class="small"></span><button id="ack-alert" hidden>已看到</button></div></div></section>
-        <div class="market-strip-actions"><button id="quick-plan-toggle">计划模式</button><button id="objects-toggle"><span id="layers-toggle-label">收起图层</span><span id="object-count" hidden>0</span></button></div>
+        <div class="market-strip-actions"><div class="board-view-tools"><details id="layout-picker" class="layout-picker"><summary aria-label="切换多周期布局" title="切换多周期布局"><span class="layout-glyph">▦</span><span id="layout-name">30 分主图</span><span>⌄</span></summary><div id="layout-menu" class="layout-menu" role="group" aria-label="多周期布局"></div></details></div><button id="quick-plan-toggle">计划模式</button><button id="objects-toggle"><span id="layers-toggle-label">收起图层</span><span id="object-count" hidden>0</span></button></div>
       </section>
       <a id="setup-market-link" class="setup-market-link" href="/setup" hidden>主机：配置行情来源 →</a>
-      <div class="board-bar"><label class="mobile-only mobile-symbol-control" for="symbol"><span>品种</span><select id="symbol" aria-label="选择品种"></select></label><label class="board-select-control">当前计划 <select id="board-select" aria-label="选择共享计划"><option value="">默认计划</option></select></label><button id="new-board">＋ 新计划</button><button id="copy-board">复制预案</button><button id="share-board" title="伙伴打开链接后进入同一合约、同一共享计划">复制计划链接</button><button id="archive-board">归档</button><label><input id="show-archived" type="checkbox">已归档</label><span id="board-state"></span><div class="board-view-tools"><details id="layout-picker" class="layout-picker"><summary aria-label="切换多周期布局"><span class="layout-glyph">▦</span><span id="layout-name">30 分主图</span><span>⌄</span></summary><div id="layout-menu" class="layout-menu" role="group" aria-label="多周期布局"></div></details></div></div>
+      <!-- Compatibility controls retain existing plan identity and data; the management row is intentionally hidden. -->
+      <div class="board-bar" hidden inert aria-hidden="true"><label class="board-select-control">当前计划 <select id="board-select" aria-label="选择共享计划"><option value="">默认计划</option></select></label><button id="new-board">＋ 新计划</button><button id="copy-board">复制预案</button><button id="share-board" title="伙伴打开链接后进入同一合约、同一共享计划">复制计划链接</button><button id="archive-board">归档</button><label><input id="show-archived" type="checkbox">已归档</label><span id="board-state"></span></div>
       <div id="follow-banner" class="follow-banner" hidden><span id="follow-label"></span><button id="stop-following">退出跟随</button></div><div id="draft-recovery" class="notice" hidden>有未提交的本机草稿。<button id="restore-draft">恢复草稿</button><button id="dismiss-draft">忽略</button><button id="export-draft" type="button">导出草稿</button></div><p id="plan-error" class="error" role="alert"></p>
       <section class="chart-grid" aria-label="多周期行情">
         <div class="chart-tool-overlays">
@@ -106,10 +113,10 @@
   </div>
 </div>
 <section id="members-panel" class="members-panel" hidden><div class="section-heading"><h3>一起看这张计划</h3><span id="presence-count">在线伙伴</span></div><div id="members-list"></div><form id="profile-form"><label>伙伴看到的名字<input id="profile-name" maxlength="40" required></label><label>我的颜色<input id="profile-color" type="color"></label><span id="profile-status" class="small"></span></form><p class="small desktop-members-help">同一网络中，请分享主机的局域网地址；127.0.0.1 只在本机可用。多人打开同一计划，可同步图上标记与鼠标位置；不同属性与节点分别合并；同一处以后提交的编辑为准。跟随视角需主动开启，编辑或平移即可退出。</p><p class="mobile-only mobile-members-help">伙伴的标注与操作会同步显示在图上。手机端可查看计划和跟随视角，不修改共同画板。</p></section>
-<script src="/static/plan-board-model.js?v=20261112-18"></script><script src="/static/workspace-chart.js?v=20261112-23"></script><script src="/static/workspace-editing.js?v=20261111-17"></script><script src="/static/workspace-ticket.js?v=20261111-8"></script><script src="/static/workspace-presence.js?v=20261111-8"></script><script src="/static/workspace-layouts.js?v=20261111-8"></script><script src="/static/workspace-properties.js?v=20261112-21"></script>
+<script src="/static/plan-board-model.js?v=20261112-18"></script>{% if dual_pane %}<script src="/static/workspace-dual-chart.js?v=20261113-major-1"></script>{% else %}<script src="/static/workspace-chart.js?v=20261112-23"></script>{% endif %}<script src="/static/workspace-editing.js?v=20261111-17"></script><script src="/static/workspace-ticket.js?v=20261111-8"></script><script src="/static/workspace-presence.js?v=20261111-8"></script><script src="/static/workspace-layouts.js?v=20261111-8"></script><script src="/static/workspace-properties.js?v=20261112-21"></script>
 <script src="/static/workspace-merge.js?v=20261112-22"></script><script src="/static/workspace-layers.js?v=20261112-18"></script>
 <script src="/static/workspace-cases-data.js?v=20261111-4"></script><script src="/static/workspace-cases.js?v=20261111-4"></script>
-<script src="/static/workspace-market-cache.js?v=20261112-22"></script><script src="/static/workspace-market-preview.js?v=20261112-22"></script><script src="/static/workspace-symbols.js?v=20261111-17"></script><script src="/static/workspace-shortcuts.js?v=20261111-17"></script>
-<script src="/static/workspace.js?v=20261112-22"></script>
+<script src="/static/workspace-market-cache.js?v=20261112-22"></script><script src="/static/workspace-market-preview.js?v=20261112-22"></script><script src="/static/workspace-symbols.js?v=20261113-groups-1"></script><script src="/static/workspace-shortcuts.js?v=20261111-17"></script>
+{% if dual_pane %}<script src="/static/workspace-dual-embed.js?v=20261113-major-2"></script><script src="/static/workspace-dual-runtime.js?v=20261113-major-1"></script>{% else %}<script src="/static/workspace.js?v=20261113-groups-1"></script>{% endif %}
 </body>
 </html>
