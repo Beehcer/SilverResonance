@@ -68,7 +68,23 @@
 .drawing-draft{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid #625521;background:#272718;color:#f0ce54;flex:none}.drawing-draft button{border:1px solid #625521;background:#35331e;white-space:nowrap}.drawing-draft small{color:#b7aa7a}.drawing-draft>span,.drawing-draft>small,.wave-edit-bar>span{overflow-wrap:anywhere}.chart-tool-overlays .drawing-draft{border-color:#625521}.chart-tool-overlays:has(.drawing-draft:not([hidden])) .wave-edit-bar{display:none}.object-context-menu button:disabled{cursor:default}
 .opacity-field{min-width:0;display:flex;flex-direction:column;gap:5px}
 .opacity-inputs{display:flex;align-items:center;gap:8px;min-width:0}
-.opacity-inputs input[type=range]{flex:1;min-width:40px;width:100%;padding:0;accent-color:#e5bc49;cursor:pointer}
+/* Range controls must not inherit the text-input shell or its focus border. */
+.opacity-inputs input[type=range]{flex:1;min-width:40px;width:100%;height:24px;margin:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;outline:none;-webkit-appearance:none;appearance:none;accent-color:#e5bc49;cursor:pointer}
+.opacity-inputs input[type=range]:focus{border:0;outline:none;box-shadow:none}
+.opacity-inputs input[type=range]::-webkit-slider-runnable-track{height:4px;border:0;border-radius:2px;background:#485867}
+.opacity-inputs input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border:0;border-radius:50%;background:#e5bc49}
+.opacity-inputs input[type=range]::-moz-range-track{height:4px;border:0;border-radius:2px;background:#485867}
+.opacity-inputs input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:#e5bc49}
+.opacity-inputs input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid #f1d98e;outline-offset:3px}
+.opacity-inputs input[type=range]:focus-visible::-moz-range-thumb{outline:2px solid #f1d98e;outline-offset:3px}
+@media(forced-colors:active){
+  .opacity-inputs input[type=range]::-webkit-slider-runnable-track{background:GrayText}
+  .opacity-inputs input[type=range]::-moz-range-track{background:GrayText}
+  .opacity-inputs input[type=range]::-webkit-slider-thumb{background:Highlight}
+  .opacity-inputs input[type=range]::-moz-range-thumb{background:Highlight}
+  .opacity-inputs input[type=range]:focus-visible::-webkit-slider-thumb{outline-color:Highlight}
+  .opacity-inputs input[type=range]:focus-visible::-moz-range-thumb{outline-color:Highlight}
+}
 .opacity-inputs>span,.draw-opacity>span{display:inline-flex;align-items:center;gap:3px;flex:none}
 .opacity-inputs input[type=number],.draw-opacity input[type=number]{width:57px;box-sizing:border-box;min-width:0;text-align:right}
 .plan-opacity-field{margin:10px 0;color:#b9c5d0;font-size:12px}
