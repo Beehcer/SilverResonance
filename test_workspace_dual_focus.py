@@ -86,6 +86,21 @@ assert.equal(a.api.ui.dockOpen,true);
 assert.equal(a.api.mode.count,2);assert.equal(b.api.mode.count,2);assert.deepEqual(b.frame.style,priorStyle);
 """)
 
+    def test_queued_old_symbol_state_cannot_roll_back_a_completed_fast_switch(self):
+        self.run_scenario(r"""
+let currentSymbol='MA',modalOpen=false;
+a.api.snapshot=()=>({symbol:currentSymbol,modalOpen,ui:{...a.api.ui}});
+a.api.switchSymbol=async symbol=>{currentSymbol=symbol;return true;};
+await transition(M.selectSymbol(state,'AU',ids));
+assert.equal(busy,false);assert.equal(a.symbol,'AU');assert.equal(state.panes[0].symbol,'AU');
+const count=saved.length,oldModal=a.modalOpen;
+events.message({origin:location.origin,source:a.frame.contentWindow,data:{type:'full-workspace:state',paneId:'pane-a',snapshot:{symbol:'MA',modalOpen:true}}});
+assert.equal(a.symbol,'AU');assert.equal(state.panes[0].symbol,'AU');assert.equal(saved.length,count);assert.equal(a.modalOpen,oldModal);
+modalOpen=true;
+events.message({origin:location.origin,source:a.frame.contentWindow,data:{type:'full-workspace:state',paneId:'pane-a',snapshot:{symbol:'AU',modalOpen:true}}});
+assert.equal(a.modalOpen,true);
+""")
+
     def test_switching_panes_and_fullscreen_never_reopens_or_resets_selected_boards(self):
         self.run_scenario(r"""
 a.api.board='named-ma-plan';b.api.board='';

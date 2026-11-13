@@ -64,8 +64,8 @@
 .workspace-dock .layer-row .layer-locate{width:20px;min-width:20px;padding-inline:0;justify-content:center}
 .workspace-dock .layer-row .layer-visibility,.workspace-dock .layer-row .layer-lock{width:30px;min-width:30px;padding-inline:0;justify-content:center}
 
-.app-rail .cases-entry{margin-top:auto;margin-bottom:5px;flex-shrink:0;color:#e9c952;border-top:1px solid #39424b;background:#1c242b}
-.app-rail .cases-entry:hover,.app-rail .cases-entry:focus-visible{background:#373523;outline:1px solid #c5a43c}
+.terminal-header-actions #cases-button{margin:0;border:1px solid transparent;color:#dfc361}
+.terminal-header-actions #cases-button:hover,.terminal-header-actions #cases-button:focus-visible{background:#373523;border-color:#c5a43c}
 .active-symbol{max-width:100%;flex-wrap:wrap}#market-stamp{white-space:normal;overflow-wrap:anywhere}
 
 .drawing-draft{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid #625521;background:#272718;color:#f0ce54;flex:none}.drawing-draft button{border:1px solid #625521;background:#35331e;white-space:nowrap}.drawing-draft small{color:#b7aa7a}.drawing-draft>span,.drawing-draft>small,.wave-edit-bar>span{overflow-wrap:anywhere}.chart-tool-overlays .drawing-draft{border-color:#625521}.chart-tool-overlays:has(.drawing-draft:not([hidden])) .wave-edit-bar{display:none}.object-context-menu button:disabled{cursor:default}
@@ -216,15 +216,24 @@ html.mobile-view-only #members-panel .mobile-members-help{margin:12px 0 0;color:
 
 /* Personal symbol groups: fixed sectors plus two independently maintained lists. */
 .quote-sidebar{width:180px}
+.symbol-list{overflow-y:auto;scrollbar-width:none}
+.symbol-list::-webkit-scrollbar{display:none;width:0;height:0}
 .quote-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:4px 6px 6px;gap:3px;border-bottom:1px solid #303a43}
 .quote-groups button{font-size:12px;padding:5px 3px;line-height:18px;border:1px solid transparent;border-radius:3px;color:#99a8b6}
 .quote-groups .custom-group{background:#1c242c;color:#c9d5df;border-color:#2c3945}
 .quote-groups #all-symbols{grid-column:1/-1;padding:3px;font-size:11px}
 .quote-groups .active{color:#f5d066;background:#332e1b;border-color:#69582c}
 .quote-groups .quote-group-drop{color:#fff1bd;background:#615322;border-color:#e6c458;outline:1px solid #e6c458}
-.quote-entry .quote-row{font-size:12px;padding:8px 5px;grid-template-columns:minmax(0,1fr) 44px;gap:3px}
+.quote-entry .quote-row{font-size:12px;padding:3px 5px;grid-template-columns:minmax(0,1fr) 44px;gap:3px}
 .quote-entry .quote-name{min-width:0}
-.quote-entry .quote-star,.quote-entry .quote-default{width:20px;padding:1px;flex:none;border-radius:0;font-size:14px}
+.quote-category-heading{margin:10px 7px 2px;color:#8c9aa6;font-size:10px;font-weight:500;line-height:14px}
+.quote-category-heading:first-child{margin-top:4px}
+.quote-category-toggle{display:flex;align-items:center;gap:7px;width:100%;padding:0;border:0;color:inherit;font:inherit;text-align:left}
+.quote-category-toggle:hover{color:#d7dde4;background:transparent}
+.quote-category-toggle:focus-visible{outline:1px solid #e6c458;outline-offset:2px}
+.quote-category-line{flex:1;border-top:1px solid #2b343d}
+.quote-category-arrow{flex:none;width:10px;text-align:center;font-size:12px}
+.quote-entry .quote-star,.quote-entry .quote-default{width:20px;padding:1px;flex:none;border-radius:0;font-size:14px;line-height:18px}
 .quote-entry .quote-default{color:#91a2b0;font-size:16px}
 .quote-entry .quote-star[aria-pressed=true]{color:#e4ba43}
 .quote-entry .quote-star:focus-visible,.quote-entry .quote-default:focus-visible,.quote-row:focus-visible,.quote-groups button:focus-visible{outline:1px solid #e6c458;outline-offset:-2px}

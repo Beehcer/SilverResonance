@@ -6,7 +6,7 @@
   const state={session:null,symbol:null,plan:null,saved:null,revision:0,market:null,evaluation:null,rules:null,risk:null,dirty:false,conflict:false,selected:null,active:'m30',generation:0,polling:false,saving:false,riskDirty:false,mode:'login',alerts:[],lastSignal:null,lastSuccess:0,viewOnly:mobileDevice()};
   const charts={};
   const pageZoomGuard=installPageZoomGuard(document);
-  let marketCache=new WorkspaceMarketCache.Store({limit:16});
+  let marketCache=new WorkspaceMarketCache.Store({limit:32});
   const marketPreview=new WorkspaceMarketPreview.Store();
   const marketRequests=new Map(),documentCache=new Map(),readRequests=new Set();
   function mobileDevice(){return Boolean(navigator.userAgentData?.mobile||/Android|iPhone|iPad|iPod|Windows Phone|IEMobile|BlackBerry|BB10|Opera Mini|Mobi|Tablet|Kindle|Silk|webOS/i.test(navigator.userAgent||'')||navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1||navigator.maxTouchPoints>0&&window.matchMedia?.('(pointer: coarse)').matches||window.innerWidth<=900);}
@@ -52,19 +52,28 @@
   function rememberCurrentDocument(){if(state.symbol&&!state.loading)cacheDocument(state.symbol,state.board,state.saved);}
   function restoreOpeningDraft(){if(state.viewOnly)return;if(state.suspendedDrafts?.has(draftKey())){const own=storageGet(draftKey());if(!own||!own.outbox&&own.pending&&state.saved&&E.equal(M.apply(state.saved,own.pending),state.saved)){localStorage.removeItem(PREFIX+draftKey());state.suspendedDrafts.delete(draftKey());}}const draft=recoverableDraft();if(draft){if(draft.key===draftKey()&&draft.draft.version===2)restoreDraft(draft);else $('draft-recovery').hidden=false;}}
   function batchCharts(action){for(const chart of Object.values(charts))chart.beginUpdate?.();try{return action();}finally{for(const chart of Object.values(charts))chart.endUpdate?.();}}
-  function applyActiveMarket(market){state.marketLoadError=null;const completing=state.market?.partial&&!market?.partial;state.market=market;renderMarket();batchCharts(()=>{for(const chart of Object.values(charts))chart.setData(market,market?.partial?defaultPlan():shownPlan(),Boolean(completing));if(market?.partial)for(const chart of Object.values(charts))chart.setPresence([]);if(!market?.partial&&!state.viewRestored&&market?.periods?.m30?.length){restoreViews();state.viewRestored=true;}});if(state.planReady&&marketComplete(market)&&state.loading){setPlanLoading(false);setSaveDisabled(false);if(hasPending()||state.outbox)void flush();}if(completing)renderMembers();renderLoadState();}
+  function applyActiveMarket(market){if(state.market?.partial&&!market?.partial&&!marketComplete(market)){renderLoadState();return;}state.marketLoadError=null;const completing=state.market?.partial&&!market?.partial;state.market=market;renderMarket();batchCharts(()=>{for(const chart of Object.values(charts))chart.setData(market,market?.partial?defaultPlan():shownPlan(),Boolean(completing));if(market?.partial)for(const chart of Object.values(charts))chart.setPresence([]);if(!market?.partial&&!state.viewRestored&&market?.periods?.m30?.length){restoreViews();state.viewRestored=true;}});if(state.planReady&&marketComplete(market)&&state.loading){setPlanLoading(false);setSaveDisabled(false);if(hasPending()||state.outbox)void flush();}if(completing)renderMembers();renderLoadState();}
   function paintOpeningPreview(market,generation,onlyEmpty=false){if(market?.symbol!==state.symbol||generation!==state.generation||state.market&&!state.market.partial&&state.market.periods?.m30?.length||onlyEmpty&&state.market?.periods?.m30?.length)return;const item=WorkspaceMarketPreview.prepare(market,market?.preview_saved_at||Date.now());if(item){setPlanLoading(true);applyActiveMarket(item.market);setUnavailable('已显示近期K线，正在补齐历史并核对计划',true);}}
   async function preloadSavedMarket(symbol,generation){if(!symbol)return;const market=await marketPreview.get(symbol);if(market&&generation===state.generation&&!state.symbol){state.symbol=symbol;setLayout(storageGet('layout','main'));paintOpeningPreview(market,generation);}}
   async function loadOpeningMarket(symbol,generation){
     if(marketCache.history(symbol))return refreshMarket(symbol);
-    // Disk reads never hold up the server request, and delayed disk results may
-    // not replace newer server bars or a different contract's picture.
+    // Start full history immediately. Neither a slow preview nor IndexedDB
+    // should delay a warm server snapshot or an already established feed.
+    let full=refreshMarket(symbol);
     void marketPreview.get(symbol).then(market=>{if(market)paintOpeningPreview(market,generation,true);});
+    void api('/market?symbol='+encodeURIComponent(symbol)+'&preview=240','GET',undefined,'').then(response=>paintOpeningPreview(response.market,generation)).catch(()=>{});
     const deadline=Date.now()+10000;
-    do{
-      try{const response=await api('/market?symbol='+encodeURIComponent(symbol)+'&preview=240','GET',undefined,'');if(generation!==state.generation)return null;paintOpeningPreview(response.market,generation);if(['day','m30','m3'].every(p=>response.market?.periods?.[p]?.length))break;if(Date.now()>=deadline)break;await new Promise(resolve=>setTimeout(resolve,500));}catch{break;}
-    }while(generation===state.generation&&Date.now()<deadline);
-    return generation===state.generation?refreshMarket(symbol):null;
+    while(generation===state.generation){
+      const market=await full;if(generation!==state.generation)return null;
+      if(marketComplete(market))return market;
+      if(Date.now()>=deadline)throw new Error('历史行情仍未到齐，保留近期画面并继续重试');
+      // A first subscription can return an empty snapshot before the SDK has
+      // delivered all periods. Retry here instead of waiting for the 5s poll.
+      await new Promise(resolve=>setTimeout(resolve,500));
+      if(generation!==state.generation)return null;
+      full=refreshMarket(symbol);
+    }
+    return null;
   }
   async function refreshMarket(symbol){
     if(marketRequests.has(symbol))return marketRequests.get(symbol);
@@ -242,7 +251,29 @@
     const groups=symbolGroups(),group=state.symbolGroup||'default',list=$('symbol-list'),filter=($('symbol-search').value||'').trim(),fav=groups.favorites,items=WorkspaceSymbols.groupItems(state.symbols||[],groups,group,filter);list.replaceChildren();
     for(const tab of document.querySelectorAll('[data-symbol-group]')){const active=tab.dataset.symbolGroup===group;tab.classList.toggle('active',active);tab.setAttribute('aria-pressed',String(active));}
     if(state.market?.symbol===state.symbol&&!state.market.client_cached){state.quoteCache ||= {};const at=state.market.freshness?.m3?.checked_at?state.market.freshness.m3.checked_at*1000:null;if(!state.quoteCache[state.symbol]||at>=state.quoteCache[state.symbol].at)state.quoteCache[state.symbol]={price:state.market.price,tick:state.market.tick,at,source:state.market.source};}
+    const collapseKey='symbol-category-collapse:'+(state.session?.user?.id||'guest'),savedCollapsed=storageGet(collapseKey,[]);
+    if(state.symbolCategoryFilter!==filter){state.symbolCategoryFilter=filter;state.symbolCategorySearchCollapsed=[];}
+    const collapsedCategories=new Set(filter?state.symbolCategorySearchCollapsed:Array.isArray(savedCollapsed)?savedCollapsed:[]);
+    let previousCategory=null;
     for(const s of items){
+      if(group==='all'){
+        const category=WorkspaceSymbols.category(s);
+        if(category!==previousCategory){
+          const label=WorkspaceSymbols.GROUPS.find(item=>item.id===category)?.label||'其他',expanded=!collapsedCategories.has(category),heading=el('h3',undefined,'quote-category-heading'),toggle=el('button',undefined,'quote-category-toggle'),line=el('span',undefined,'quote-category-line'),arrow=el('span',expanded?'▾':'▸','quote-category-arrow');
+          toggle.type='button';toggle.setAttribute('aria-expanded',String(expanded));toggle.setAttribute('aria-label',(expanded?'收起':'展开')+label);line.setAttribute('aria-hidden','true');arrow.setAttribute('aria-hidden','true');
+          toggle.append(el('span',label),line,arrow);heading.append(toggle);
+          toggle.addEventListener('click',()=>{
+            if(state.symbolDrag||Date.now()<(state.suppressSymbolClickUntil||0))return;
+            if(collapsedCategories.has(category))collapsedCategories.delete(category);else collapsedCategories.add(category);
+            if(filter)state.symbolCategorySearchCollapsed=[...collapsedCategories];else storageSet(collapseKey,[...collapsedCategories]);
+            renderSymbols();
+            for(const button of list.querySelectorAll('.quote-category-toggle'))if(button.dataset.category===category){button.focus({preventScroll:true});break;}
+          });
+          toggle.dataset.category=category;
+          list.append(heading);previousCategory=category;
+        }
+        if(collapsedCategories.has(category))continue;
+      }
       const value=typeof s==='string'?s:s.symbol,name=typeof s==='string'?s:s.name||s.symbol,row=el('div',undefined,'quote-entry'),b=el('button',undefined,'quote-row'+(value===state.symbol?' selected':'')),q=state.quoteCache?.[value],warm=marketCache.ready(value);b.dataset.symbol=value;b.disabled=false;b.draggable=!state.viewOnly;
       b.title=(q?`${q.source==='mock'?'模拟':'行情'} · ${fmtTime(q.at)}${q.at&&Date.now()-q.at<20000?' · 报价更新中':' · 历史报价'}`:'点击读取行情')+(warm?' · 盘面后台刷新':state.visitedSymbols?.has(value)?' · K线正在准备':' · 首次打开加载K线')+(customSymbolGroup(group)?'；拖动或 Alt+↑/↓ 排序':'；拖到默认或喜爱添加');
       b.append(el('span',name,'quote-name'),el('span',q?C.priceLabel(q.price,q.tick):'未订阅','quote-price'));b.addEventListener('click',()=>{if(Date.now()<(state.suppressSymbolClickUntil||0))return;switchSymbol(value);});bindSymbolDrag(b,row,value);
@@ -271,7 +302,7 @@
   }
   function toggleFavorite(symbol){if(state.viewOnly||!(state.symbols||[]).some(item=>(typeof item==='string'?item:item.symbol)===symbol))return;const groups=symbolGroups(),next=groups.favorites.includes(symbol)?WorkspaceSymbols.removeFromGroup(groups,'favorites',symbol):WorkspaceSymbols.addToGroup(groups,'favorites',symbol);if(saveSymbolGroups(next))renderSymbols();}
   function toggleDefaultSymbol(symbol){if(state.viewOnly||!(state.symbols||[]).some(item=>(typeof item==='string'?item:item.symbol)===symbol))return;const groups=symbolGroups(),next=groups.default.includes(symbol)?WorkspaceSymbols.removeFromGroup(groups,'default',symbol):WorkspaceSymbols.addToGroup(groups,'default',symbol);if(saveSymbolGroups(next))renderSymbols();}
-  async function enter(session){persistDraft();state.bootstrapping=true;state.spaceTool=null;cancelObsoleteReads();closeObjectContext();state.eventSource?.close();marketCache=new WorkspaceMarketCache.Store({limit:16});marketRequests.clear();documentCache.clear();state.visitedSymbols=new Set();state.cacheEpoch=(state.cacheEpoch||0)+1;state.backgroundRefreshing=false;state.planReady=false;state.evaluation=null;state.lastSignal=null;presenceSender.reset();state.dirty=false;state.saving=false;state.conflict=false;state.plan=null;state.symbol=null;state.market=null;setPlanLoading(true);state.session=session;state.symbols=null;state.symbolGroups=null;state.symbolGroupScope=null;state.symbolGroup=null;state.viewOnly=Boolean(state.viewOnly||session.mobile_device);applyViewMode();state.riskDirty=false;state.pending=emptyPending();state.markedSymbols=new Set();$('auth-screen').hidden=true;$('workspace').hidden=false;renderMembers();state.alerts=storageGet(alertKey(),[]);const g=++state.generation;const openingSymbol=new URLSearchParams(location.search).get('symbol')||storageGet('symbol:'+session.user.id)||storageGet('last-market-symbol');void preloadSavedMarket(openingSymbol,g);try{const results=await Promise.all([api('/symbols'),api('/rules'),api('/risk')]);if(g!==state.generation)return;state.rules=results[1].rules;state.risk=results[2].risk||{};state.symbols=results[0].symbols||[];$('symbol').replaceChildren();for(const s of state.symbols){const value=typeof s==='string'?s:s.symbol,option=el('option',typeof s==='string'?s:`${s.name||s.symbol} · ${s.symbol}`);option.value=value;$('symbol').append(option);}if(!state.symbols.length){setUnavailable('暂无可用合约，请检查行情配置。');return;}state.layout=storageGet('layout','main');setLayout(state.layout);const params=new URLSearchParams(location.search),last=params.get('symbol')||storageGet('symbol:'+session.user.id);if(params.has('board')&&last)storageSet('board:'+session.user.id+':'+last,params.get('board'));if([...$('symbol').options].some(o=>o.value===last))$('symbol').value=last;state.bootstrapping=false;await switchSymbol($('symbol').value);}catch(error){setPlanLoading(false);setUnavailable(error.message);notice(error.message);}finally{if(g===state.generation)state.bootstrapping=false;}}
+  async function enter(session){persistDraft();state.bootstrapping=true;state.spaceTool=null;cancelObsoleteReads();closeObjectContext();state.eventSource?.close();marketCache=new WorkspaceMarketCache.Store({limit:32});marketRequests.clear();documentCache.clear();state.visitedSymbols=new Set();state.cacheEpoch=(state.cacheEpoch||0)+1;state.backgroundRefreshing=false;state.planReady=false;state.evaluation=null;state.lastSignal=null;presenceSender.reset();state.dirty=false;state.saving=false;state.conflict=false;state.plan=null;state.symbol=null;state.market=null;setPlanLoading(true);state.session=session;state.symbols=null;state.symbolGroups=null;state.symbolGroupScope=null;state.symbolGroup=null;state.viewOnly=Boolean(state.viewOnly||session.mobile_device);applyViewMode();state.riskDirty=false;state.pending=emptyPending();state.markedSymbols=new Set();$('auth-screen').hidden=true;$('workspace').hidden=false;renderMembers();state.alerts=storageGet(alertKey(),[]);const g=++state.generation;const openingSymbol=new URLSearchParams(location.search).get('symbol')||storageGet('symbol:'+session.user.id)||storageGet('last-market-symbol');void preloadSavedMarket(openingSymbol,g);try{const results=await Promise.all([api('/symbols'),api('/rules'),api('/risk')]);if(g!==state.generation)return;state.rules=results[1].rules;state.risk=results[2].risk||{};state.symbols=results[0].symbols||[];$('symbol').replaceChildren();for(const s of state.symbols){const value=typeof s==='string'?s:s.symbol,option=el('option',typeof s==='string'?s:`${s.name||s.symbol} · ${s.symbol}`);option.value=value;$('symbol').append(option);}if(!state.symbols.length){setUnavailable('暂无可用合约，请检查行情配置。');return;}state.layout=storageGet('layout','main');setLayout(state.layout);const params=new URLSearchParams(location.search),last=params.get('symbol')||storageGet('symbol:'+session.user.id);if(params.has('board')&&last)storageSet('board:'+session.user.id+':'+last,params.get('board'));if([...$('symbol').options].some(o=>o.value===last))$('symbol').value=last;state.bootstrapping=false;await switchSymbol($('symbol').value);}catch(error){setPlanLoading(false);setUnavailable(error.message);notice(error.message);}finally{if(g===state.generation)state.bootstrapping=false;}}
   async function switchSymbol(symbol,board=null,options={}){
     if(!symbol||symbol===state.symbol&&state.market&&!state.loading&&!state.planLoadFailed&&board===null)return;
     const intent=state.switchIntent=(state.switchIntent||0)+1;
@@ -280,14 +311,17 @@
     state.board=board===null?(storageGet('board:'+state.session.user.id+':'+symbol,'')||''):board;state.planFormDirty=false;state.recordBefore=null;state.symbol=symbol;state.loadingSince=Date.now();state.marketLoadError=null;state.planLoadError=null;state.remoteRevision=0;setPlanLoading(true);$('symbol').value=symbol;storageSet('symbol:'+state.session.user.id,symbol);storageSet('last-market-symbol',symbol);
     marketCache.pin(symbol);const cachedMarket=marketCache.view(symbol)||(state.market?.symbol===symbol&&state.market.partial?state.market:null),cachedDocument=documentCache.get(sharedDocumentKey(symbol,state.board));state.planLoadFailed=false;state.planReady=Boolean(cachedDocument);
     state.market=cachedMarket?{...cachedMarket,fresh:false,client_cached:true}:null;state.evaluation=null;state.lastSignal=null;state.lastSuccess=0;state.dirty=false;state.conflict=false;state.selected=null;state.polling=false;state.pulling=false;state.pending=emptyPending();state.outbox=null;state.queuedRemote=null;stopFollowing();state.localPresence=null;state.presence=[];state.previewDirty=false;state.objectDraft=false;state.nodeDraft=false;state.quickTool=null;state.quickSequence=false;state.levelPreview=null;state.ticketError='';state.levelDrag=null;state.viewRestored=false;
-    state.eventSource?.close();state.plan=defaultPlan();state.saved=null;state.revision=0;const generation=++state.generation,targetBoard=state.board,epoch=state.cacheEpoch;state.visitedSymbols ||= new Set();state.visitedSymbols.delete(symbol);state.visitedSymbols.add(symbol);while(state.visitedSymbols.size>16)state.visitedSymbols.delete(state.visitedSymbols.values().next().value);
+    state.eventSource?.close();state.plan=defaultPlan();state.saved=null;state.revision=0;const generation=++state.generation,targetBoard=state.board,epoch=state.cacheEpoch;state.visitedSymbols ||= new Set();state.visitedSymbols.delete(symbol);state.visitedSymbols.add(symbol);while(state.visitedSymbols.size>marketCache.limit)state.visitedSymbols.delete(state.visitedSymbols.values().next().value);
     notice('');$('plan-error').textContent='';setSaveDisabled(true);$('draft-recovery').hidden=true;
     batchCharts(()=>{for(const chart of Object.values(charts))chart.setTool('select');if(cachedDocument){acceptPlan(cachedDocument.plan,true);restoreOpeningDraft();setPlanLoading(!marketComplete());setSaveDisabled(state.loading);}else{fillPlan(state.plan);renderObjects();for(const chart of Object.values(charts))chart.setData(state.market,state.plan,true);}if(cachedMarket&&!cachedMarket.partial){restoreViews();state.viewRestored=true;}});
     renderMarket();setUnavailable(cachedMarket?'已显示后台缓存，正在核对最新计划与行情':'首次加载这个品种的计划与行情…',true);if(cachedDocument)connectEvents();
     const updateUrl=()=>{const url=new URL(location.href);url.searchParams.set('symbol',symbol);url.searchParams.set('board',targetBoard||'');history.replaceState(null,'',url);};updateUrl();
     const marketTask=loadOpeningMarket(symbol,generation).then(market=>{if(generation===state.generation&&market)applyActiveMarket(market);}).catch(error=>{if(generation===state.generation){if(state.market)applyActiveMarket({...state.market,fresh:false,unavailable:true});state.marketLoadError=error.message;renderLoadState();}});
-    try{const data=await api('/plans/'+encodeURIComponent(symbol),'GET',undefined,targetBoard);if(epoch===state.cacheEpoch)cacheDocument(symbol,targetBoard,data.plan);if(generation!==state.generation)return;if(data.plan&&!currentPlan(data.plan))throw new Error('共享计划与当前品种不一致，正在重新读取');state.planReady=true;state.planLoadError=null;batchCharts(()=>{if(cachedDocument){if((data.plan?.revision||0)>state.revision)receivePlan(data.plan);}else{acceptPlan(data.plan,!state.viewRestored);restoreOpeningDraft();}if(marketComplete()){setPlanLoading(false);setSaveDisabled(false);}renderLoadState();if(!state.viewRestored&&!state.market?.partial&&state.market?.periods?.m30?.length){restoreViews();state.viewRestored=true;}});if(data.plan)state.markedSymbols.add(symbol);if(!cachedDocument)connectEvents();void loadBoards();await marketTask;if(generation===state.generation)await poll(generation,{market:state.market,plan:state.plan});}
+    const openingTask=(async()=>{
+    try{const data=await api('/plans/'+encodeURIComponent(symbol),'GET',undefined,targetBoard);if(epoch===state.cacheEpoch)cacheDocument(symbol,targetBoard,data.plan);if(generation!==state.generation)return;if(data.plan&&!currentPlan(data.plan))throw new Error('共享计划与当前品种不一致，正在重新读取');state.planReady=true;state.planLoadError=null;batchCharts(()=>{if(cachedDocument){if((data.plan?.revision||0)>state.revision)receivePlan(data.plan);}else{acceptPlan(data.plan,!state.viewRestored);restoreOpeningDraft();}if(marketComplete()){setPlanLoading(false);setSaveDisabled(false);}renderLoadState();if(!state.viewRestored&&!state.market?.partial&&state.market?.periods?.m30?.length){restoreViews();state.viewRestored=true;}});if(data.plan)state.markedSymbols.add(symbol);if(!cachedDocument)connectEvents();void loadBoards();await marketTask;if(generation===state.generation)void poll(generation,{market:state.market,plan:state.plan});}
     catch(error){if(generation===state.generation){state.planLoadFailed=true;state.planLoadError=error.message;renderLoadState();notice(error.message);setUnavailable('计划读取失败，可重新点击此品种重试。');renderSymbols();}}
+    })();
+    if(!options.backgroundLoad)await openingTask;
   }
   async function poll(generation=state.generation,opening=null){
     if(!state.session?.user||!state.symbol||state.polling||state.saving||state.loading&&!state.planReady)return;
@@ -482,9 +516,8 @@
   function setDockVisible(open){$('workspace-dock').hidden=!open;$('layers-toggle-label').textContent=open?'收起图层':'展开图层';$('objects-toggle').setAttribute('aria-expanded',String(open));storageSet('dock-open',open);}
   function openPanel(id,reveal=true){if(state.viewOnly)return;if(!PANEL_IDS.includes(id))return;if(reveal)setDockVisible(true);state.panel=id;document.querySelectorAll('[data-panel]').forEach(b=>b.classList.toggle('selected',b.dataset.panel===id));for(const panelId of PANEL_IDS){const panel=$(panelId),open=panelId===id;if(panel.tagName==='DETAILS')panel.open=open;else panel.hidden=!open;}}
   function togglePanel(id){if(state.panel===id&&!$('workspace-dock').hidden)setDockVisible(false);else openPanel(id);}
-  $('quick-plan-toggle').addEventListener('click',()=>togglePanel('quick-plan-panel'));$('rail-plan').addEventListener('click',()=>openPanel('quick-plan-panel'));
-  $('objects-toggle').addEventListener('click',()=>{if($('workspace-dock').hidden)openPanel('objects-details');else setDockVisible(false);});$('rail-objects').addEventListener('click',()=>openPanel('objects-details'));
-  $('help-button').addEventListener('click',()=>togglePanel('chart-help-details'));
+  $('quick-plan-toggle').addEventListener('click',()=>togglePanel('quick-plan-panel'));
+  $('objects-toggle').addEventListener('click',()=>{if($('workspace-dock').hidden)openPanel('objects-details');else setDockVisible(false);});
   for(const id of ['objects-details','chart-help-details'])$(id).querySelector('summary').addEventListener('click',event=>{event.preventDefault();togglePanel(id);});
   $('decision-toggle').addEventListener('click',()=>{const detail=$('decision-detail');detail.hidden=!detail.hidden;$('decision-toggle').setAttribute('aria-expanded',String(!detail.hidden));});
   document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>{$(button.dataset.close).hidden=true;}));

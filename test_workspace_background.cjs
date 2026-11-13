@@ -179,9 +179,60 @@ test('queued background jobs skip contracts dropped from the visited set or newl
   pending[0].wait.resolve({market:market(pending[0].symbol)});await tick();assert.equal(pending.length,2);assert.equal(pending[1].symbol,D);pending[1].wait.resolve({market:market(D)});await task;assert.equal(h.calls.network.length,2);
 });
 
-test('opening a contract pins it and retains only the sixteen most recently visited contracts',async()=>{
-  const h=harness();h.state.visitedSymbols=new Set(Array.from({length:16},(_,i)=>'TEST.p'+i));await h.context.switchSymbol(B);
-  assert.equal(h.context.marketCache.pinned,B);assert.equal(h.state.visitedSymbols.size,16);assert.equal(h.state.visitedSymbols.has('TEST.p0'),false);assert.equal([...h.state.visitedSymbols].at(-1),B);
+test('opening a contract pins it and bounds visited contracts to the full cache capacity',async()=>{
+  const h=harness(),limit=h.context.marketCache.limit;h.state.visitedSymbols=new Set(Array.from({length:limit},(_,i)=>'TEST.p'+i));await h.context.switchSymbol(B);
+  assert.equal(h.context.marketCache.pinned,B);assert.equal(h.state.visitedSymbols.size,limit);assert.equal(h.state.visitedSymbols.has('TEST.p0'),false);assert.equal([...h.state.visitedSymbols].at(-1),B);
+});
+
+test('full history starts before a stalled preview and switching does not wait for review or quotes',async()=>{
+  const h=harness(),preview=deferred(),review=deferred(),quotes=deferred();
+  h.respond(request=>request.url.includes('preview=240')?preview.promise:request.url.includes('/market?')?{market:market(B)}:request.url.includes('/review?')?review.promise:request.url.includes('/quotes')?quotes.promise:{plan:plan(B)});
+  let completed=false;const switching=h.context.switchSymbol(B).then(()=>completed=true);await tick();
+  assert.equal(completed,true,'preview/review/quotes are outside the chart opening critical path');
+  assert.equal(h.state.loading,false);assert.equal(h.state.market.symbol,B);assert.equal(h.state.market.fresh,true);
+  const marketCalls=h.calls.network.filter(r=>r.url.includes('/market?'));assert.equal(marketCalls.length,2);assert.equal(marketCalls[0].url.includes('preview='),false);
+  preview.resolve({market:{...market(B,'older-preview',95),partial:true,fresh:false}});await tick();assert.equal(h.state.market.price,101);
+  review.resolve({evaluation:{status:'waiting'},plan_revision:1});quotes.resolve({quotes:[]});await switching;await tick();
+});
+
+test('empty first subscription retries full history after 500ms without waiting for the periodic poll',async()=>{
+  const h=harness(),preview=deferred(),timers=[];let fullRequests=0;
+  h.context.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length;};
+  const empty={...market(B),periods:{day:[],m30:[],m3:[]},period_counts:{day:0,m30:0,m3:0},fresh:false,feed_status:'loading'};
+  h.respond(request=>request.url.includes('preview=240')?preview.promise:request.url.includes('/market?')?{market:++fullRequests===1?empty:market(B)}:request.url.includes('/review?')?{evaluation:{status:'waiting'},plan_revision:1}:request.url.includes('/quotes')?{quotes:[]}:{plan:plan(B)});
+  const switching=h.context.switchSymbol(B);await tick();assert.equal(h.state.loading,true);assert.equal(fullRequests,1);assert.equal(h.context.marketCache.history(B),null);
+  const retry=timers.find(timer=>timer.ms===500);assert.ok(retry);retry.fn();await switching;
+  assert.equal(fullRequests,2);assert.equal(h.state.loading,false);assert.equal(h.context.marketCache.history(B),'token-'+B);
+  preview.resolve({market:empty});await tick();assert.equal(h.state.market.feed_status,'live');
+});
+
+test('background opening releases the shell immediately and a late old load cannot overwrite a later selection',async()=>{
+  const h=harness(),oldLoad=deferred();
+  h.respond(request=>request.url.includes(encodeURIComponent(B))?oldLoad.promise:request.url.includes('/market?')?{market:market(D)}:request.url.includes('/review?')?{evaluation:{status:'waiting'},plan_revision:1}:request.url.includes('/quotes')?{quotes:[]}:{plan:plan(D)});
+  let adopted=false;const opening=h.context.switchSymbol(B,null,{backgroundLoad:true}).then(()=>adopted=true);await tick();
+  assert.equal(adopted,true);assert.equal(h.state.symbol,B);assert.equal(h.state.loading,true);assert.equal(h.state.planReady,false);assert.notEqual(h.$('decision').dataset.status,'READY');
+  await h.context.switchSymbol(D);const paints=h.calls.paints.length;
+  oldLoad.resolve({market:market(B),plan:plan(B)});await opening;await tick();
+  assert.equal(h.state.symbol,D);assert.equal(h.state.plan.symbol,D);assert.equal(h.state.market.symbol,D);assert.equal(h.calls.paints.length,paints);
+});
+
+test('background warm opening remains immediately viewable without trusting cached readiness',async()=>{
+  const h=harness(),wait=deferred();h.seed(market(B));h.context.cacheDocument(B,'',plan(B));h.respond(()=>wait.promise);
+  let adopted=false;const opening=h.context.switchSymbol(B,null,{backgroundLoad:true}).then(()=>adopted=true);await tick();
+  assert.equal(adopted,true);assert.equal(h.state.loading,false);assert.equal(h.state.market.client_cached,true);assert.equal(h.state.market.fresh,false);assert.equal(h.state.evaluation,null);
+  h.state.generation++;wait.resolve({market:market(B),plan:plan(B)});await opening;await tick();
+});
+
+test('incomplete full history at the retry deadline retains the complete short preview for later recovery',async()=>{
+  const h=harness(),timers=[];let now=0;
+  h.context.Date={now:()=>now,parse:Date.parse};h.context.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length;};
+  const preview={...market(B),partial:true,fresh:false,feed_status:'preview'},empty={...market(B),periods:{day:[],m30:[],m3:[]},period_counts:{day:0,m30:0,m3:0},fresh:false,feed_status:'loading'};
+  h.state.symbol=B;h.state.market=preview;h.state.planReady=true;h.state.loading=true;
+  h.respond(request=>({market:request.url.includes('preview=240')?preview:empty}));
+  const task=h.context.loadOpeningMarket(B,h.state.generation);await tick();
+  now=11000;timers.find(timer=>timer.ms===500).fn();await assert.rejects(task,/历史行情仍未到齐/);
+  h.context.applyActiveMarket(empty);assert.equal(h.state.market.partial,true);assert.equal(h.state.market.periods.m3.length,4);assert.equal(h.state.loading,true);
+  h.context.applyActiveMarket(market(B));assert.equal(h.state.market.partial,undefined);assert.equal(h.state.loading,false);
 });
 
 test('a warm plan-load failure can be retried by clicking the same contract',async()=>{

@@ -38,6 +38,7 @@
     {id:'all',label:'全部',custom:false},
   ].map(group=>Object.freeze(group)));
   const CUSTOM_GROUPS=new Set(GROUPS.filter(group=>group.custom).map(group=>group.id));
+  const CATEGORY_ORDER=GROUPS.filter(group=>!group.custom&&group.id!=='all').map(group=>group.id).concat('other');
   // Use exchange + exact product code, never a substring of a name/contract.
   // Lithium carbonate is shown under chemical (new-energy materials) in this board taxonomy.
   const PRODUCTS={
@@ -85,7 +86,7 @@
     const entries=symbolsOf(symbols),normalized=normalizeGroups(groups,entries),byId=new Map(entries.map(entry=>[idOf(entry),entry]));
     const matchesGroup=GROUPS.some(group=>group.id===groupId)?groupId:'all';
     const list=CUSTOM_GROUPS.has(matchesGroup)?normalized[matchesGroup].map(id=>byId.get(id)):
-      matchesGroup==='all'?entries:entries.filter(entry=>category(entry)===matchesGroup);
+      matchesGroup==='all'?entries.sort((a,b)=>CATEGORY_ORDER.indexOf(category(a))-CATEGORY_ORDER.indexOf(category(b))):entries.filter(entry=>category(entry)===matchesGroup);
     const search=typeof query==='string'?query.trim().toLowerCase():'';
     return search?list.filter(entry=>`${idOf(entry)} ${typeof entry?.name==='string'?entry.name:''}`.toLowerCase().includes(search)):list;
   }

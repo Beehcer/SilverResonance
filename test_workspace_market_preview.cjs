@@ -57,8 +57,8 @@ test('persistent preview round-trip retains its coordinate basis and reference i
 
 test('preview eviction does not allow delayed old native snapshots to restore the obsolete basis',async()=>{
   let now=1000;const store=new P.Store({indexedDB:null,now:()=>now});store.put(rebased());
-  for(let i=0;i<16;i++){now++;store.put(small('TEST.preview'+i));}
-  assert.equal(store.memory.size,16);assert.equal(store.memory.has(SYMBOL),false);
+  for(let i=0;i<32;i++){now++;store.put(small('TEST.preview'+i));}
+  assert.equal(store.memory.size,32);assert.equal(store.memory.has(SYMBOL),false);
   now+=31000;store.put(small());assert.equal(store.memory.has(SYMBOL),false);assert.equal(await store.get(SYMBOL),null);
 });
 
@@ -176,16 +176,27 @@ test('writes for the same contract serialize and recover after an earlier disk w
   first.reject(new Error('quota retry'));await tick();assert.deepEqual(seen,[100,104]);second.resolve();await writesDone(store);assert.equal(store.writes.size,0);
 });
 
-test('in-memory preview retention is bounded to sixteen contracts',async()=>{
+test('in-memory preview retention is bounded to thirty-two contracts',async()=>{
   let now=1000;const store=new P.Store({now:()=>now,indexedDB:null});
-  for(let i=0;i<20;i++){store.put(small('TEST.s'+i));now++;}
-  assert.equal(store.memory.size,P.MAX_ITEMS);assert.equal(await store.get('TEST.s0'),null);assert.equal((await store.get('TEST.s19')).symbol,'TEST.s19');
+  for(let i=0;i<40;i++){store.put(small('TEST.s'+i));now++;}
+  assert.equal(store.memory.size,P.MAX_ITEMS);assert.equal(await store.get('TEST.s0'),null);assert.equal((await store.get('TEST.s39')).symbol,'TEST.s39');
 });
 
-test('real IndexedDB adapter creates its schema, evicts oldest records beyond sixteen and expires disk records',async()=>{
+test('all twenty product previews survive a page reload without new market reads',async()=>{
   const idb=memoryIndexedDB();let now=1000;const store=new P.Store({indexedDB:idb,now:()=>now});
-  for(let i=0;i<20;i++){store.put(small('TEST.s'+i));await writesDone(store);now++;}
-  assert.deepEqual(idb.schema,{store:'markets',keyPath:'symbol',index:'saved_at',indexKey:'saved_at'});assert.equal(idb.records.size,P.MAX_ITEMS);assert.equal(idb.records.has('TEST.s0'),false);assert.equal(idb.records.has('TEST.s19'),true);
-  const reloaded=new P.Store({indexedDB:idb,now:()=>now});const read=await reloaded.get('TEST.s19');assert.equal(read.symbol,'TEST.s19');assert.equal(read.fresh,false);assert.equal(read.partial,true);
+  for(let i=0;i<20;i++){store.put(small('TEST.catalogue'+i));await writesDone(store);now++;}
+  assert.equal(idb.records.size,20);assert.equal(store.memory.size,20);
+  const reloaded=new P.Store({indexedDB:idb,now:()=>now});
+  for(let i=0;i<20;i++){
+    const market=await reloaded.get('TEST.catalogue'+i);assert.equal(market.symbol,'TEST.catalogue'+i);
+    assert.equal(market.client_cached,true);assert.equal(market.partial,true);assert.equal(market.fresh,false);assert.equal(market.history_token,null);
+  }
+});
+
+test('real IndexedDB adapter creates its schema, evicts oldest records beyond thirty-two and expires disk records',async()=>{
+  const idb=memoryIndexedDB();let now=1000;const store=new P.Store({indexedDB:idb,now:()=>now});
+  for(let i=0;i<40;i++){store.put(small('TEST.s'+i));await writesDone(store);now++;}
+  assert.deepEqual(idb.schema,{store:'markets',keyPath:'symbol',index:'saved_at',indexKey:'saved_at'});assert.equal(idb.records.size,P.MAX_ITEMS);assert.equal(idb.records.has('TEST.s0'),false);assert.equal(idb.records.has('TEST.s39'),true);
+  const reloaded=new P.Store({indexedDB:idb,now:()=>now});const read=await reloaded.get('TEST.s39');assert.equal(read.symbol,'TEST.s39');assert.equal(read.fresh,false);assert.equal(read.partial,true);
   now+=P.TTL+1;store.put(small('TEST.new'));await writesDone(store);assert.deepEqual([...idb.records.keys()],['TEST.new']);
 });

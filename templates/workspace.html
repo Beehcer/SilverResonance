@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>共振 · 多周期计划工作台</title>
-  <link rel="stylesheet" href="/static/workspace.css?v=20261113-sidebar-1">
+  <link rel="stylesheet" href="/static/workspace.css?v=20261113-navigation-1">
   <link rel="stylesheet" href="/static/workspace-cases.css?v=20261111-4">
   {% if dual_pane %}<link rel="stylesheet" href="/static/workspace-dual-embed.css?v=20261113-major-2">{% endif %}
 </head>
@@ -16,7 +16,7 @@
     <span class="mobile-only mobile-readonly-label">只读看盘</span>
     <span class="workspace-title">多周期工作台</span>
     <div class="terminal-notice-slot"><div id="notice" class="notice terminal-notice" hidden role="status" aria-live="polite" aria-atomic="true"></div></div>
-    <div class="terminal-header-actions"><button id="help-button">操作</button><button id="members-button" class="members-button" aria-expanded="false">成员</button><button id="mobile-members-toggle" class="mobile-only" type="button" aria-expanded="false" aria-controls="members-panel">伙伴</button><span class="live-dot"></span><span id="connection-status">连接中</span></div>
+    <div class="terminal-header-actions"><button id="cases-button" class="cases-entry" type="button" aria-haspopup="dialog" title="查看交易系统开仓案例">案例</button><button id="members-button" class="members-button" aria-expanded="false">成员</button><button id="mobile-members-toggle" class="mobile-only" type="button" aria-expanded="false" aria-controls="members-panel">伙伴</button><span class="live-dot"></span><span id="connection-status">连接中</span></div>
   </header>
   <div class="terminal-menu">
     <div class="menu-group"><button id="follow-latest">跟随最新</button><button id="global-fit">复位</button></div>
@@ -35,7 +35,6 @@
     <div class="menu-group view-options"><button id="fit-chart" title="只适应当前图K线 (F)">适应</button><button id="fit-with-drawings" title="适应当前图K线、绘图和计划价位">全显</button><button id="zoom-out" aria-label="缩小当前图">−</button><button id="zoom-in" aria-label="放大当前图">＋</button><button id="link-views" title="仅联动时间范围，价格尺度各自独立" aria-pressed="false">联动</button></div>
   </div>
   <div class="terminal-body">
-    <nav class="app-rail" aria-label="应用导航"><button class="active" title="期货行情">期货</button><button id="rail-plan" title="图上计划">计划</button><button id="rail-objects" title="绘制对象大纲">画线</button><a {% if config.WORKSPACE_PRODUCTION %}hidden{% endif %} id="monitor-link" href="/monitor" target="_blank" rel="noopener" title="主机监控">主机</a><button id="cases-button" class="cases-entry" type="button" aria-haspopup="dialog" title="查看交易系统开仓案例">案例</button></nav>
     <aside class="quote-sidebar">
       <div class="quote-search"><input id="symbol-search" type="search" placeholder="输入合约代码 / 名称" aria-label="搜索品种"><span>⌕</span></div>
       <div class="quote-tabs quote-groups" role="group" aria-label="品种分组">
@@ -116,7 +115,7 @@
 <script src="/static/plan-board-model.js?v=20261112-18"></script>{% if dual_pane %}<script src="/static/workspace-dual-chart.js?v=20261113-major-1"></script>{% else %}<script src="/static/workspace-chart.js?v=20261112-23"></script>{% endif %}<script src="/static/workspace-editing.js?v=20261111-17"></script><script src="/static/workspace-ticket.js?v=20261111-8"></script><script src="/static/workspace-presence.js?v=20261111-8"></script><script src="/static/workspace-layouts.js?v=20261111-8"></script><script src="/static/workspace-properties.js?v=20261112-21"></script>
 <script src="/static/workspace-merge.js?v=20261112-22"></script><script src="/static/workspace-layers.js?v=20261112-18"></script>
 <script src="/static/workspace-cases-data.js?v=20261111-4"></script><script src="/static/workspace-cases.js?v=20261111-4"></script>
-<script src="/static/workspace-market-cache.js?v=20261112-22"></script><script src="/static/workspace-market-preview.js?v=20261112-22"></script><script src="/static/workspace-symbols.js?v=20261113-groups-1"></script><script src="/static/workspace-shortcuts.js?v=20261111-17"></script>
-{% if dual_pane %}<script src="/static/workspace-dual-embed.js?v=20261113-major-2"></script><script src="/static/workspace-dual-runtime.js?v=20261113-major-1"></script>{% else %}<script src="/static/workspace.js?v=20261113-groups-1"></script>{% endif %}
+<script src="/static/workspace-market-cache.js?v=20261113-switch-1"></script><script src="/static/workspace-market-preview.js?v=20261113-switch-1"></script><script src="/static/workspace-symbols.js?v=20261113-categories-1"></script><script src="/static/workspace-shortcuts.js?v=20261111-17"></script>
+{% if dual_pane %}<script src="/static/workspace-dual-embed.js?v=20261113-major-2"></script><script src="/static/workspace-dual-runtime.js?v=20261113-switch-1"></script>{% else %}<script src="/static/workspace.js?v=20261113-switch-1"></script>{% endif %}
 </body>
 </html>

@@ -170,7 +170,7 @@ def adapt_workspace_js(source: str) -> str:
     prepareFocusSwitch:dualPrepareFocusSwitch,
     escapeHasPriority:dualEscapeHasPriority,
     snapshot:()=>({symbol:state.symbol,name:state.market?.name||state.symbol,board:state.board||'',loading:Boolean(state.loading),dirty:Boolean(state.dirty||state.planFormDirty||state.outbox),saving:Boolean(state.saving),conflict:Boolean(state.conflict),ready:Boolean(state.planReady&&marketComplete()),activePeriod:state.active,layout:state.layout,expanded:document.querySelector('.chart-grid')?.dataset.expanded||null,viewOnly:state.viewOnly,revision:state.revision,selected:state.selected,modalOpen:Boolean(document.querySelector('dialog[open],#layout-picker[open],#members-panel:not([hidden]),#decision-detail:not([hidden])')),ui:{group:state.symbolGroup||'all',search:$('symbol-search').value,panel:state.panel||'quick-plan-panel',dockOpen:!$('workspace-dock').hidden,dockWidth:dualDockWidth()}}),
-    switchSymbol:async(symbol,board=null)=>{await switchSymbol(symbol,board);return state.symbol===symbol&&(board===null||(state.board||'')===(board||''));},
+    switchSymbol:async(symbol,board=null)=>{await switchSymbol(symbol,board,{backgroundLoad:true});return state.symbol===symbol&&(board===null||(state.board||'')===(board||''));},
     prepareDeactivate:async({closing=false}={})=>{
       const unfinishedText=Object.values(charts).find(chart=>chart.textEditor&&!chart.textEditor.hidden&&(chart.textInput?.value||chart.textComposing));
       if(unfinishedText){notice('这段文本尚未添加，请先添加或取消。');unfinishedText.textInput?.focus({preventScroll:true});return false;}

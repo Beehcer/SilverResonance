@@ -1,6 +1,6 @@
 (function(root,factory){const api=factory(typeof module==='object'&&module.exports?require('./workspace-market-cache.js'):root.WorkspaceMarketCache);if(typeof module==='object'&&module.exports)module.exports=api;else root.WorkspaceMarketPreview=api;}(globalThis,function(Coordinates){
   'use strict';
-  const PERIODS=['day','m30','m3'],MAX_BARS=240,MAX_ITEMS=16,TTL=86400000;
+  const PERIODS=['day','m30','m3'],MAX_BARS=240,MAX_ITEMS=32,TTL=86400000;
   function prepare(market,now=Date.now()){
     if(!market||typeof market.symbol!=='string'||!market.symbol||!PERIODS.every(p=>Array.isArray(market.periods?.[p])&&market.periods[p].length))return null;
     if(Coordinates.coordinateError(market))return null;

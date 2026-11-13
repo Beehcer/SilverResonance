@@ -76,8 +76,8 @@
     return null;
   }
   class Store{
-    constructor({limit=16}={}){
-      if(!Number.isInteger(limit)||limit<1||limit>16)throw new RangeError('Market cache limit must be 1–16.');
+    constructor({limit=32}={}){
+      if(!Number.isInteger(limit)||limit<1||limit>32)throw new RangeError('Market cache limit must be 1–32.');
       this.limit=limit;this.entries=new Map();this.sequence=0;this.pinned=null;this.coordinateBases=new Map();
     }
     touch(symbol,create=false){

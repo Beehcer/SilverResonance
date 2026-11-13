@@ -40,7 +40,7 @@ test('saved empty custom groups stay empty and new products are discoverable wit
   assert.deepEqual(result,raw);
   assert.deepEqual(Symbols.groupItems(entries,result,'default'),[]);
   assert.deepEqual(ids(Symbols.groupItems(entries,result,'chemical')),['CZCE.MA701','GFEX.lc2701']);
-  assert.deepEqual(ids(Symbols.groupItems(entries,result,'all')),ids(entries));
+  assert.deepEqual(ids(Symbols.groupItems(entries,result,'all')),['SHFE.bu2612','CZCE.MA701','GFEX.lc2701','DCE.m2701','SHFE.ag2612','SHFE.rb2701']);
 });
 
 test('rollover migrates one matching product on the same exchange while preserving custom membership and order',()=>{

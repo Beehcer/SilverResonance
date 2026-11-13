@@ -213,6 +213,10 @@
       case 'full-workspace:geometry': scheduleLayout(); break;
       case 'full-workspace:state': {
         const snapshot = data.snapshot || data.state || data;
+        // A previous contract's queued message can arrive after a fast switch
+        // has released busy. It must not roll back the selected pane or layout.
+        const current = bridge(record)?.snapshot();
+        if (snapshot.symbol && current?.symbol && snapshot.symbol !== current.symbol) break;
         if (record.modalOpen !== snapshot.modalOpen) { record.modalOpen = snapshot.modalOpen; scheduleLayout(); }
         if (snapshot.symbol && record.symbol !== snapshot.symbol && ids.includes(snapshot.symbol) && !busy) { record.symbol = snapshot.symbol; const pane = state.panes.find(pane => pane.id === id); if (pane) pane.symbol = snapshot.symbol; persist(); }
         break;

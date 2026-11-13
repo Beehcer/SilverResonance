@@ -160,12 +160,22 @@ test('a one-bar history accepts a single-row tail without fabricating extra bars
   const store=new Store(),base=full(SYMBOL,'one',{day:1,m30:1,m3:1});accept(store,base);const patch=delta(base);patch.periods.day[0].close=104;const result=accept(store,patch);assert.equal(result.accepted,true);assert.equal(result.market.periods.day.length,1);assert.equal(result.market.periods.day[0].close,104);
 });
 
-test('the bounded LRU never exceeds sixteen contracts and evicted request tickets cannot reinsert old data',()=>{
+test('the bounded LRU never exceeds thirty-two contracts and evicted request tickets cannot reinsert old data',()=>{
   const store=new Store(),ticket=store.begin('SHFE.ag2702');
-  for(let i=0;i<16;i++)accept(store,full('TEST.p'+i,'t'+i));
-  assert.equal(store.entries.size,16);assert.equal(store.accept('SHFE.ag2702',full('SHFE.ag2702'),ticket).ignored,true);assert.equal(store.get('SHFE.ag2702'),null);
-  store.get('TEST.p0');accept(store,full('TEST.new','new'));assert.notEqual(store.get('TEST.p0'),null);assert.equal(store.get('TEST.p1'),null);assert.equal(store.entries.size,16);
-  assert.throws(()=>new Store({limit:17}),RangeError);assert.throws(()=>new Store({limit:0}),RangeError);
+  for(let i=0;i<32;i++)accept(store,full('TEST.p'+i,'t'+i));
+  assert.equal(store.entries.size,32);assert.equal(store.accept('SHFE.ag2702',full('SHFE.ag2702'),ticket).ignored,true);assert.equal(store.get('SHFE.ag2702'),null);
+  store.get('TEST.p0');accept(store,full('TEST.new','new'));assert.notEqual(store.get('TEST.p0'),null);assert.equal(store.get('TEST.p1'),null);assert.equal(store.entries.size,32);
+  assert.throws(()=>new Store({limit:33}),RangeError);assert.throws(()=>new Store({limit:0}),RangeError);
+});
+
+test('visiting all twenty products retains their complete histories and delta tokens on repeated passes',()=>{
+  const store=new Store(),markets=Array.from({length:20},(_,index)=>full('TEST.catalogue'+index,'catalogue-'+index));
+  for(const market of markets){store.pin(market.symbol);accept(store,market);}
+  for(let pass=0;pass<3;pass++)for(const market of markets){
+    store.pin(market.symbol);assert.equal(store.ready(market.symbol),true);assert.equal(store.history(market.symbol),market.history_token);
+    assert.equal(accept(store,delta(market)).accepted,true);
+  }
+  assert.equal(store.entries.size,20);
 });
 
 test('the same contract is shared across boards without any plan state in the cache API',()=>{
@@ -175,9 +185,9 @@ test('the same contract is shared across boards without any plan state in the ca
 
 test('pinning the active contract keeps it and its token while background activity evicts older unpinned entries',()=>{
   const store=new Store();accept(store,full(SYMBOL,'active'));store.pin(SYMBOL);
-  for(let index=0;index<24;index++)accept(store,full('TEST.bg'+index,'background-'+index));
-  assert.equal(store.entries.size,16);assert.equal(store.ready(SYMBOL),true);assert.equal(store.history(SYMBOL),'active');
-  assert.equal(store.get('TEST.bg0'),null);assert.notEqual(store.get('TEST.bg23'),null);
+  for(let index=0;index<40;index++)accept(store,full('TEST.bg'+index,'background-'+index));
+  assert.equal(store.entries.size,32);assert.equal(store.ready(SYMBOL),true);assert.equal(store.history(SYMBOL),'active');
+  assert.equal(store.get('TEST.bg0'),null);assert.notEqual(store.get('TEST.bg39'),null);
 });
 
 test('pinning a new active contract releases the previous pin without allowing the cache to grow',()=>{
