@@ -111,6 +111,21 @@
     const modeNames={continuation:'趋势延续',reversal_a:'结构反转 A',reversal_b:'结构反转 B',range:'区间边缘'},loss=round(Math.abs(entry-stop)*50+20),interval=[p(short?zoneHigh:zoneLow),p(short?zoneLow:zoneHigh)],directionName=short?'做空':'做多';
     return{id:family.id+'-'+direction,title:family.title[side],family:family.id,category:family.category,mode:family.mode,modeLabel:modeNames[family.mode],direction,tags:[family.feature,directionName],summary:family.detail[side],stage:`${modeNames[family.mode]} · 主结构点3验证后 · 3分钟已收盘${move}`,context:shape.range?'日线区间背景，事前允许区间边缘方向。':`已完成日线结构与盘前计划允许${directionName}及${modeNames[family.mode]}，不把盘中日K当收盘确认。`,prerequisites:[`日线方向和主模式已事先允许${directionName}；未使用未来K线。`,shape.continuation?`原方向仍有效；30分钟已收盘${breakWord}预选回撤内部结构，获得执行许可。`:shape.b?`30分钟原趋势线已破、反向局部进攻成立，关键水平${price(shape.key)}仍未突破；按B类。`:shape.range?'事前区间和上下边缘已确认；本次位于边缘，有独立局部进攻与回撤。':`30分钟趋势线与关键水平${price(shape.key)}已突破，点3验证未失效；按A类。`,`主许可之后完成3分钟局部${retest}验证；更晚的3分钟收盘${breakWord}${price(trigger)}。`,`触发价与假定成交价${price(entry)}都在${interval.join('—')}允许区内；防守和最近障碍已标明。`,...extra.map(mirrorText)],entry:{price:p(entry),stop:p(stop),zoneLow:interval[0],zoneHigh:interval[1],obstacle:p(shape.obstacle),trigger:p(trigger),cover:`掩体：${family.id.startsWith('inside')||family.id==='harami'?'已完成母子线实际组合极值':family.id.startsWith('2b')?'事前选定的2B刺穿极值':'点3已完成的局部防守结构'}外侧，保护价${price(stop)}。保护止损触发即执行，不等30分钟收盘。`,protection:`平推/保本不是系统统一固定价。本例未预设机械平推；先观察${price(shape.obstacle)}附近的进攻能否保持。若事前启用获利保护，应另写触发、费用后的保护价和执行标准，不凭首次触碰障碍自动平推。`,risk:{capital:50000,budget:1000,lots:1,multiplier:50,fee:12,slippage:8,loss,twoLotsLoss:round(loss*2),assumption:'教学假定：每点每手50元，往返费用12元/手，滑点预算8元/手；非任何实际合约参数。单笔预算1000元按用户设置。'}},steps:[{key:'point1',label:'① 先定结构',text:`事前选定日线环境、${modeNames[family.mode]}、关键水平与允许区。点1是本交易单元起点。`},{key:'point2',label:'② 进攻确认，不追',text:shape.b?'局部进攻和趋势线破坏已完成，主关键水平未破，仍按B类；点2不开仓。':shape.continuation?'主周期回撤结束必须由预定内部结构的收盘突破确认，不要求追破趋势最远端。':'主周期相应进攻已完成；点2用于确认，不在突破时追价。'},{key:'point3',label:'③ 验证到位，继续等',text:`回撤/反弹进入预选${interval.join('—')}，既定防守未失效；触碰区域本身不是信号。`},{key:'trigger',label:'④ 点3内触发，才入场',text:`主许可后的局部验证已完成，更晚的3分钟收盘${breakWord}${price(trigger)}；案例按${price(entry)}成交、${price(stop)}止损，1手计划损失${loss}元。图中浪线4仅表示有条件延伸。`}],invalidations:[`价格触发保护止损${price(stop)}，立即执行保护，不等待更大周期收盘。`,`若30分钟按预定标准${short?'收复':'跌破'}允许区${short?'上沿':'下沿'}，取消原点3依据；退出不自动反手。`,shape.b?`B类到${price(shape.obstacle)}仍未突破：本例事前选“受阻后3分钟收盘反向破推进防守点”退出；首次触碰或短暂停顿不自动判失败。`:`最近障碍${price(shape.obstacle)}附近，按事前推进失败条件处理，不默认一定突破或走完整个区间。`],avoid:['只有点2突破，没有点3验证，不开。','只有3分钟信号、30分钟尚未许可，不开。',`触发/预期成交离开${interval.join('—')}，不追。`,'触发保护后临时扩大止损、改周期或重编号，不做。',family.id.startsWith('2b')?'只凭2B收回立即反手，属于未自动纳入的独立早试。':family.id.startsWith('inside')||family.id==='harami'?'只凭包含形态，或在子线未收盘时抢入，不做。':'原方向偏好不替代完成条件；没有验证就接受错过。'],assumptions:['所有K线、价格、成交与风险参数均为教学构造，不对应当前合约或真实成交；不提供胜率。日线、30分钟、3分钟分别展示所属层级的结构，不是同一真实合约逐级聚合的行情回放。','本例主周期收盘越界缓冲0.1、执行触发缓冲0.1，局部触发最多等待4根3分钟；参数在本例发生前固定，不是系统新加的统一阈值。','时间采用连续教学标尺，仅表达日线背景先完成、30分钟许可在先、3分钟验证及触发在后，不表示任何品种的交易日历。',...assumptions.map(mirrorText)],ruleRefs:family.refs,outcome:'仅画到已完成的入场触发；虚线4是条件预期，未展示后续盈亏。',evidence:{dailyClosedAt:daily.at(-1).closedAt,mainPermissionAt:new Date(PERMIT).toISOString(),localValidationAt:exec[p3].closedAt,triggerAt:current.closedAt,cutoff:new Date(CUTOFF).toISOString()},charts};
   }
+  function quickDefinitionExample(){
+    // These are illustrative price observations, not completed one-second candles.
+    // The current 3-minute candle is computed only up to the observed 18th second.
+    const samples=[[0,100.8],[3,100.2],[6,99.2],[9,98],[12,99.4],[15,99.8],[18,100.6]].map(([second,price])=>({second,price}));
+    const timeframeSeconds=180,elapsedSeconds=samples.at(-1).second,cutoff=new Date(T0+elapsedSeconds*1000).toISOString();
+    return{
+      title:'极短时间：18秒内下刺收回',reference:100,referenceLabel:'事前前低100',referenceAt:new Date(T0-3*MIN).toISOString(),
+      timeframeSeconds,elapsedSeconds,sampleKind:'price-path',samples,cutoff,
+      candle:{dt:new Date(T0).toISOString(),closedAt:new Date(T0+timeframeSeconds*1000).toISOString(),observedAt:cutoff,
+        open:samples[0].price,high:Math.max(...samples.map(s=>s.price)),low:Math.min(...samples.map(s=>s.price)),close:samples.at(-1).price,completed:false},
+      timing:'18秒收回，不等于3分钟收盘确认。',
+      failure:'再次跌回100下方，说明收回没有保持。',
+      permission:'盘中收回只是线索，不自动开仓。'
+    };
+  }
   function definitionCase(){
     // The last ten 3-minute candles are exactly one completed 30-minute candle.
     // Three earlier candles establish the prior low before the illustrated breach.
@@ -141,6 +156,7 @@
       outcome:'顶部 2B 反过来看：上破前高，再跌回前高下方。',
       evidence:{cutoff:bars.at(-1).closedAt},
       aggregation:{sourcePeriod:'m3',targetPeriod:'m30',startIndex:3,endIndex:12,reference:100,referenceIndex:1,breachIndex:6,lowIndex:7,reclaimIndex:10},
+      quickExample:quickDefinitionExample(),
       charts:{
         m3:{title:'3分钟 · 看跌破与收回',caption:'框内10根3分钟K，对应右边1根30分钟K。',bars,
           lines:[line('horizontal','前低 100',[[1,100],[13,100]],'key')],nodes:[],zones:[],annotations:[label(1,100,'前低 100'),label(7,98,'下刺 98'),label(10,100.4,'收回 100 上方')]},
@@ -149,6 +165,38 @@
       }
     };
   }
-  const cases=[definitionCase(),...families.flatMap(family=>[create(family,false),create(family,true)])];
-  return{version:2,source,cases,coverage:{families:14,examples:28,concepts:1,coreModes:4,scope:'首项解释2B概念，不发入场许可；其余28例覆盖现行规则的主要许可分支与多空镜像，附加形态是同一主模式的条件示例，不穷举市场走势组合。'},get:id=>cases.find(c=>c.id===id)};
+  function topDefinitionCase(){
+    const bottom=definitionCase(),p=value=>round(200-value);
+    const mirrorBar=b=>({...b,open:p(b.open),high:p(b.low),low:p(b.high),close:p(b.close)});
+    const m3=bottom.charts.m3.bars.map(mirrorBar),m30=bottom.charts.m30.bars.map(mirrorBar),quick=bottom.quickExample;
+    return{
+      ...bottom,id:'2b-top-definition',pattern:'top',title:'顶部2B：上破前高，再跌回',
+      tags:['概念定义','顶部2B','假突破','上破后跌回'],
+      summary:'先上破，再跌回。下面用顶部2B对照两个周期。',
+      definition:'顶部2B：上破前高后没能延续，又跌回前高下方。',
+      stage:'前高100 → 上刺102 → 跌回100下方',
+      context:'这次没涨上去，多头依据减弱；后面仍可再涨。',
+      steps:[
+        {key:'reference',label:'① 前高100',text:'先标前高；只碰到100不算。'},
+        {key:'breach',label:'② 上刺102',text:'真正上破100，最高到102。'},
+        {key:'reclaim',label:'③ 跌回100',text:'回到100下方，说明这次上破失败。'}
+      ],
+      avoid:['只有长上影线不够，还要真正上破前高再跌回。','顶部2B不是直接卖点；开仓仍要等系统确认。'],
+      assumptions:['合成价格，只说明形态。','本例在一根30分钟内完成；跨多根跌回，不一定是一根针。'],
+      entryExplanation:'顶部2B只是转弱线索；还要等主结构允许做空、反弹受阻，再出现3分钟转弱触发。',
+      outcome:'底部2B反过来看：跌破前低，再收回前低上方。',
+      aggregation:{sourcePeriod:'m3',targetPeriod:'m30',startIndex:3,endIndex:12,reference:100,referenceIndex:1,breachIndex:6,highIndex:7,reclaimIndex:10},
+      quickExample:{...quick,title:'极短时间：18秒内上刺跌回',referenceLabel:'事前前高100',
+        samples:quick.samples.map(s=>({...s,price:p(s.price)})),candle:mirrorBar(quick.candle),
+        timing:'18秒跌回，不等于3分钟收盘确认。',failure:'重新站回100上方，说明跌回没有保持。',permission:'盘中跌回只是线索，不自动做空。'},
+      charts:{
+        m3:{title:'3分钟 · 看上破与跌回',caption:'框内10根3分钟K，对应右边1根30分钟K。',bars:m3,
+          lines:[line('horizontal','前高100',[[1,100],[13,100]],'key')],nodes:[],zones:[],annotations:[label(1,100,'前高100'),label(7,102,'上刺102'),label(10,99.6,'跌回100下方')]},
+        m30:{title:'30分钟 · 看上影针',caption:'同一段行情：上刺到102，收盘跌回100下方。',bars:m30,
+          lines:[line('horizontal','前高100',[[0,100],[1,100]],'key')],nodes:[],zones:[],annotations:[label(0,102,'上影针'),label(0,98.3,'跌回100下方')]}
+      }
+    };
+  }
+  const cases=[definitionCase(),topDefinitionCase(),...families.flatMap(family=>[create(family,false),create(family,true)])];
+  return{version:2,source,cases,coverage:{families:14,examples:28,concepts:2,coreModes:4,scope:'前两项解释底部与顶部2B，不发入场许可；其余28例覆盖现行规则的主要许可分支与多空镜像，附加形态是同一主模式的条件示例，不穷举市场走势组合。'},get:id=>cases.find(c=>c.id===id)};
 }));

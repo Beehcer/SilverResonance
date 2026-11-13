@@ -4,7 +4,7 @@ const D=require('./static/workspace-cases-data.js');
 const tradingCases=D.cases.filter(c=>!c.educational);
 test('first entry teaches 2B without inventing an entry permission or assigning a trading mode',()=>{
  const c=D.cases[0];
- assert.equal(D.cases.length,29);assert.equal(new Set(D.cases.map(c=>c.id)).size,29);
+ assert.equal(D.cases.length,30);assert.equal(new Set(D.cases.map(c=>c.id)).size,30);
  assert.equal(c.id,'2b-definition');assert.equal(D.get('2b-definition'),c);assert.equal(c.educational,true);
  assert.equal(c.mode,'concept');assert.equal(c.direction,'neutral');assert.equal(c.entry,null);
  assert.equal(c.headline,'2B = 突破失败 = 原方向依据减弱；');assert.equal(c.caution,'不等于行情一定反转');
@@ -12,7 +12,7 @@ test('first entry teaches 2B without inventing an entry permission or assigning 
  assert.match(c.summary,/先真正越界，再迅速收回/);assert.match(c.context,/仍可再跌/);
  assert.equal(c.evidence.mainPermissionAt,undefined);assert.equal(c.evidence.triggerAt,undefined);
  assert.deepEqual(c.steps.map(s=>s.key),['reference','breach','reclaim']);
- assert.equal(D.coverage.examples,28);assert.equal(D.coverage.concepts,1);
+ assert.equal(D.coverage.examples,28);assert.equal(D.coverage.concepts,2);
 });
 test('2B definition establishes the prior low before its breach and reclaim without later results',()=>{
  const c=D.cases[0],a=c.aggregation,bars=c.charts.m3.bars;
@@ -45,6 +45,82 @@ test('the upper-period pin is an exact aggregation of ten consecutive 3-minute c
  assert.equal(pin.volume,source.reduce((sum,b)=>sum+b.volume,0));assert.equal(pin.low,98);
  assert.ok(pin.open>a.reference&&pin.close>a.reference);
  assert.ok(Math.min(pin.open,pin.close)-pin.low>5*Math.abs(pin.close-pin.open));
+});
+test('the seconds example shows an ordered breach and reclaim of a previously known low',()=>{
+ const c=D.cases[0],q=c.quickExample,s=q.samples,start=Date.parse(q.candle.dt);
+ assert.equal(q.sampleKind,'price-path');assert.equal(q.reference,100);
+ assert.ok(Date.parse(q.referenceAt)<start);assert.equal(s[0].second,0);
+ for(let i=0;i<s.length;i++){
+  assert.ok(Number.isFinite(s[i].price));assert.ok(s[i].second<=q.elapsedSeconds);
+  if(i)assert.ok(s[i].second>s[i-1].second);
+  assert.equal(s[i].completed,undefined);
+ }
+ const breach=s.findIndex(p=>p.price<q.reference),low=s.findIndex(p=>p.price===Math.min(...s.map(p=>p.price))),reclaim=s.findIndex((p,i)=>i>breach&&p.price>q.reference);
+ assert.equal(s[breach].second,6);assert.equal(s[low].second,9);assert.equal(s[low].price,98);
+ assert.equal(s[reclaim].second,18);assert.ok(breach<low&&low<reclaim);
+ assert.ok(s.slice(breach,reclaim).every(p=>p.price<q.reference));
+ assert.equal(q.cutoff,new Date(start+s.at(-1).second*1000).toISOString());
+ assert.equal(c.entry,null);assert.equal(q.entry,undefined);
+ assert.match(q.permission,/不自动开仓/);assert.match(q.failure,/再次跌回100下方/);
+});
+test('the current three-minute candle contains only observed seconds and remains unfinished',()=>{
+ const q=D.cases[0].quickExample,s=q.samples,b=q.candle;
+ assert.equal(q.elapsedSeconds,18);assert.equal(q.timeframeSeconds,180);
+ assert.equal(b.open,s[0].price);assert.equal(b.close,s.at(-1).price);
+ assert.equal(b.high,Math.max(...s.map(p=>p.price)));assert.equal(b.low,Math.min(...s.map(p=>p.price)));
+ assert.equal(b.observedAt,q.cutoff);assert.equal(b.completed,false);
+ assert.equal(Date.parse(b.observedAt)-Date.parse(b.dt),18*1000);
+ assert.equal(Date.parse(b.closedAt)-Date.parse(b.dt),180*1000);
+ assert.ok(Date.parse(b.observedAt)<Date.parse(b.closedAt));
+ assert.equal(b.volume,undefined,'price observations do not imply traded volume');
+ assert.match(q.timing,/不等于3分钟收盘确认/);
+});
+test('the second definition teaches a failed upward breakout without granting short entry',()=>{
+ const c=D.cases[1],a=c.aggregation,bars=c.charts.m3.bars;
+ assert.equal(c.id,'2b-top-definition');assert.equal(D.get(c.id),c);assert.equal(c.pattern,'top');
+ assert.equal(c.educational,true);assert.equal(c.direction,'neutral');assert.equal(c.entry,null);
+ assert.equal(c.headline,D.cases[0].headline);assert.equal(c.caution,D.cases[0].caution);
+ assert.equal(c.evidence.mainPermissionAt,undefined);assert.equal(c.evidence.triggerAt,undefined);
+ assert.ok(a.referenceIndex<a.breachIndex);assert.equal(bars[a.referenceIndex].high,100);
+ assert.ok(bars[a.referenceIndex-1].high<100&&bars[a.referenceIndex+1].high<100);
+ assert.ok(bars.slice(a.referenceIndex+1,a.breachIndex).every(b=>b.high<100));
+ assert.ok(bars[a.breachIndex].close>100);assert.equal(bars[a.highIndex].high,102);
+ assert.ok(bars.slice(a.breachIndex,a.reclaimIndex).every(b=>b.close>100));
+ assert.ok(bars[a.reclaimIndex].close<100);
+ assert.match(c.avoid.join(' '),/长上影线不够/);assert.match(c.avoid.join(' '),/不是直接卖点/);
+ assert.match(c.entryExplanation,/主结构允许做空、反弹受阻/);assert.match(c.entryExplanation,/3分钟转弱触发/);
+ assert.match(c.context,/仍可再涨/);assert.doesNotMatch(JSON.stringify(c),/前低100|下刺98|长下影针|做多许可/);
+});
+test('the top pin exactly mirrors and aggregates the same completed ten-candle interval',()=>{
+ const bottom=D.cases[0],top=D.cases[1],a=top.aggregation,event=top.charts.m3.bars.slice(a.startIndex,a.endIndex+1),pin=top.charts.m30.bars[0];
+ for(const period of ['m3','m30'])for(let i=0;i<top.charts[period].bars.length;i++){
+  const b=bottom.charts[period].bars[i],t=top.charts[period].bars[i];
+  assert.ok(Math.abs(t.open+b.open-200)<1e-8);assert.ok(Math.abs(t.close+b.close-200)<1e-8);
+  assert.ok(Math.abs(t.high+b.low-200)<1e-8);assert.ok(Math.abs(t.low+b.high-200)<1e-8);
+  assert.ok(t.low<=Math.min(t.open,t.close));assert.ok(t.high>=Math.max(t.open,t.close));
+  assert.equal(t.dt,b.dt);assert.equal(t.closedAt,b.closedAt);assert.equal(t.completed,true);
+ }
+ assert.equal(event.length,10);assert.equal(pin.dt,event[0].dt);assert.equal(pin.closedAt,event.at(-1).closedAt);
+ assert.equal(pin.open,event[0].open);assert.equal(pin.close,event.at(-1).close);
+ assert.equal(pin.high,Math.max(...event.map(b=>b.high)));assert.equal(pin.low,Math.min(...event.map(b=>b.low)));
+ assert.equal(pin.volume,event.reduce((sum,b)=>sum+b.volume,0));
+ assert.ok(pin.open<100&&pin.close<100);assert.equal(pin.high,102);
+ assert.ok(pin.high-Math.max(pin.open,pin.close)>5*Math.abs(pin.close-pin.open));
+});
+test('the fast top example returns below the prior high but its three-minute candle is still forming',()=>{
+ const bottom=D.cases[0].quickExample,q=D.cases[1].quickExample,s=q.samples,b=q.candle;
+ assert.ok(Date.parse(q.referenceAt)<Date.parse(b.dt));assert.equal(q.reference,100);
+ assert.deepEqual(s.map(p=>p.second),bottom.samples.map(p=>p.second));
+ for(let i=0;i<s.length;i++)assert.ok(Math.abs(s[i].price+bottom.samples[i].price-200)<1e-8);
+ const breach=s.findIndex(p=>p.price>100),high=s.findIndex(p=>p.price===102),reclaim=s.findIndex((p,i)=>i>breach&&p.price<100);
+ assert.equal(s[breach].second,6);assert.equal(s[high].second,9);assert.equal(s[reclaim].second,18);
+ assert.ok(s.slice(breach,reclaim).every(p=>p.price>100));
+ assert.equal(b.open,s[0].price);assert.equal(b.close,s.at(-1).price);
+ assert.equal(b.high,Math.max(...s.map(p=>p.price)));assert.equal(b.low,Math.min(...s.map(p=>p.price)));
+ assert.equal(b.completed,false);assert.equal(q.cutoff,b.observedAt);assert.ok(Date.parse(q.cutoff)<Date.parse(b.closedAt));
+ assert.equal(Date.parse(q.cutoff)-Date.parse(b.dt),18000);assert.equal(Date.parse(b.closedAt)-Date.parse(b.dt),180000);
+ assert.equal(q.entry,undefined);assert.match(q.permission,/不自动做空/);assert.match(q.failure,/重新站回100上方/);
+ assert.match(q.timing,/不等于3分钟收盘确认/);
 });
 test('catalog covers every designed family in both directions and keeps feature tags under one main mode',()=>{
  assert.equal(tradingCases.length,28);assert.equal(new Set(tradingCases.map(c=>c.id)).size,28);

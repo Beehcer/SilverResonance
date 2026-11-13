@@ -47,7 +47,25 @@ test('the introductory definition never inherits executable entry controls or la
   assert.equal((content.innerHTML.match(/data-period=/g)||[]).length,2);
   const svg=Cases.conceptChartSvg(concept,'m30');
   assert.doesNotMatch(svg,/编号4为条件预期|已完成触发/);
-  controller.selected=data.cases[1].id;
+  controller.selected=data.cases.find(c=>!c.educational).id;
   Cases.Controller.prototype.renderCase.call(controller);
   assert.match(content.innerHTML,/示例条件已满足/);
+});
+
+test('the seconds example can be opened and switched back without granting an entry',()=>{
+  const Cases=require('./static/workspace-cases.js'),data=require('./static/workspace-cases-data.js'),handlers={};
+  let focused='';
+  const buttons=['standard','quick'].map(key=>({dataset:{conceptExample:key},addEventListener:(name,fn)=>{handlers[key]=fn;}}));
+  const content={innerHTML:'',querySelectorAll:selector=>selector==='[data-concept-example]'?buttons:[],querySelector:selector=>({focus:()=>{focused=selector;}})};
+  const controller={data,selected:data.cases[0].id,content,layers:{},renderCharts(){},renderRule(){},renderCase(){Cases.Controller.prototype.renderCase.call(this);}};
+  controller.renderCase();
+  assert.match(content.innerHTML,/data-period="m30"/);
+  handlers.quick();
+  assert.equal(controller.conceptExample,'quick');assert.match(focused,/quick/);
+  assert.match(content.innerHTML,/data-period="seconds"/);assert.match(content.innerHTML,/data-period="live-m3"/);
+  assert.match(content.innerHTML,/尚未收盘/);assert.match(content.innerHTML,/18秒/);
+  assert.doesNotMatch(content.innerHTML,/示例条件已满足|保护止损|cases-price-strip|cases-risk/);
+  handlers.standard();
+  assert.equal(controller.conceptExample,'standard');assert.match(content.innerHTML,/data-period="m30"/);
+  assert.doesNotMatch(content.innerHTML,/data-period="seconds"/);
 });

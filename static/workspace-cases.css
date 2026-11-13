@@ -38,6 +38,9 @@
 .cases-concept-badge{color:#b9cad7;border-color:#445967;background:#1c2a34}
 .cases-side.neutral{color:#c6d4df;background:#293943}
 .cases-concept-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.cases-concept-switch{display:flex;gap:7px;margin:0 0 12px}
+.cases-concept-switch button{padding:7px 13px;border:1px solid #344956;border-radius:4px;color:#9cb5c7;background:#111c25;font-size:12px}
+.cases-concept-switch button.selected{color:#f0d58b;border-color:#aa9149;background:#2b291c}
 .cases-concept-compare section{min-width:0;border:1px solid #344956;border-radius:6px;overflow:hidden;background:#0c151d}
 .cases-concept-compare h4{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0;padding:12px 16px;font-size:15px;color:#d6e4ed;background:#172530;font-weight:500}
 .cases-concept-compare h4 span{font-size:11px;color:#91aabd;white-space:nowrap}
