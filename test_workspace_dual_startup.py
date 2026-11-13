@@ -36,18 +36,20 @@ for(const [board,present] of [[undefined,false],['',true],['named-plan',true]]){
         harness = r"""
 const assert=require('node:assert/strict');
 const M=require(MODEL),KEY='resonance-workspace-dual-layout-v1:';
-let layoutKey=KEY,symbols=[],ids=[],state,session={user:{id:'owner'}},response={symbols:[{symbol:'MA',name:'甲醇'},{symbol:'SP',name:'纸浆'}]},ready=true;
+let layoutKey=KEY,symbols=[],ids=[],state,session={user:{id:'owner'}},response={symbols:[{symbol:'MA',name:'甲醇'},{symbol:'SP',name:'纸浆'}]},ready=true,startupOpened=false;
 const calls=[],created=[],saved=new Map(),urlChanges=[];
 const navigator={userAgent:'Desktop',platform:'Win32',maxTouchPoints:0};
 const window={innerWidth:1400,matchMedia:()=>({matches:false})};
 const location={href:'https://example.test/workspace',replace:url=>urlChanges.push(url),reload:()=>{}};
 const localStorage={getItem:key=>saved.get(key)??null};
 const status={hidden:false,textContent:'',children:[],replaceChildren(){this.children=[];},append(...items){this.children.push(...items);}};
-const $=()=>status,document={createElement:tag=>({tag,addEventListener(){}})};
+const startupNodes={startup:status,'startup-actions':{hidden:true},'startup-label':{textContent:''},'startup-detail':{textContent:''}};
+const $=id=>startupNodes[id],document={createElement:tag=>({tag,addEventListener(){}})};
+const startupProgress=(_completed,label,detail)=>{startupNodes['startup-label'].textContent=label;startupNodes['startup-detail'].textContent=detail;};
 const history={replaceState:(_state,_name,url)=>urlChanges.push(url)};
 const startupRequest=async path=>{calls.push(path);return path==='/session'?session:response;};
 const readLayout=()=>JSON.parse(localStorage.getItem(layoutKey)),persist=()=>calls.push('persist'),layout=()=>{};
-const makeFrame=pane=>created.push({...pane}),activeFrame=()=>({}),waitReady=async()=>ready;
+const makeFrame=pane=>created.push({...pane}),activeFrame=()=>({}),waitVisible=async()=>{if(ready){startupOpened=true;status.hidden=true;}return ready;};
 """.replace('MODEL', repr(model))
         script = harness + core + '\n(async()=>{\n' + scenario + '\n})().catch(error=>{console.error(error);process.exitCode=1;});'
         result = subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8', capture_output=True, timeout=15)
@@ -86,7 +88,7 @@ await start();assert.deepEqual(created,[{id:'pane-a',symbol:'MA',board:'shared'}
     def test_empty_catalogue_has_clear_recovery_without_creating_broken_frame(self):
         self.run_startup(r"""
 response={symbols:[]};await start();assert.equal(created.length,0);assert.equal(status.hidden,false);
-assert.match(status.children[0].textContent,/暂无可用品种/);assert.equal(status.children[1].textContent,'刷新重试');assert.match(status.children[2].href,/view=single/);
+assert.match(startupNodes['startup-label'].textContent,/暂无可用品种/);assert.equal(startupNodes['startup-actions'].hidden,false);
 """)
 
     def test_success_timeout_recovery_retry_bound_and_terminal_http_failure(self):
@@ -95,7 +97,7 @@ assert.match(status.children[0].textContent,/暂无可用品种/);assert.equal(s
         end = source.index('  async function start()', start)
         script = r"""
 const assert=require('node:assert/strict');
-const status={textContent:''},$=()=>status;
+const status={textContent:''},$=()=>status,startupProgress=(_completed,label)=>{status.textContent=label;};
 let timers=new Map(),next=0,waits=[],fetch,calls;
 const setTimeout=(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});waits.push(ms);if(ms<12000)queueMicrotask(()=>{if(timers.has(id)){timers.delete(id);fn();}});return id;};
 const clearTimeout=id=>timers.delete(id);

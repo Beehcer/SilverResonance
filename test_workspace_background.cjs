@@ -20,9 +20,9 @@ function market(symbol,token='token-'+symbol,price=101){
 }
 function plan(symbol,board='',revision=1){return{symbol,board_id:board,revision,title:'Plan '+board,objects:[],notes:'',enabled:true,rule_version:'r1'};}
 function harness(){
-  const state={session:{user:{id:'me'},csrf_token:'test-token'},symbol:A,board:'',plan:plan(A),saved:plan(A),market:market(A),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false,generation:1,cacheEpoch:1,visitedSymbols:new Set([A]),markedSymbols:new Set(),active:'m30',rules:{version:'r1'},risk:{},alerts:[],evaluation:{status:'ready',source:'live',signal_key:'old'},lastSignal:'old',lastSuccess:1};
+  const state={session:{user:{id:'me'},csrf_token:'test-token'},symbol:A,board:'',plan:plan(A),saved:plan(A),market:market(A),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false,generation:1,cacheEpoch:1,visitedSymbols:new Set([A]),markedSymbols:new Set(),active:'m30',rules:{version:'r1'},risk:{},planVerified:true,alerts:[],evaluation:{status:'ready',source:'live',signal_key:'old'},lastSignal:'old',lastSuccess:1};
   const elements=new Map(),storage=new Map(),calls={network:[],paints:[],notices:[],events:0,flush:0,views:0};
-  const $=id=>{if(!elements.has(id))elements.set(id,{dataset:{},style:{},value:'',hidden:false,textContent:'',elements:[]});return elements.get(id);};
+  const $=id=>{if(!elements.has(id))elements.set(id,{dataset:{},style:{},value:'',hidden:false,textContent:'',elements:[],setAttribute(key,value){this[key]=value;}});return elements.get(id);};
   const charts=Object.fromEntries(['day','m30','m3'].map(period=>[period,{path:[],setTool(){},setPlan(){},setPresence(){},setData(value,shared,reset){calls.paints.push({period,market:value?copy(value):null,plan:shared?copy(shared):null,reset,active:state.symbol});}}]));
   let responder=async request=>{
     const url=new URL(request.url,'https://example.test'),symbol=url.searchParams.get('symbol')||decodeURIComponent(url.pathname.split('/').at(-1)),board=url.searchParams.get('board')||'';
@@ -339,4 +339,42 @@ test('releasing space after switching cannot restore the old contract drawing dr
   let keyup;h.context.document.addEventListener=(name,handler)=>{if(name==='keyup')keyup=handler;};
   vm.runInContext(source.split(/\r?\n/).find(line=>line.includes("document.addEventListener('keyup'")),h.context);
   keyup({code:'Space'});assert.equal(h.charts.m30.path.length,0);assert.notEqual(h.charts.m30.tool,'wave');assert.equal(h.state.symbol,B);
+});
+
+test('preview timeframes do not claim full history is complete and elapsed time never advances progress',()=>{
+  const h=harness();h.state.market={...market(A),partial:true,fresh:false};h.state.planReady=true;h.state.planVerified=true;h.state.loadingSince=0;
+  h.context.Date={now:()=>5000};h.context.renderLoadState();
+  assert.match(h.$('market-loading-detail').textContent,/近期画面 ✓　完整历史 等待　共享计划 ✓/);
+  assert.match(h.$('market-loading-detail').textContent,/2\/3 阶段 · 已等待 5 秒/);
+  assert.equal(h.$('market-loading-progress').value,2);assert.equal(h.$('retry-market').hidden,true);
+  h.context.Date={now:()=>15000};h.context.renderLoadState();
+  assert.equal(h.$('market-loading-progress').value,2);assert.equal(h.$('retry-market').hidden,false);
+});
+
+test('a cached plan does not claim shared plan verification until the matching GET succeeds',async()=>{
+  const h=harness(),read=deferred();h.seed(market(B));h.context.cacheDocument(B,'',plan(B));
+  h.respond(request=>request.url.includes('/plans/')?read.promise:request.url.includes('/market?')?{market:market(B)}:request.url.includes('/review?')?{evaluation:{status:'waiting'},plan_revision:1}:{quotes:[]});
+  const switching=h.context.switchSymbol(B);await tick();h.context.renderLoadState();
+  assert.equal(h.state.planReady,true);assert.equal(h.state.planVerified,false);assert.equal(h.$('market-loading-progress').value,2);
+  assert.match(h.$('market-loading-title').textContent,/正在核对共享计划/);
+  read.resolve({plan:plan(B)});await switching;
+  assert.equal(h.state.planVerified,true);assert.equal(h.$('market-loading').hidden,true);
+});
+
+test('configuration loading and failure remain visible without a symbol and offer a usable retry',()=>{
+  const h=harness();h.state.symbol=null;h.state.market=null;h.state.planReady=false;h.state.planVerified=false;h.state.bootstrapping=true;h.state.loadingSince=0;h.context.Date={now:()=>9000};h.context.renderLoadState();
+  assert.equal(h.$('market-loading').hidden,false);assert.match(h.$('market-loading-title').textContent,/正在读取规则与风控/);assert.equal(h.$('retry-market').textContent,'刷新重试');
+  h.state.bootstrapping=false;h.state.bootstrapError='配置读取超时';h.context.renderLoadState();
+  assert.equal(h.$('market-loading').hidden,false);assert.equal(h.$('market-loading').dataset.error,'true');assert.equal(h.$('retry-market').hidden,false);
+  let retried=0;h.context.location.reload=()=>retried++;h.$('retry-market').addEventListener=(event,handler)=>handler();
+  vm.runInContext(source.split(/\r?\n/).find(line=>line.includes("$('retry-market').addEventListener")),h.context);
+  assert.equal(retried,1);
+});
+
+test('failed configuration keeps editing locked and records an actionable startup error',async()=>{
+  const h=harness();h.context.persistDraft=()=>{};h.context.applyViewMode=()=>{};h.context.preloadSavedMarket=async()=>{};h.context.alertKey=()=>'';
+  h.respond(()=>Promise.reject(new Error('configuration unavailable')));vm.runInContext(helper('enter'),h.context);
+  await h.context.enter({user:{id:'me'}});
+  assert.equal(h.state.bootstrapping,false);assert.ok(h.state.bootstrapError);assert.equal(h.state.loading,true);assert.equal(h.state.planReady,false);assert.equal(h.$('retry-market').hidden,false);
+  assert.notEqual(h.$('decision').dataset.status,'READY');
 });

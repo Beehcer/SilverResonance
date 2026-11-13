@@ -6,7 +6,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};}
 function harness(){
   const timers=[],requests=[],notices=[],elements=new Map(),state={generation:1,symbol:'A',board:'night',revision:1,session:{csrf_token:'csrf',user:{id:'me'}}};
-  const $=id=>{if(!elements.has(id))elements.set(id,{dataset:{},hidden:false});return elements.get(id);};
+  const $=id=>{if(!elements.has(id))elements.set(id,{dataset:{},hidden:false,setAttribute(key,value){this[key]=value;}});return elements.get(id);};
   const context=vm.createContext({state,$,readRequests:new Set(),marketRequests:new Map(),AbortController,Map,Set,Date,Promise,PERIODS:{day:'日线',m30:'30分',m3:'3分'},encodeURIComponent,
     setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout:()=>{},renderSyncStatus(){},notice:m=>notices.push(m),scheduleReview(){},renderMembers(){},sendPresence(){},presenceSender:{reset(){}},hasPending:()=>false,flush(){},
     fetch:(url,options)=>{const wait=deferred();requests.push({url,...options,...wait});options.signal.addEventListener('abort',()=>wait.reject(Object.assign(new Error('aborted'),{name:'AbortError'})));return wait.promise;},
@@ -45,8 +45,8 @@ test('old event source callbacks and differently scoped packets never overwrite 
 });
 test('late presence response is discarded after switching',async()=>{const h=harness(),work=h.context.refreshPresence();h.state.generation++;answer(h.requests[0],{presence:[{id:'old'}]});await work;assert.equal(h.state.presence,undefined);});
 test('loading state distinguishes partial cache, first subscription, slow request and completed data',()=>{
-  const h=harness();h.state.loadingSince=Date.now()-9000;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,false);assert.match(h.$('market-loading-title').textContent,/共享计划/);assert.equal(h.$('retry-market').hidden,false);
-  h.state.planReady=true;h.state.market={name:'鸡蛋',partial:true,periods:{day:[{}],m30:[{}],m3:[{}]}};h.context.renderLoadState();assert.match(h.$('market-loading-title').textContent,/补齐历史/);
+  const h=harness();h.state.loadingSince=Date.now()-9000;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,false);assert.match(h.$('market-loading-title').textContent,/近期行情/);assert.equal(h.$('retry-market').hidden,false);
+  h.state.planReady=true;h.state.planVerified=true;h.state.market={name:'鸡蛋',partial:true,periods:{day:[{}],m30:[{}],m3:[{}]}};h.context.renderLoadState();assert.match(h.$('market-loading-title').textContent,/下载完整历史/);
   h.state.marketLoadError='slow';h.context.renderLoadState();assert.match(h.$('market-loading-detail').textContent,/自动重试/);assert.equal(h.$('market-loading').dataset.error,'true');
   h.state.marketLoadError=null;h.state.market.partial=false;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,true);
 });

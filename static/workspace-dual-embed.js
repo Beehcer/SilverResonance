@@ -57,7 +57,8 @@
     const nodes = document.querySelectorAll('dialog[open],#members-panel:not([hidden]),#layout-picker[open] .layout-menu,#decision-detail:not([hidden]),#object-context-menu:not([hidden])');
     for (const node of nodes) {
       if (!node.getClientRects().length) continue;
-      const area = popupArea(node), isCases = node.id === 'cases-dialog', isDialog = node.tagName === 'DIALOG';
+      const isCases = node.id === 'cases-dialog', isDialog = node.tagName === 'DIALOG';
+      const area = isCases ? {left: 0, top: 0, width: innerWidth, height: innerHeight} : popupArea(node);
       const isLayout = node.classList.contains('layout-menu'), isDecision = node.id === 'decision-detail';
       node.classList.add('dual-scoped-popup');
       Object.assign(node.style, {position: 'fixed', right: 'auto', bottom: 'auto', margin: '0', minWidth: '0', minHeight: '0', maxWidth: area.width + 'px', maxHeight: area.height + 'px'});
@@ -118,7 +119,7 @@
   }
   function snapshot() {
     const value = runtime?.snapshot() || {symbol: initialSymbol, name: initialSymbol, board: '', loading: true, ready: false};
-    return {...value, paneId, active: mode.active, slot: mode.slot, count: mode.count, maximized: mode.maximized, sidebars: mode.maximized ? {...fullscreenSidebars} : null};
+    return {...value, pageDialogOpen: Boolean(document.getElementById('cases-dialog')?.open), paneId, active: mode.active, slot: mode.slot, count: mode.count, maximized: mode.maximized, sidebars: mode.maximized ? {...fullscreenSidebars} : null};
   }
   function queueState() {
     if (stateTimer !== null) return;
@@ -211,6 +212,9 @@
     if (event.key === 'Escape') {
       if (event.repeat || event.isComposing || event.keyCode === 229) return;
       const consume = () => { event.preventDefault(); event.stopImmediatePropagation(); };
+      // A page-wide case dialog owns Escape even outside workspace fullscreen.
+      // Keep native cancellation enabled; underlying chart shortcuts stay idle.
+      if (document.getElementById('cases-dialog')?.open) { event.stopImmediatePropagation(); return; }
       if (mode.maximized) {
         // Let the browser dispatch the dialog's normal cancel/close events,
         // without letting the chart's earlier Escape listener cancel a draft.

@@ -86,6 +86,30 @@ assert.equal(a.api.ui.dockOpen,true);
 assert.equal(a.api.mode.count,2);assert.equal(b.api.mode.count,2);assert.deepEqual(b.frame.style,priorStyle);
 """)
 
+    def test_page_case_dialog_covers_both_panes_without_reopening_or_resizing_them(self):
+        self.run_scenario(r"""
+let pageDialogOpen = false;
+a.api.snapshot=()=>({symbol:'MA',modalOpen:true,pageDialogOpen,ui:{...a.api.ui}});
+maximizeWorkspace('pane-a');
+const originalState=JSON.stringify(state), priorPassiveStyle={...b.frame.style};
+function broadcast(){events.message({origin:location.origin,source:a.frame.contentWindow,data:{type:'full-workspace:state',paneId:'pane-a',snapshot:a.api.snapshot()}});while(raf.length)raf.shift()();}
+pageDialogOpen=true;broadcast();
+assert.match(a.frame.className,/has-page-dialog/);
+assert.equal(b.frame.className,'workspace-frame is-passive');
+assert.deepEqual(b.frame.style,priorPassiveStyle);
+layout();layout(); // Case navigation and quote updates can trigger repeated layout.
+assert.match(a.frame.className,/has-page-dialog/);
+pageDialogOpen=false;broadcast(); // Modal status can stay true while page overlay closes.
+assert.doesNotMatch(a.frame.className,/has-page-dialog/);
+assert.equal(workspaceMaximized,true);assert.equal(JSON.stringify(state),originalState);
+for(const record of [a,b]){
+  assert.equal(record.frame.hidden,false);assert.equal(record.frame.inert,false);
+  assert.equal(record.frame.removed,undefined);assert.deepEqual(record.calls.switches,[]);
+  assert.equal(record.calls.prepare,0);assert.equal(record.calls.deactivate,0);assert.equal(record.calls.focus,0);
+}
+assert.equal(frames.size,2);assert.equal(saved.length,0);
+""")
+
     def test_queued_old_symbol_state_cannot_roll_back_a_completed_fast_switch(self):
         self.run_scenario(r"""
 let currentSymbol='MA',modalOpen=false;

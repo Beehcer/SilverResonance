@@ -822,7 +822,7 @@ test('new drawing tools preserve chosen opacity in drafts and saved objects',()=
       else if(kind!=='horizontal'){
         if(['wave','path'].includes(kind))chart.down({...pointer(300,150),timeStamp:2000});else chart.move(pointer(300,150));
         const oldSvg=chart.svg;chart.svg=make('svg');C.Chart.prototype.render.call(chart);
-        const draft=entries(chart.svg).find(({node})=>node.attrs['data-object-artwork']===(['wave','path'].includes(kind)?'path':kind));assert.equal(draft?.opacity,opacity,kind);chart.svg=oldSvg;
+        const draft=entries(chart.svg).find(({node})=>node.attrs['data-object-artwork']===kind);assert.ok(draft,`${kind} draft retains its drawing kind`);assert.equal(draft.opacity,opacity,kind);chart.svg=oldSvg;
         if(['wave','path'].includes(kind))chart.finishPath();else chart.up(pointer(300,150));
       }
       assert.equal(added.length,1,kind);assert.equal(added[0].opacity,opacity,kind);chart.setTool('select');assert.equal(chart.toolOpacity,1);

@@ -4,6 +4,7 @@
   const KEY = 'resonance-workspace-dual-layout-v1:';
   let layoutKey = KEY;
   const frames = new Map();
+  let startupOpened = false;
   let symbols = [], ids = [], state, busy = false, drag = null, animation = 0, toastTimer;
   // A temporary view of this browser page, never part of the saved/shared plan.
   let workspaceMaximized = false;
@@ -54,7 +55,7 @@
     if (!selected) return;
     selected.frame.hidden = false;
     selected.frame.inert = false; selected.frame.removeAttribute('aria-hidden'); selected.frame.removeAttribute('tabindex');
-    selected.frame.className = 'workspace-frame is-active'; selected.frame.style.cssText = '';
+    selected.frame.className = 'workspace-frame is-active' + (bridge(selected)?.snapshot().pageDialogOpen ? ' has-page-dialog' : ''); selected.frame.style.cssText = '';
     // Read chart-slot geometry only after the selected frame has restored its
     // full workspace chrome. The newly active bottom pane was passive before.
     bridge(selected)?.setMode({active: true, slot: state.panes[0].id === state.activeId ? 'top' : 'bottom', count: state.panes.length, maximized: workspaceMaximized, sidebars: fullscreenSidebars});
@@ -94,6 +95,21 @@
     workspaceMaximized = false; layout();
     bridge(activeFrame())?.applyUI(normalDockUI); normalDockUI = null; layout();
   }
+  function startupProgress(completed, label, detail) {
+    if (startupOpened) return;
+    const progress = $('startup-progress');
+    if (progress) { progress.value = Math.max(Number(progress.value) || 0, completed); progress.setAttribute('aria-valuetext', progress.value + ' / 4 个打开阶段完成'); }
+    if ($('startup-label')) $('startup-label').textContent = label;
+    if ($('startup-detail')) $('startup-detail').textContent = detail;
+  }
+  function markShowable(record) {
+    record.showable = true; record.resolveVisible?.();
+    if (record !== activeFrame() || startupOpened) return;
+    startupProgress(4, '工作台已打开', '行情与共享计划继续在各窗口加载。');
+    startupOpened = true; $('startup').hidden = true;
+    if (window.workspaceStartupTimer) window.clearInterval(window.workspaceStartupTimer);
+    scheduleLayout();
+  }
   function makeFrame(pane, {layoutState = state, staged = false} = {}) {
     const frame = document.createElement('iframe'); frame.className = 'workspace-frame is-active'; frame.title = name(pane.symbol) + '完整工作台'; frame.dataset.paneId = pane.id;
     // A new pane must finish connecting before it can cover or resize the
@@ -105,13 +121,22 @@
     // incorrectly restore this visitor's previously selected named plan.
     if (typeof pane.board === 'string') url.searchParams.set('board', pane.board);
     frame.src = url.pathname + url.search;
-    const record = {frame, symbol: pane.symbol, ready: false};
+    const record = {frame, symbol: pane.symbol, ready: false, showable: false};
     record.loaded = new Promise(resolve => { record.resolve = resolve; });
+    record.visible = new Promise(resolve => { record.resolveVisible = resolve; });
+    frame.addEventListener?.('load', () => {
+      if (record === activeFrame()) startupProgress(3, '正在初始化图表…', '页面组件已载入，正在恢复窗口与近期行情。');
+      if (bridge(record)?.snapshot().showable) markShowable(record);
+    });
     frames.set(pane.id, record); $('stage').append(frame); return record;
   }
   async function waitReady(record) {
     if (record.ready) return true;
     let timer; try { return await Promise.race([record.loaded.then(() => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 20000); })]); } finally { clearTimeout(timer); }
+  }
+  async function waitVisible(record) {
+    if (record.showable) return true;
+    let timer; try { return await Promise.race([record.visible.then(() => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 20000); })]); } finally { clearTimeout(timer); }
   }
   async function transition(next) {
     if (busy || !state || JSON.stringify(next) === JSON.stringify(state)) return;
@@ -178,6 +203,10 @@
     if (state.panes.length === 1) return state.panes[0].id;
     return state.panes[y < box.top + box.height / 2 ? 0 : 1].id;
   }
+  function dropPlacementAt(y) {
+    const box = workspaceRect();
+    return box && y < box.top + box.height / 2 ? 'top' : 'bottom';
+  }
   function showGuide(x, y) {
     if (!drag) return;
     drag.x = x; drag.y = y;
@@ -186,7 +215,11 @@
     const existing = state.panes.find(pane => pane.symbol === drag.symbol);
     let box;
     if (existing) { box = slotRect(existing.id); guide.textContent = '松开，切换到 ' + name(drag.symbol); }
-    else if (state.panes.length === 1) { const total = workspaceRect(); box = {...total, top: total.top + total.height / 2 + 3, height: total.height / 2 - 3}; guide.textContent = '松开，在下方同时查看 ' + name(drag.symbol); }
+    else if (state.panes.length === 1) {
+      const total = workspaceRect(), above = dropPlacementAt(y) === 'top';
+      box = {...total, top: above ? total.top : total.top + total.height / 2 + 3, height: total.height / 2 - 3};
+      guide.textContent = '松开，在' + (above ? '上' : '下') + '方同时查看 ' + name(drag.symbol);
+    }
     else { box = slotRect(target); guide.textContent = '松开，将此窗口切换为 ' + name(drag.symbol); }
     rectStyle(guide, box); guide.hidden = false;
     if (drag.method === 'pointer') { const ghost = $('drag-ghost'); ghost.hidden = false; ghost.textContent = name(drag.symbol); ghost.style.left = (x + 14) + 'px'; ghost.style.top = (y + 14) + 'px'; }
@@ -202,14 +235,14 @@
     if (!drag) return;
     const gesture = drag, target = cancelled ? null : targetAt(x, y); drag = null;
     $('drop-shield').hidden = true; $('drop-guide').hidden = true; $('drag-ghost').hidden = true;
-    if (target) void transition(M.dropSymbol(state, gesture.symbol, target, ids));
+    if (target) void transition(M.dropSymbol(state, gesture.symbol, target, ids, dropPlacementAt(y)));
   }
   window.addEventListener('message', event => {
     if (event.origin !== location.origin || !event.data || typeof event.data.type !== 'string') return;
     const pair = [...frames.entries()].find(([, record]) => record.frame.contentWindow === event.source); if (!pair) return;
     const [id, record] = pair, data = event.data; if (data.paneId !== id) return;
     switch (data.type) {
-      case 'full-workspace:ready': record.ready = true; record.resolve(); if (id === state.activeId) $('startup').hidden = true; scheduleLayout(); break;
+      case 'full-workspace:ready': record.ready = true; record.resolve(); markShowable(record); scheduleLayout(); break;
       case 'full-workspace:geometry': scheduleLayout(); break;
       case 'full-workspace:state': {
         const snapshot = data.snapshot || data.state || data;
@@ -217,7 +250,9 @@
         // has released busy. It must not roll back the selected pane or layout.
         const current = bridge(record)?.snapshot();
         if (snapshot.symbol && current?.symbol && snapshot.symbol !== current.symbol) break;
+        if (snapshot.showable) markShowable(record);
         if (record.modalOpen !== snapshot.modalOpen) { record.modalOpen = snapshot.modalOpen; scheduleLayout(); }
+        if (record.pageDialogOpen !== snapshot.pageDialogOpen) { record.pageDialogOpen = snapshot.pageDialogOpen; scheduleLayout(); }
         if (snapshot.symbol && record.symbol !== snapshot.symbol && ids.includes(snapshot.symbol) && !busy) { record.symbol = snapshot.symbol; const pane = state.panes.find(pane => pane.id === id); if (pane) pane.symbol = snapshot.symbol; persist(); }
         break;
       }
@@ -261,7 +296,7 @@
         return await response.json();
       } catch (error) {
         if (error.retryable === false || attempt === attempts - 1) throw error;
-        $('startup').textContent = '连接较慢，正在重试（' + (attempt + 2) + '/' + attempts + '）…';
+        startupProgress(path === '/session' ? 0 : 1, '连接较慢，正在重试（' + (attempt + 2) + '/' + attempts + '）…', path === '/session' ? '正在连接共同画板。' : '正在读取品种列表。');
         await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
       } finally { clearTimeout(timer); }
     }
@@ -279,14 +314,14 @@
     catch { return null; }
   }
   function startupError(message) {
-    const status = $('startup'); status.replaceChildren();
-    const label = document.createElement('span'); label.textContent = message;
-    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '刷新重试'; retry.addEventListener('click', () => location.reload());
-    const fallback = document.createElement('a'); fallback.href = singleViewUrl(); fallback.textContent = '打开单窗口';
-    status.append(label, retry, fallback); status.hidden = false;
+    if (startupOpened) return;
+    startupProgress(0, message, '可以刷新重试或打开单窗口；原计划和图层不会被清除。');
+    $('startup-actions').hidden = false; $('startup').hidden = false;
   }
   async function start() {
     try {
+      window.workspaceShellStarted = true;
+      startupProgress(0, '正在连接共同画板…', '正在恢复当前浏览器身份。');
       // Preserve the established phone/tablet read-only view; never duplicate
       // its scrolling chart UI into constrained desktop iframe slots.
       if (mobileDevice()) { location.replace(singleViewUrl()); return; }
@@ -294,10 +329,12 @@
       const session = await startupRequest('/session');
       if (session.mobile_device) { location.replace(singleViewUrl()); return; }
       layoutKey = KEY + (session.user?.id || 'browser');
+      startupProgress(1, '正在读取品种列表…', '共同画板已连接。');
       const response = await startupRequest('/symbols');
       symbols = Array.isArray(response.symbols) ? response.symbols : []; ids = symbols.map(item => item.symbol || item);
       if (!ids.length) { startupError('暂无可用品种，请稍后重试。'); return; }
-      $('startup').textContent = '正在打开完整工作台…';
+      startupProgress(2, '正在加载图表组件…', '品种列表已就绪，正在恢复上次窗口。');
+      window.DualWorkspaceBootstrap = {session, symbols: response, createdAt: Date.now()};
       const previousSymbol = savedSymbol(session.user?.id);
       const preferred = ids.includes(previousSymbol) ? previousSymbol : ids[0];
       const url = new URL(location.href), requested = url.searchParams.get('symbol');
@@ -305,8 +342,8 @@
       state = M.normalize(initial || {panes: [{id: 'pane-a', symbol: preferred}], activeId: 'pane-a'}, ids);
       for (const pane of state.panes) { if (pane.symbol === requested && url.searchParams.has('board')) pane.board = url.searchParams.get('board'); makeFrame(pane); }
       layout();
-      if (!await waitReady(activeFrame())) { startupError('工作台加载较慢，请检查网络后重试。'); return; }
-      $('startup').hidden = true; persist(); layout();
+      if (!await waitVisible(activeFrame())) { startupError('图表组件加载较慢，请稍后重试。'); return; }
+      persist(); layout();
       // A shared link is an initial destination, not a permanent refresh override.
       if (url.searchParams.has('symbol') || url.searchParams.has('board')) {
         url.searchParams.delete('symbol'); url.searchParams.delete('board');

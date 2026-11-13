@@ -60,6 +60,24 @@ def adapt_workspace_js(source: str) -> str:
     replace_once("function renderSyncStatus(){", "function renderSyncStatus(){\n    window.FullWorkspace?.queueState();")
     replace_once("function renderMarket(){", "function renderMarket(){window.FullWorkspace?.queueState();renderFollowState();")
     replace_once("function renderSymbols(){", "function renderSymbols(){window.FullWorkspace?.queueState();")
+    replace_once("function renderLoadState(){", "function renderLoadState(){window.FullWorkspace?.queueState();")
+    bootstrap = r"""
+  const dualBootstrapUsed=new Set();
+  function dualBootstrap(path){
+    try{
+      const parent=window.parent,seed=parent!==window&&parent.location.origin===location.origin?parent.DualWorkspaceBootstrap:null;
+      const age=seed?Date.now()-seed.createdAt:Infinity;
+      if(!dualBootstrapUsed.has(path)&&age>=0&&age<60000&&seed?.session?.user?.id){
+        const value=path==='/session'?seed.session:path==='/symbols'&&state.session?.user?.id===seed.session.user.id&&Array.isArray(seed.symbols?.symbols)?seed.symbols:null;
+        if(value){dualBootstrapUsed.add(path);return Promise.resolve(JSON.parse(JSON.stringify(value)));}
+      }
+    }catch{/* Cross-origin, stale or unavailable parent: use the normal API. */}
+    return api(path);
+  }
+"""
+    replace_once("  async function boot(){", bootstrap + "\n  async function boot(){")
+    replace_once("const session=await api('/session');await enter(session)", "const session=await dualBootstrap('/session');await enter(session)")
+    replace_once("Promise.all([api('/symbols'),api('/rules'),api('/risk')])", "Promise.all([dualBootstrap('/symbols'),api('/rules'),api('/risk')])")
     replace_once("WorkspaceSymbols.normalizeGroups(storageGet(symbolGroupsKey()),state.symbols,storageGet('favorites',[]),storageGet('symbol-order',[]))", "WorkspaceSymbols.normalizeGroups(storageGet(symbolGroupsKey(),{version:1,default:[],favorites:[]}),state.symbols)")
     replace_once("const selected=storageGet('symbol-group:'+scope,'default');state.symbolGroup=WorkspaceSymbols.GROUPS.some(group=>group.id===selected)?selected:'default';", "const selected=state.symbolGroup||'all';state.symbolGroup=WorkspaceSymbols.GROUPS.some(group=>group.id===selected)?selected:'all';")
     replace_once("const groups=symbolGroups(),group=state.symbolGroup||'default'", "const groups=symbolGroups(),group=state.symbolGroup||'all'")
@@ -169,7 +187,7 @@ def adapt_workspace_js(source: str) -> str:
     canHideSidebar:dualCanHideSidebar,
     prepareFocusSwitch:dualPrepareFocusSwitch,
     escapeHasPriority:dualEscapeHasPriority,
-    snapshot:()=>({symbol:state.symbol,name:state.market?.name||state.symbol,board:state.board||'',loading:Boolean(state.loading),dirty:Boolean(state.dirty||state.planFormDirty||state.outbox),saving:Boolean(state.saving),conflict:Boolean(state.conflict),ready:Boolean(state.planReady&&marketComplete()),activePeriod:state.active,layout:state.layout,expanded:document.querySelector('.chart-grid')?.dataset.expanded||null,viewOnly:state.viewOnly,revision:state.revision,selected:state.selected,modalOpen:Boolean(document.querySelector('dialog[open],#layout-picker[open],#members-panel:not([hidden]),#decision-detail:not([hidden])')),ui:{group:state.symbolGroup||'all',search:$('symbol-search').value,panel:state.panel||'quick-plan-panel',dockOpen:!$('workspace-dock').hidden,dockWidth:dualDockWidth()}}),
+    snapshot:()=>({symbol:state.symbol,name:state.market?.name||state.symbol,board:state.board||'',loading:Boolean(state.loading),showable:Boolean(state.session?.user&&!$('workspace').hidden&&['day','m30','m3'].every(period=>charts[period])),dirty:Boolean(state.dirty||state.planFormDirty||state.outbox),saving:Boolean(state.saving),conflict:Boolean(state.conflict),ready:Boolean(state.planReady&&marketComplete()),activePeriod:state.active,layout:state.layout,expanded:document.querySelector('.chart-grid')?.dataset.expanded||null,viewOnly:state.viewOnly,revision:state.revision,selected:state.selected,modalOpen:Boolean(document.querySelector('dialog[open],#layout-picker[open],#members-panel:not([hidden]),#decision-detail:not([hidden])')),ui:{group:state.symbolGroup||'all',search:$('symbol-search').value,panel:state.panel||'quick-plan-panel',dockOpen:!$('workspace-dock').hidden,dockWidth:dualDockWidth()}}),
     switchSymbol:async(symbol,board=null)=>{await switchSymbol(symbol,board,{backgroundLoad:true});return state.symbol===symbol&&(board===null||(state.board||'')===(board||''));},
     prepareDeactivate:async({closing=false}={})=>{
       const unfinishedText=Object.values(charts).find(chart=>chart.textEditor&&!chart.textEditor.hidden&&(chart.textInput?.value||chart.textComposing));

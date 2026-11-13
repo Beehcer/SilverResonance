@@ -17,7 +17,7 @@ HARNESS = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const elements = [], messages = [], documentHandlers = new Map();
+const elements = [], messages = [], documentHandlers = new Map(), animationFrames = [];
 let document;
 class Element {
   constructor(tag = 'div', id = '', className = '') {
@@ -100,7 +100,7 @@ const sandbox = {
   document, window, location: {origin: 'http://127.0.0.1:8865', search: '?pane=pane-b&active=false&slot=bottom&count=2'},
   URLSearchParams, innerWidth: 1500, innerHeight: 900,
   performance: {now: () => 1000}, setTimeout: () => 1,
-  requestAnimationFrame: () => 1,
+  requestAnimationFrame: callback => (animationFrames.push(callback), animationFrames.length),
   MutationObserver: class {observe() {}}, ResizeObserver: class {observe() {}},
 };
 vm.runInNewContext(fs.readFileSync(EMBED_PATH, 'utf8'), sandbox, {filename: 'embed.js'});
@@ -138,6 +138,40 @@ class EmbedFocusTests(unittest.TestCase):
         script = "const EMBED_PATH = " + json.dumps(str(DIRECTORY / "static/workspace-dual-embed.js")) + ";\n" + HARNESS + "\n" + scenario
         result = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8", timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_cases_fill_the_page_and_stay_full_page_when_repositioned(self):
+        self.run_js(r"""
+const cases = new Element('dialog', 'cases-dialog'); cases.open = true; body.append(cases);
+const localDialog = new Element('dialog', 'local-dialog'); localDialog.open = true; body.append(localDialog);
+document.querySelectorAll = () => [cases, localDialog];
+for (const maximized of [false, true, false]) {
+  mode(maximized);
+  while (animationFrames.length) animationFrames.shift()();
+  assert.equal(bridge.snapshot().pageDialogOpen, true);
+  assert.equal(cases.style.left, '0px'); assert.equal(cases.style.top, '0px');
+  assert.equal(cases.style.width, '1500px'); assert.equal(cases.style.height, '900px');
+  assert.equal(cases.style.maxWidth, '1500px'); assert.equal(cases.style.maxHeight, '900px');
+  assert.equal(localDialog.style.maxWidth, '888px'); assert.equal(localDialog.style.maxHeight, '488px');
+}
+cases.open = false;
+assert.equal(bridge.snapshot().pageDialogOpen, false);
+""")
+
+    def test_case_escape_uses_native_close_without_changing_workspace_or_draft(self):
+        self.run_js(r"""
+const cases = new Element('dialog', 'cases-dialog'); cases.open = true; body.append(cases);
+let cancelledDrafts = 0;
+document.addEventListener('keydown', () => cancelledDrafts++);
+for (const maximized of [false, true]) {
+  mode(maximized);
+  const escape = event(cases, {key: 'Escape'}); dispatch('keydown', escape);
+  assert.equal(escape.stopped, true);
+  assert.equal(escape.prevented, false, 'Native dialog cancel must be allowed');
+  assert.equal(cancelledDrafts, 0);
+  assert.equal(bridge.isMaximized(), maximized);
+  assert.equal(messages.length, 0);
+}
+""")
 
     def test_mode_without_sidebar_update_does_not_overwrite_dock(self):
         self.run_js(r"""

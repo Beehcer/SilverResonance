@@ -378,8 +378,8 @@ html.dual-embedded .chart-footer {
   }
 }
 
-/* Popups are positioned inside their owning pane/dock by embed.js. They never
-   require hiding the other iframe, and modal backdrops do not dim that pane. */
+/* Local popups stay inside their owning pane/dock. The page-wide case library
+   covers the workspace, with both chart iframes still mounted and updating. */
 html.dual-embedded .dual-scoped-popup {
   box-sizing: border-box;
   overscroll-behavior: contain;
@@ -396,111 +396,12 @@ html.dual-embedded #members-panel.dual-scoped-popup {
   overflow: auto;
 }
 
+/* Cases use the whole page, so the library keeps its normal responsive layout. */
 html.dual-embedded #cases-dialog.dual-scoped-popup {
-  container: dual-cases / inline-size;
   overflow: hidden;
-  border-radius: 4px;
-  box-shadow: 0 5px 20px #0008;
-}
-
-html.dual-embedded #cases-dialog .cases-header {
-  padding: 8px 12px;
-}
-
-html.dual-embedded #cases-dialog .cases-header h2 {
-  font-size: 17px;
-}
-
-html.dual-embedded #cases-dialog .cases-header h2 small {
-  display: inline;
-  margin: 0 0 0 10px;
-}
-
-html.dual-embedded #cases-dialog .cases-notice {
-  gap: 5px 10px;
-  padding: 6px 12px;
-}
-
-html.dual-embedded #cases-dialog .cases-notice > span {
-  display: inline;
-}
-
-html.dual-embedded #cases-dialog .cases-rule-state {
-  margin-left: 0;
-}
-
-html.dual-embedded #cases-dialog .cases-body {
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-
-html.dual-embedded #cases-dialog .cases-sidebar {
-  width: 190px;
-  max-height: none;
-  border-right: 1px solid #2c3a46;
-  border-bottom: 0;
-}
-
-html.dual-embedded #cases-dialog .cases-filters {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 10px;
-}
-
-html.dual-embedded #cases-dialog .cases-list {
-  display: block;
-  min-height: 0;
-  overflow: auto;
-}
-
-html.dual-embedded #cases-dialog .cases-sidebar-foot {
-  display: block;
-}
-
-html.dual-embedded #cases-dialog .cases-content {
-  overflow: auto;
-  padding: 10px 12px 20px;
-}
-
-html.dual-embedded #cases-dialog .cases-steps {
-  flex-wrap: wrap;
-}
-
-html.dual-embedded #cases-dialog .cases-steps button {
-  flex: 1 0 30%;
-}
-
-html.dual-embedded #cases-dialog .cases-chart-side,
-html.dual-embedded #cases-dialog .cases-explanation {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-html.dual-embedded #cases-dialog .cases-footer {
-  padding: 7px 10px;
-  gap: 8px;
-}
-
-html.dual-embedded #cases-dialog .cases-footer button {
-  padding: 5px;
-  font-size: 10px;
-}
-
-html.dual-embedded #cases-dialog .cases-source {
-  min-width: 0;
-  max-width: 60%;
-  font-size: 9px;
-}
-
-@container dual-cases (max-width: 560px) {
-  html.dual-embedded #cases-dialog .cases-sidebar {
-    width: 150px;
-  }
-  html.dual-embedded #cases-dialog .cases-header h2 small {
-    display: block;
-    margin: 2px 0 0;
-  }
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* Keep the shared inspector compact; its controls reflow instead of clipping. */

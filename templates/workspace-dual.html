@@ -4,18 +4,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>共振 · 多周期计划工作台</title>
-  <link rel="stylesheet" href="/static/workspace-dual-shell.css?v=20261113-major">
+  <link rel="stylesheet" href="/static/workspace-dual-shell.css?v=20261114-feedback-1">
 </head>
 <body>
   <main id="stage" aria-label="完整双品种工作台"></main>
   <button id="sidebar-left-toggle" class="sidebar-edge-toggle" type="button" hidden aria-label="展开品种大纲" aria-expanded="false" title="展开品种大纲">›</button>
   <button id="sidebar-right-toggle" class="sidebar-edge-toggle" type="button" hidden aria-label="展开计划和图层" aria-expanded="false" title="展开计划和图层">‹</button>
-  <div id="startup" role="status">正在打开完整工作台…</div>
+  <div id="startup" role="status" aria-live="polite">
+    <div class="startup-card">
+      <strong id="startup-label">正在加载页面组件…</strong>
+      <progress id="startup-progress" max="4" value="0" aria-label="工作台打开阶段"></progress>
+      <p id="startup-detail">连接画板 → 品种列表 → 页面组件 → 显示工作台</p>
+      <small id="startup-elapsed">已等待 0 秒</small>
+      <div id="startup-actions" hidden><button id="startup-retry" type="button">刷新重试</button><a id="startup-fallback" href="/workspace?view=single">打开单窗口</a></div>
+    </div>
+  </div>
   <div id="drop-shield" hidden></div>
   <div id="drop-guide" hidden role="status"></div>
   <div id="drag-ghost" hidden></div>
   <div id="toast" hidden role="status" aria-live="polite"></div>
-  <script src="/static/workspace-dual-model.js?v=20261113-major"></script>
-  <script src="/static/workspace-dual-shell.js?v=20261113-switch-1"></script>
+  <script>
+    // This small recovery UI must also work when an external script fails.
+    (function () {
+      const started = Date.now(), status = document.getElementById('startup');
+      const url = new URL(location.href); url.pathname = '/workspace';
+      for (const key of ['pane', 'active', 'slot', 'count']) url.searchParams.delete(key);
+      url.searchParams.set('view', 'single'); document.getElementById('startup-fallback').href = url.href;
+      document.getElementById('startup-retry').addEventListener('click', () => location.reload());
+      window.workspaceStartupTimer = setInterval(() => {
+        if (status.hidden) { clearInterval(window.workspaceStartupTimer); return; }
+        const seconds = Math.floor((Date.now() - started) / 1000);
+        document.getElementById('startup-elapsed').textContent = '已等待 ' + seconds + ' 秒';
+        if (seconds >= 12) {
+          document.getElementById('startup-actions').hidden = false;
+          if (!window.workspaceShellStarted) {
+            document.getElementById('startup-label').textContent = '页面组件加载较慢';
+            document.getElementById('startup-detail').textContent = '资源可能未下载完成，可刷新重试或打开单窗口。';
+          }
+        }
+      }, 1000);
+    }());
+  </script>
+  <script src="/static/workspace-dual-model.js?v=20261114-feedback-1"></script>
+  <script src="/static/workspace-dual-shell.js?v=20261114-feedback-1"></script>
 </body>
 </html>

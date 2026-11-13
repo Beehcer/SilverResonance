@@ -1,13 +1,23 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const V=require('./static/workspace-cases.js'),D=require('./static/workspace-cases-data.js');
+const tradingCases=D.cases.filter(c=>!c.educational);
+test('2B definition renders its actual 100 and 98 levels without an entry line or future target',()=>{
+  const c=D.cases[0],chart=c.charts.m30,svg=V.chartSvg(chart,'m30',{id:c.id,direction:c.direction});
+  assert.doesNotMatch(svg,/NaN|Infinity|undefined/);
+  assert.equal((svg.match(/data-bar=/g)||[]).length,8);
+  assert.match(svg,/100/);assert.match(svg,/98/);
+  assert.doesNotMatch(svg,/data-case-wave="conditional"|data-case-node="4"|入场 [\d,.]+|止损 [\d,.]+|已完成触发/);
+  assert.equal(V.filterCases(D.cases,{query:'先认识 2B'})[0],c);
+  assert.ok(!V.filterCases(D.cases,{mode:'reversal_a'}).includes(c));
+});
 
 test('case filters preserve the long/short mirrors and separate base modes from features',()=>{
-  assert.equal(V.filterCases(D.cases,{direction:'short'}).length,D.cases.length/2);
-  const feature=V.filterCases(D.cases,{family:'2b-zone'});assert.equal(feature.length,2);
+  assert.equal(V.filterCases(tradingCases,{direction:'short'}).length,tradingCases.length/2);
+  const feature=V.filterCases(tradingCases,{family:'2b-zone'});assert.equal(feature.length,2);
   assert.ok(feature.every(c=>c.mode==='reversal_a'));
-  assert.equal(V.filterCases(D.cases,{family:'2b-zone',direction:'long'}).length,1);
-  assert.ok(V.filterCases(D.cases,{query:'内包'}).length>=4);
-  assert.equal(V.filterCases(D.cases,{mode:'range',family:'2b-zone'}).length,0);
+  assert.equal(V.filterCases(tradingCases,{family:'2b-zone',direction:'long'}).length,1);
+  assert.ok(V.filterCases(tradingCases,{query:'内包'}).length>=4);
+  assert.equal(V.filterCases(tradingCases,{mode:'range',family:'2b-zone'}).length,0);
 });
 
 test('a changed or unavailable rule source cannot be presented as checked',()=>{
@@ -18,7 +28,7 @@ test('a changed or unavailable rule source cannot be presented as checked',()=>{
 });
 
 test('all case charts render finite OHLC geometry and explicit conditional extensions',()=>{
-  for(const c of D.cases)for(const period of ['day','m30','m3']){
+  for(const c of tradingCases)for(const period of ['day','m30','m3']){
     const svg=V.chartSvg(c.charts[period],period,{id:c.id,direction:c.direction});
     assert.ok(!/NaN|Infinity|undefined/.test(svg),c.id+':'+period);
     assert.equal((svg.match(/data-bar=/g)||[]).length,c.charts[period].bars.length);
@@ -31,7 +41,7 @@ test('all case charts render finite OHLC geometry and explicit conditional exten
 });
 
 test('trigger emphasis never upgrades the forming 30m bar or daily context into a completed trigger',()=>{
-  const c=D.cases[0];
+  const c=tradingCases[0];
   const main=V.chartSvg(c.charts.m30,'m30',{stage:'trigger'}),daily=V.chartSvg(c.charts.day,'day',{stage:'trigger'}),execution=V.chartSvg(c.charts.m3,'m3',{stage:'trigger'});
   assert.match(main,/data-completed="false" opacity="0.5"/);
   assert.match(main,/末根未收盘 · 仅定位现价/);
@@ -42,7 +52,7 @@ test('trigger emphasis never upgrades the forming 30m bar or daily context into 
 });
 
 test('visual aids can be hidden independently without removing historical candles',()=>{
-  const c=D.cases[0],chart=c.charts.m30;
+  const c=tradingCases[0],chart=c.charts.m30;
   const hidden=V.chartSvg(chart,'m30',{horizontal:false,trend:false,numbers:false});
   assert.doesNotMatch(hidden,/data-case-line=|data-case-node=/);
   assert.equal((hidden.match(/data-bar=/g)||[]).length,chart.bars.length);
@@ -51,13 +61,13 @@ test('visual aids can be hidden independently without removing historical candle
 });
 
 test('diagram labels are escaped and price scales include drawn levels and projected nodes',()=>{
-  const chart=structuredClone(D.cases[0].charts.m30);chart.title='<script>alert(1)</script>';chart.nodes.push({index:90,price:200,label:'x',future:true});
+  const chart=structuredClone(tradingCases[0].charts.m30);chart.title='<script>alert(1)</script>';chart.nodes.push({index:90,price:200,label:'x',future:true});
   const svg=V.chartSvg(chart,'m30');assert.doesNotMatch(svg,/<script>/);assert.match(svg,/&lt;script&gt;/);
   const geometry=V.scene(chart,'m30');assert.ok(geometry.max>200);assert.ok(geometry.x(90)<geometry.plot.x+geometry.plot.w);
 });
 
 test('compact price labels have distinct vertical positions and do not print lengthy descriptions over candles',()=>{
-  for(const c of D.cases){
+  for(const c of tradingCases){
     const svg=V.chartSvg(c.charts.m3,'m3');
     const ys=[...svg.matchAll(/data-line-label="\d+" x="[^\"]+" y="([^\"]+)"/g)].map(m=>Number(m[1]));
     assert.equal(new Set(ys).size,ys.length,c.id);
@@ -67,7 +77,7 @@ test('compact price labels have distinct vertical positions and do not print len
 });
 
 test('low-height main charts fit a 300-high viewBox while keeping prices and node data',()=>{
-  const c=D.cases[0],normal=V.scene(c.charts.m30,'m30'),compact=V.scene(c.charts.m30,'m30',{compact:true});
+  const c=tradingCases[0],normal=V.scene(c.charts.m30,'m30'),compact=V.scene(c.charts.m30,'m30',{compact:true});
   assert.equal(normal.height,460);assert.equal(compact.height,300);assert.equal(compact.plot.h,223);
   const svg=V.chartSvg(c.charts.m30,'m30',{compact:true});
   assert.match(svg,/viewBox="0 0 880 300"/);assert.match(svg,/data-case-node="3"/);
@@ -75,7 +85,7 @@ test('low-height main charts fit a 300-high viewBox while keeping prices and nod
 });
 
 test('trend anchors never create a long fake horizontal leader and price leaders stay short',()=>{
-  for(const c of D.cases)for(const period of ['m30','m3']){
+  for(const c of tradingCases)for(const period of ['m30','m3']){
     const chart=c.charts[period],svg=V.chartSvg(chart,period,{compact:true});
     assert.equal((svg.match(/data-case-trend-label=/g)||[]).length,chart.lines.filter(l=>l.kind==='trend').length);
     const trendIds=new Set(chart.lines.map((l,i)=>l.kind==='trend'?String(i+1):null).filter(Boolean));

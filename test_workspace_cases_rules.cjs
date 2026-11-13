@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const D = require('./static/workspace-cases-data.js');
+const tradingCases=D.cases.filter(c=>!c.educational);
 const V = require('./static/workspace-cases.js');
 const nearly = (a, b, label) => assert.ok(Math.abs(a - b) < 1e-7, label || `${a} != ${b}`);
 const sign = c => c.direction === 'long' ? 1 : -1;
@@ -10,19 +11,19 @@ const at = (l, i) => {
 };
 
 test('all four authorized primary modes and every illustrated feature have distinct long/short cases', () => {
-  assert.equal(new Set(D.cases.map(c => c.id)).size, D.cases.length);
-  assert.equal(D.cases.length, 28);
+  assert.equal(new Set(tradingCases.map(c => c.id)).size, tradingCases.length);
+  assert.equal(tradingCases.length, 28);
   for (const mode of ['continuation', 'reversal_a', 'reversal_b', 'range']) {
-    for (const direction of ['long', 'short']) assert.ok(D.cases.some(c => c.mode === mode && c.direction === direction));
+    for (const direction of ['long', 'short']) assert.ok(tradingCases.some(c => c.mode === mode && c.direction === direction));
   }
-  for (const family of new Set(D.cases.map(c => c.family))) {
-    assert.deepEqual(D.cases.filter(c => c.family === family).map(c => c.direction).sort(), ['long', 'short']);
+  for (const family of new Set(tradingCases.map(c => c.family))) {
+    assert.deepEqual(tradingCases.filter(c => c.family === family).map(c => c.direction).sort(), ['long', 'short']);
   }
-  assert.ok(D.cases.every(c => ['continuation', 'reversal_a', 'reversal_b', 'range'].includes(c.mode)));
+  assert.ok(tradingCases.every(c => ['continuation', 'reversal_a', 'reversal_b', 'range'].includes(c.mode)));
 });
 
 test('illustrated permits use completed earlier evidence and never the forming main candle or future wave 4', () => {
-  for (const c of D.cases) {
+  for (const c of tradingCases) {
     const e = c.evidence;
     assert.ok(Date.parse(e.dailyClosedAt) < Date.parse(e.mainPermissionAt), c.id);
     assert.ok(Date.parse(e.mainPermissionAt) < Date.parse(e.localValidationAt), c.id);
@@ -45,7 +46,7 @@ test('illustrated permits use completed earlier evidence and never the forming m
 });
 
 test('entry remains in the planned point-3 area with protective stop, nearby obstacle and exact illustrative risk', () => {
-  for (const c of D.cases) {
+  for (const c of tradingCases) {
     const e = c.entry, r = e.risk, s = sign(c);
     assert.ok(e.price >= e.zoneLow && e.price <= e.zoneHigh, c.id);
     assert.ok(e.trigger >= e.zoneLow && e.trigger <= e.zoneHigh, c.id);
@@ -63,7 +64,7 @@ test('entry remains in the planned point-3 area with protective stop, nearby obs
 });
 
 test('continuation cases actually retain the plotted original trend support or resistance through the entry cutoff', () => {
-  for (const c of D.cases.filter(c => c.mode === 'continuation')) {
+  for (const c of tradingCases.filter(c => c.mode === 'continuation')) {
     const chart = c.charts.m30, line = chart.lines.find(l => l.kind === 'trend');
     for (const p of line.points) nearly(p.price, c.direction === 'long' ? chart.bars[p.index].low : chart.bars[p.index].high, c.id);
     for (const b of chart.bars.slice(line.points[1].index + 1)) {
@@ -76,7 +77,7 @@ test('continuation cases actually retain the plotted original trend support or r
 });
 
 test('A and B remain different at the explicitly chosen main key level', () => {
-  for (const c of D.cases.filter(c => c.mode === 'reversal_a' || c.mode === 'reversal_b')) {
+  for (const c of tradingCases.filter(c => c.mode === 'reversal_a' || c.mode === 'reversal_b')) {
     const chart = c.charts.m30, key = chart.lines.find(l => l.kind === 'horizontal' && l.role === 'key').points[0].price;
     const one = chart.nodes.find(n => n.label === '1');
     const later = chart.bars.filter(b => b.index > one.index && b.completed);
@@ -86,7 +87,7 @@ test('A and B remain different at the explicitly chosen main key level', () => {
 });
 
 test('2B single-candle, later reclaim and full-zone reclaim examples satisfy their separate definitions', () => {
-  for (const c of D.cases.filter(c => c.family.startsWith('2b'))) {
+  for (const c of tradingCases.filter(c => c.family.startsWith('2b'))) {
     const bars = c.charts.m3.bars, first = bars[31], second = bars[32], s = sign(c);
     const mirrored = n => c.direction === 'long' ? n : 220 - n;
     const edge = mirrored(110), firstExtreme = c.direction === 'long' ? first.low : first.high;
@@ -108,7 +109,7 @@ test('2B single-candle, later reclaim and full-zone reclaim examples satisfy the
 });
 
 test('a 2B clock starts on the first qualifying breach after its preselected confirmed reference', () => {
-  for (const c of D.cases.filter(c => c.family.startsWith('2b'))) {
+  for (const c of tradingCases.filter(c => c.family.startsWith('2b'))) {
     const bars = c.charts.m3.bars, s = sign(c), edge = c.direction === 'long' ? (c.family === '2b-zone' ? 109.8 : 110) : 220 - (c.family === '2b-zone' ? 109.8 : 110);
     const extreme = b => c.direction === 'long' ? b.low : b.high;
     nearly(extreme(bars[18]), edge, c.id + ' prior reference must be an actual OHLC extreme');
@@ -120,7 +121,7 @@ test('a 2B clock starts on the first qualifying breach after its preselected con
 });
 
 test('local attack and continuation references are actual confirmed swing extremes before their breaks', () => {
-  for (const c of D.cases) {
+  for (const c of tradingCases) {
     const bars = c.charts.m3.bars, s = sign(c), highSide = b => c.direction === 'long' ? b.high : b.low;
     assert.ok((highSide(bars[29]) - highSide(bars[28])) * s > 0, c.id);
     assert.ok((highSide(bars[29]) - highSide(bars[30])) * s > 0, c.id);
@@ -133,14 +134,14 @@ test('local attack and continuation references are actual confirmed swing extrem
       nearly(line.points[0].price, highSide(m[40]), c.id);
     }
   }
-  for (const c of D.cases.filter(c => c.direction === 'short' && ['inside-child', 'inside-outer', 'harami'].includes(c.family))) {
+  for (const c of tradingCases.filter(c => c.direction === 'short' && ['inside-child', 'inside-outer', 'harami'].includes(c.family))) {
     assert.match(c.assumptions.join(' '), /组合高点|最高价/);
     assert.doesNotMatch(c.assumptions.join(' '), /组合低点|最低价|最空/);
   }
 });
 
 test('inside-bar branches and Harami use different completed pattern boundaries and preselected triggers', () => {
-  for (const c of D.cases.filter(c => ['inside-child', 'inside-outer', 'harami'].includes(c.family))) {
+  for (const c of tradingCases.filter(c => ['inside-child', 'inside-outer', 'harami'].includes(c.family))) {
     const [mother, child] = c.charts.m3.bars.slice(34, 36), s = sign(c);
     assert.equal(mother.completed, true); assert.equal(child.completed, true);
     if (c.family !== 'harami') {
@@ -159,7 +160,7 @@ test('inside-bar branches and Harami use different completed pattern boundaries 
 });
 
 test('trigger emphasis cannot label the unfinished 30-minute bar or daily context as an executed entry', () => {
-  const c = D.cases[0];
+  const c = tradingCases[0];
   assert.doesNotMatch(V.chartSvg(c.charts.day, 'day', {stage:'trigger'}), /已完成触发/);
   assert.doesNotMatch(V.chartSvg(c.charts.m30, 'm30', {stage:'trigger'}), /已完成触发/);
   assert.match(V.chartSvg(c.charts.m3, 'm3', {stage:'trigger'}), /已完成触发/);

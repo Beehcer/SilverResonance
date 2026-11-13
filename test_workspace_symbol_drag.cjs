@@ -7,7 +7,7 @@ const WorkspaceSymbols=require('./static/workspace-symbols.js');
 const WorkspaceShortcuts=require('./static/workspace-shortcuts.js');
 
 class Node extends EventTarget{
-  constructor(tag){super();this.tagName=tag.toUpperCase();this.nodeType=1;this.dataset={};this.children=[];this.className='';this.replacements=0;this.value='';this.attributes=new Map();this.classes=new Set();this.classList={add:(...names)=>names.forEach(name=>this.classes.add(name)),remove:(...names)=>names.forEach(name=>this.classes.delete(name)),toggle:(name,on)=>{if(on)this.classes.add(name);else this.classes.delete(name);}};}
+  constructor(tag){super();this.tagName=tag.toUpperCase();this.nodeType=1;this.dataset={};this.style={};this.children=[];this.className='';this.replacements=0;this.value='';this.attributes=new Map();this.classes=new Set();this.classList={add:(...names)=>names.forEach(name=>this.classes.add(name)),remove:(...names)=>names.forEach(name=>this.classes.delete(name)),toggle:(name,on)=>{if(on)this.classes.add(name);else this.classes.delete(name);}};}
   append(...nodes){for(const node of nodes){node.parentElement=this;this.children.push(node);}}
   replaceChildren(...nodes){this.replacements++;this.children=[];this.append(...nodes);}
   get childNodes(){return this.children;}
@@ -30,7 +30,7 @@ function harness(options={}){
   const tabs=WorkspaceSymbols.GROUPS.map(group=>{const tab=new Node('button');tab.dataset.symbolGroup=group.id;return tab;});
   const document={querySelectorAll:selector=>selector==='[data-symbol-group]'?tabs:[]};
   const context={state,$,el,document,WorkspaceSymbols,marketCache:{ready:()=>false},C:{priceLabel:price=>String(price)},fmtTime:()=>'',storageGet:(key,fallback)=>storage.has(key)?storage.get(key):fallback,storageSet:(key,value)=>{storage.set(key,JSON.parse(JSON.stringify(value)));return true;},switchSymbol:symbol=>switched.push(symbol),Date:{now:()=>now}};
-  vm.createContext(context);vm.runInContext(source.slice(start,end)+'\n globalThis.handlers={renderSymbols,bindSymbolDrag,endSymbolDrag,bindSymbolGroup,chooseSymbolGroup,symbolGroups,toggleFavorite,toggleDefaultSymbol};',context);
+  vm.createContext(context);vm.runInContext(source.slice(source.indexOf('  function renderPriceMotion('),source.indexOf('  function renderFeedMotion('))+source.slice(start,end)+'\n globalThis.handlers={renderSymbols,bindSymbolDrag,endSymbolDrag,bindSymbolGroup,chooseSymbolGroup,symbolGroups,toggleFavorite,toggleDefaultSymbol};',context);
   tabs.forEach(context.handlers.bindSymbolGroup);context.handlers.renderSymbols();
   const list=$('symbol-list'),row=symbol=>list.children.find(item=>item.children[0]?.dataset.symbol===symbol),button=symbol=>row(symbol)?.children[0];
   return{...context,handlers:context.handlers,list,row,button,storage,switched,tab:id=>tabs.find(tab=>tab.dataset.symbolGroup===id),groups:()=>storage.get('symbol-groups:'+state.session.user.id),advance:ms=>now+=ms,ids:()=>list.children.map(item=>item.children[0]?.dataset.symbol).filter(Boolean)};

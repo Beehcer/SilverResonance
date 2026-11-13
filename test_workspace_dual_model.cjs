@@ -56,6 +56,30 @@ test('single-pane drop adds the second pane below and activates it without repla
   });
 });
 
+test('dropping above inserts a new identity first while retaining the old pane and persisted order', () => {
+  for (const before of [single(), {panes: [{id: 'pane-b', symbol: symbols[0]}], activeId: 'pane-b'}]) {
+    freeze(before);
+    const originalId = before.panes[0].id, newId = originalId === 'pane-a' ? 'pane-b' : 'pane-a';
+    const next = Model.dropSymbol(before, symbols[1], originalId, symbols, 'top');
+    assert.deepEqual(next, {panes: [{id: newId, symbol: symbols[1]}, ...before.panes], activeId: newId});
+    assert.deepEqual(Model.normalize(JSON.parse(JSON.stringify(next)), symbols), next);
+    assert.deepEqual(Model.closePane(next, newId), before);
+    assert.equal(before.panes.length, 1);
+  }
+});
+
+test('placement never reorders an existing dual view or duplicates an already-open symbol', () => {
+  const before = freeze(dual());
+  for (const placement of ['top', 'bottom']) {
+    assert.deepEqual(Model.dropSymbol(before, symbols[2], 'pane-b', symbols, placement), {
+      panes: [before.panes[0], {id: 'pane-b', symbol: symbols[2]}], activeId: 'pane-b'
+    });
+    assert.deepEqual(Model.dropSymbol(before, symbols[1], 'pane-a', symbols, placement), {...before, activeId: 'pane-b'});
+    assert.deepEqual(Model.dropSymbol(single(), symbols[0], 'pane-a', symbols, placement), single());
+    assert.deepEqual(Model.dropSymbol(single(), symbols[1], null, symbols, placement), single());
+  }
+});
+
 test('two-pane drop replaces only the target and never creates a third pane', () => {
   const before = dual(), next = Model.dropSymbol(before, symbols[2], 'pane-b', symbols);
   assert.deepEqual(next, {

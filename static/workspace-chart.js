@@ -278,7 +278,16 @@
     beginUpdate(){this.updateDepth=(this.updateDepth||0)+1;}
     endUpdate(){this.updateDepth=Math.max(0,(this.updateDepth||0)-1);if(!this.updateDepth&&this.renderDeferred){this.renderDeferred=false;this.render();}}
     setPlan(plan){this.plan=plan||{objects:[]};this.syncTitleEditor();this.render();}
-    setTool(tool,options={}){this.clearTouchGesture({applyMarket:false});if(this.readOnly)tool='select';this.snapPreview=null;this.lastPathClick=null;if(this.period==='day'&&this.hoverDayKey){this.hoverDayKey=null;this.callbacks.hoverDay?.(null);}if(this.drag)this.cancelGesture();this.closeTextEditor();this.closeTitleEditor();this.cancelPath({render:false});this.placementPreview=null;this.tool=tool;this.toolDirection=['long','short'].includes(options.direction)?options.direction:null;this.toolName=options.name||null;this.toolColor=options.color||null;this.toolOpacity=drawingOpacity(options.opacity);this.hoverPath=null;this.pathControl=null;this.insertWave=null;this.draft=null;this.host.style.cursor=tool==='pan'?'grab':tool==='select'?'default':'crosshair';this.render();}
+    setTool(tool,options={}){this.clearTouchGesture({applyMarket:false});if(this.readOnly)tool='select';this.snapPreview=null;this.lastPathClick=null;if(this.period==='day'&&this.hoverDayKey){this.hoverDayKey=null;this.callbacks.hoverDay?.(null);}if(this.drag)this.cancelGesture();this.closeTextEditor();this.closeTitleEditor();this.cancelPath({render:false});this.placementPreview=null;this.tool=tool;this.toolDirection=['long','short'].includes(options.direction)?options.direction:null;this.toolName=options.name||null;this.setDrawingStyle({color:options.color,width:options.width,line_style:options.line_style,opacity:options.opacity},{render:false});this.hoverPath=null;this.pathControl=null;this.insertWave=null;this.draft=null;this.host.style.cursor=tool==='pan'?'grab':tool==='select'?'default':'crosshair';this.render();}
+    setDrawingStyle(options={}, {render=true}={}){
+      if(Object.hasOwn(options,'color'))this.toolColor=options.color||null;
+      if(Object.hasOwn(options,'width'))this.toolWidth=finite(Number(options.width))&&Number(options.width)>0?Number(options.width):2;
+      if(Object.hasOwn(options,'line_style'))this.toolLineStyle=['solid','dashed'].includes(options.line_style)?options.line_style:null;
+      if(Object.hasOwn(options,'opacity'))this.toolOpacity=drawingOpacity(options.opacity);
+      // Toolbar changes style only the draft. Existing object previews retain their own properties.
+      if(render)this.render();
+    }
+    drawingStyle(kind=this.tool){return{color:this.toolColor||'#f1c40f',width:this.toolWidth||2,line_style:this.toolLineStyle||(kind==='reference'?'dashed':'solid'),opacity:drawingOpacity(this.toolOpacity)};}
     fit(includeDrawings=false){
       this.followLatest=true;this.viewCustomized=false;this.autoPrice=!includeDrawings;
       const drawings=(this.plan.objects||[]).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period)),levels=includeDrawings?[this.plan.entry_low,this.plan.entry_high,this.plan.stop_price,this.plan.planned_entry_price,this.plan.main_level,this.plan.trigger_price,this.plan.obstacle_price,...drawings.flatMap(object=>object.points.map(point=>point.price))]:[];
@@ -421,7 +430,7 @@
         this.lastDrawingClick={x:point.x,y:point.y,at:now};this.path.push(this.forecastPoint(this.toValue(point,false,this.tool==='wave')));
         this.callbacks.draftChanged?.({period:this.period,count:this.path.length});this.render();return;
       }
-      if(this.tool==='horizontal'){this.callbacks.add?.({kind:'horizontal',name:'水平线',points:[value],color:'#f1c40f',opacity:this.toolOpacity,period:'all'});return;}
+      if(this.tool==='horizontal'){this.callbacks.add?.({kind:'horizontal',name:'水平线',points:[value],...this.drawingStyle(),period:'all'});return;}
       if(this.tool==='segment'){const origin=this.toValue(point,false);this.drag={kind:'new-segment',origin,point:origin,pointerId:event.pointerId};this.render();return;}
       if(this.tool==='text'){this.openTextEditor(this.toValue(point,false,true),point);return;}
       if(['trend','reference'].includes(this.tool)){this.snapPreview=this.snapTarget(point);this.drag={kind:'new-line',lineKind:this.tool,origin:value,point:value,pointerId:event.pointerId};this.render();return;}
@@ -494,8 +503,8 @@
       if(drag.kind==='place-level'){this.placementPreview=null;this.callbacks.previewLevel?.(null,null);this.callbacks.placeLevel?.(drag.field,drag.price);}
       else if(drag.kind==='plan-level'){const commit=levelCommit(drag);this.callbacks.dragLevel?.(drag.field,Object.hasOwn(commit,drag.field)?commit[drag.field]:drag.originPrice,{phase:Object.hasOwn(commit,drag.field)?'end':'cancel'});}
       else if(drag.kind==='new-zone'){if(Math.abs(drag.origin.price-drag.point.price)>=this.tick&&Math.abs(drag.origin.time-drag.point.time)>INTERVAL[this.period]/4)this.callbacks.add?.({kind:'zone',name:'危险区',zone_type:'danger',effect:'block',direction:'both',period:this.period,points:[drag.origin,drag.point],opacity:this.toolOpacity});}
-      else if(drag.kind==='new-line'){if(Math.hypot(drag.origin.time-drag.point.time,drag.origin.price-drag.point.price)>0)this.callbacks.add?.({kind:drag.lineKind,name:drag.lineKind==='trend'?'趋势线':'参考线',period:'all',points:[drag.origin,drag.point],color:'#f1c40f',opacity:this.toolOpacity,line_style:drag.lineKind==='reference'?'dashed':'solid'});}
-      else if(drag.kind==='new-segment'){if(Math.abs(this.tx.x(drag.origin.time)-this.tx.x(drag.point.time))>=3)this.callbacks.add?.({kind:'segment',name:'水平线段',period:this.period,points:[drag.origin,drag.point],opacity:this.toolOpacity});}
+      else if(drag.kind==='new-line'){if(Math.hypot(drag.origin.time-drag.point.time,drag.origin.price-drag.point.price)>0)this.callbacks.add?.({kind:drag.lineKind,name:drag.lineKind==='trend'?'趋势线':'参考线',period:'all',points:[drag.origin,drag.point],...this.drawingStyle(drag.lineKind)});}
+      else if(drag.kind==='new-segment'){if(Math.abs(this.tx.x(drag.origin.time)-this.tx.x(drag.point.time))>=3)this.callbacks.add?.({kind:'segment',name:'水平线段',period:this.period,points:[drag.origin,drag.point],...this.drawingStyle('segment')});}
       else if(drag.kind==='object'&&drag.moved){const preview=this.objectDragPreview(drag);if(preview)this.callbacks.update?.(drag.object.id,{points:preview.points});}this.render();
       this.snapPreview=null;const point=this.point(event),inside=point.x>=this.plot.x&&point.x<=this.plot.x+this.plot.w&&point.y>=this.plot.y&&point.y<=this.plot.y+this.plot.h;this.clearPresence(inside?this.toValue(point,false,true):null);this.applyPendingMarket();
     }
@@ -507,7 +516,7 @@
       event?.preventDefault();if(!['path','wave'].includes(this.tool)||this.path.length<2)return false;
       const points=this.path.filter((point,index,array)=>!index||point.time!==array[index-1].time||point.price!==array[index-1].price);
       if(points.length<2){this.cancelPath();return false;}
-      const object={kind:this.tool,name:this.toolName||'预期走势',period:this.period,points:this.tool==='wave'?wavePoints(points):points,locked:false,color:this.toolColor||'#f1c40f',opacity:this.toolOpacity,note:'手工预期走势，按时间和价格固定'};
+      const object={kind:this.tool,name:this.toolName||'预期走势',period:this.period,points:this.tool==='wave'?wavePoints(points):points,locked:false,...this.drawingStyle(),note:'手工预期走势，按时间和价格固定'};
       // add may synchronously choose another tool; clear before calling it.
       this.cancelPath({render:false});this.callbacks.add?.(object);this.render();return true;
     }
@@ -558,9 +567,9 @@
       const editable=this.levelGeometry();if(priceNumber(shown.planned_entry_price)&&priceNumber(shown.stop_price)){const top=Math.min(tx.y(shown.planned_entry_price),tx.y(shown.stop_price)),bottom=Math.max(tx.y(shown.planned_entry_price),tx.y(shown.stop_price)),bandX=Math.max(plot.x,Math.min(plot.x+plot.w*.7,tx.x(last.time))),valid=validStopSide(shown.direction,shown.planned_entry_price,shown.stop_price);planLayer.append(createSVG('rect',{'data-plan-overlay':'risk-fill',x:bandX,y:top,width:plot.x+plot.w-bandX,height:Math.max(1,bottom-top),fill:valid?'#c78951':'#e46261','fill-opacity':'.07','pointer-events':'none'}));}for(const level of editable){const active=this.drag?.field===level.field||this.hoverLevel===level.field,color=level.field==='planned_entry_price'?(priceNumber(shown.stop_price)?(shown.direction==='short'?'#22c55e':'#ef5350'):'#6ca9d4'):'#d7ac66';planLayer.append(createSVG('line',{'data-plan-overlay':level.field,x1:plot.x,y1:level.y,x2:plot.x+plot.w,y2:level.y,stroke:color,'stroke-width':active?2.4:1.4,'stroke-dasharray':level.field==='stop_price'?'6 3':''}),createSVG('text',{x:plot.x+5,y:level.y-5,fill:color,'font-size':10},level.field==='planned_entry_price'?'入场':'止损'));}
       for(const object of this.objects())this.drawObject(layer,this.drag?.object?.id===object.id&&this.drag.preview?this.drag.preview:object);
       if(this.drag?.kind==='new-zone')this.drawObject(layer,{kind:'zone',name:'危险区',zone_type:'danger',effect:'block',direction:'both',points:[this.drag.origin,this.drag.point],opacity:this.toolOpacity});
-      if(this.drag?.kind==='new-line')this.drawObject(layer,{kind:this.drag.lineKind,name:this.drag.lineKind==='trend'?'趋势线':'参考线',points:[this.drag.origin,this.drag.point],color:'#f1c40f',opacity:this.toolOpacity});
-      if(this.drag?.kind==='new-segment')this.drawObject(layer,{kind:'segment',points:[this.drag.origin,this.drag.point],width:2,color:'#f1c40f',opacity:this.toolOpacity});
-      if(this.path.length)this.drawObject(layer,{kind:'path',name:'计划路径',points:this.path,color:'#f1c40f',opacity:this.toolOpacity});
+      if(this.drag?.kind==='new-line')this.drawObject(layer,{kind:this.drag.lineKind,name:this.drag.lineKind==='trend'?'趋势线':'参考线',points:[this.drag.origin,this.drag.point],...this.drawingStyle(this.drag.lineKind)});
+      if(this.drag?.kind==='new-segment')this.drawObject(layer,{kind:'segment',points:[this.drag.origin,this.drag.point],...this.drawingStyle('segment')});
+      if(this.path.length)this.drawObject(layer,{kind:this.tool,name:this.toolName||'预期走势',points:this.path,...this.drawingStyle()});
       if(last){const y=tx.y(last.close);layer.append(createSVG('line',{x1:plot.x,y1:y,x2:plot.x+plot.w,y2:y,'pointer-events':'none',stroke:last.close>=last.open?'#a54e4b':'#16a34a','stroke-dasharray':'2 3','stroke-width':.7}));if(y>=plot.y&&y<=plot.y+plot.h)this.svg.append(createSVG('rect',{x:plot.x+plot.w+1,y:y-8,width:61,height:16,fill:last.close>=last.open?'#9e4542':'#16a34a'}),createSVG('text',{x:plot.x+plot.w+5,y:y+3,fill:'#fff','font-size':10},priceLabel(last.close,this.tick)));}
       this.drawIndicators(tx,plot,body);
       if(this.crosshair&&!this.drag){const point=this.crosshair;if(point.x>=plot.x&&point.x<=plot.x+plot.w&&point.y>=plot.y&&point.y<=plot.y+plot.h){const crossX=point.x,crossY=point.y;layer.append(createSVG('line',{'pointer-events':'none','data-crosshair':'vertical',x1:crossX,y1:plot.y,x2:crossX,y2:plot.y+plot.h,stroke:'#657686','stroke-dasharray':'2 3','stroke-width':.6}),createSVG('line',{'pointer-events':'none','data-crosshair':'horizontal',x1:plot.x,y1:crossY,x2:plot.x+plot.w,y2:crossY,stroke:'#657686','stroke-dasharray':'2 3','stroke-width':.6}));this.svg.append(createSVG('rect',{x:plot.x+plot.w+1,y:crossY-8,width:61,height:16,fill:'#35424e'}),createSVG('text',{x:plot.x+plot.w+5,y:crossY+3,fill:'#d6dde3','font-size':10},priceLabel(tx.price(crossY),this.tick)));}}

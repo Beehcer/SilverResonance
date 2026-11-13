@@ -60,7 +60,7 @@
 
   // targetId must identify an open pane even in single-pane mode. An outside
   // drop has no target and must neither add a pane nor steal the active pane.
-  function dropSymbol(state, symbol, targetId, symbolIds) {
+  function dropSymbol(state, symbol, targetId, symbolIds, placement = 'bottom') {
     const known = knownSymbols(symbolIds), next = normalize(state, known);
     if (!known.includes(symbol) || !next.panes.some(pane => pane.id === targetId)) return next;
     const existing = next.panes.find(pane => pane.symbol === symbol);
@@ -70,7 +70,10 @@
     }
     if (next.panes.length === 1) {
       const id = PANE_IDS.find(candidate => !next.panes.some(pane => pane.id === candidate));
-      next.panes.push({id, symbol});
+      // Position is presentation only: the original pane keeps its identity,
+      // chart state and data even when the new pane is inserted above it.
+      if (placement === 'top') next.panes.unshift({id, symbol});
+      else next.panes.push({id, symbol});
       next.activeId = id;
     } else {
       next.panes.find(pane => pane.id === targetId).symbol = symbol;

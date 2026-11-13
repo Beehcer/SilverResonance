@@ -89,11 +89,9 @@
   .opacity-inputs input[type=range]:focus-visible::-webkit-slider-thumb{outline-color:Highlight}
   .opacity-inputs input[type=range]:focus-visible::-moz-range-thumb{outline-color:Highlight}
 }
-.opacity-inputs>span,.draw-opacity>span{display:inline-flex;align-items:center;gap:3px;flex:none}
-.opacity-inputs input[type=number],.draw-opacity input[type=number]{width:57px;box-sizing:border-box;min-width:0;text-align:right}
+.opacity-inputs>span{display:inline-flex;align-items:center;gap:3px;flex:none}
+.opacity-inputs input[type=number]{width:57px;box-sizing:border-box;min-width:0;text-align:right}
 .plan-opacity-field{margin:10px 0;color:#b9c5d0;font-size:12px}
-.drawing-options .draw-opacity{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:11px;color:#b9c5d0}
-.drawing-options .draw-opacity input{height:23px;padding:2px 3px}
 body{user-select:none;-webkit-user-select:none}
 input,textarea,select,[contenteditable=""],[contenteditable=true],[contenteditable=plaintext-only],[contenteditable=""] *,[contenteditable=true] *,[contenteditable=plaintext-only] *{user-select:text;-webkit-user-select:text}
 .quote-row{user-select:none;-webkit-user-select:none}
@@ -117,6 +115,15 @@ input,textarea,select,[contenteditable=""],[contenteditable=true],[contenteditab
 .chart-grid{position:relative}
 .market-loading{position:absolute;z-index:18;top:64px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;width:max-content;max-width:calc(100% - 32px);padding:14px 18px;border:1px solid #425865;border-radius:6px;background:rgba(18,29,37,.96);box-shadow:0 5px 24px #0006;pointer-events:auto}
 .market-loading strong{color:#e1edf5;font-size:13px}.market-loading p{margin:5px 0 0;color:#9db4c4;font-size:12px;line-height:1.6;white-space:pre-line}
+.market-loading progress{display:block;width:100%;height:4px;margin-top:9px;border:0;accent-color:#d8b64e;background:#273943;border-radius:3px;overflow:hidden}.market-loading progress::-webkit-progress-bar{background:#273943}.market-loading progress::-webkit-progress-value{background:#d8b64e;transition:width .2s ease}
+/* One short flash per observed price/update, never a simulated live ticker. */
+.price-tick-up,.price-tick-down{border-radius:2px;animation-duration:650ms;animation-timing-function:ease-out;animation-iteration-count:1;font-variant-numeric:tabular-nums}.price-tick-up{animation-name:quote-rise}.price-tick-down{animation-name:quote-fall}
+@keyframes quote-rise{0%,24%{color:#ff8c85;background:#a33e3855;box-shadow:0 0 8px #ef535044}100%{background:transparent;box-shadow:none}}
+@keyframes quote-fall{0%,24%{color:#62e89d;background:#216c4355;box-shadow:0 0 8px #22c55e44}100%{background:transparent;box-shadow:none}}
+.feed-indicator{display:inline-block;vertical-align:middle;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:#73818d}.feed-indicator[data-feed-state=live]{background:#55c795}.feed-indicator[data-feed-state=stale],.feed-indicator[data-feed-state=disconnected]{background:#d9a354}
+.live-update-pulse{animation:feed-update 650ms ease-out 1}@keyframes feed-update{0%,30%{filter:brightness(1.65);box-shadow:0 0 0 4px #55c79522}100%{filter:none;box-shadow:none}}
+.notice-market-state{display:inline-block;border-radius:2px}.notice-market-state[data-feed-state=live]::before{content:"";display:inline-block;vertical-align:middle;width:6px;height:6px;margin:0 7px 1px 0;border-radius:50%;background:#55c795}
+@media(prefers-reduced-motion:reduce){.price-tick-up,.price-tick-down,.live-update-pulse{animation:none}.market-loading progress::-webkit-progress-value{transition:none}}
 .market-loading[data-error=true]{border-color:#a27a2d}.market-loading[data-error=true] .loading-spinner{animation:none;border-color:#ba913d}
 .loading-spinner{flex:none;width:18px;height:18px;border:2px solid #425865;border-top-color:#f1c40f;border-radius:50%;animation:market-spin 1s linear infinite}
 @keyframes market-spin{to{transform:rotate(360deg)}}
