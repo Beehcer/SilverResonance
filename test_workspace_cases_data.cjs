@@ -14,15 +14,37 @@ test('first entry teaches 2B without inventing an entry permission or assigning 
  assert.deepEqual(c.steps.map(s=>s.key),['reference','breach','reclaim']);
  assert.equal(D.coverage.examples,28);assert.equal(D.coverage.concepts,1);
 });
-test('2B definition shows a real 100 reference, later 98 breach, and reclaim without future candles',()=>{
- const c=D.cases[0],chart=c.charts.m30,bars=chart.bars;
- assert.deepEqual(Object.keys(c.charts),['m30']);
- assert.equal(bars[2].low,100);assert.ok(bars[1].low>100&&bars[3].low>100);
- assert.ok(bars.slice(3,6).every(b=>b.low>100));assert.equal(bars[6].low,98);assert.ok(bars[6].close<100);
- assert.ok(bars[7].close>100);assert.equal(bars[7].closedAt,c.evidence.cutoff);
- for(const b of bars){assert.ok(b.low<=Math.min(b.open,b.close));assert.ok(b.high>=Math.max(b.open,b.close));assert.equal(b.completed,true);}
- assert.deepEqual(chart.lines.map(l=>l.points[0].price),[100,98]);
- assert.ok(chart.lines.every(l=>l.role==='key'));assert.deepEqual(chart.nodes,[]);assert.deepEqual(chart.zones,[]);
+test('2B definition establishes the prior low before its breach and reclaim without later results',()=>{
+ const c=D.cases[0],a=c.aggregation,bars=c.charts.m3.bars;
+ assert.deepEqual(Object.keys(c.charts),['m3','m30']);
+ assert.ok(a.referenceIndex<a.startIndex);assert.equal(bars[a.referenceIndex].low,a.reference);
+ assert.ok(bars[a.referenceIndex-1].low>a.reference&&bars[a.referenceIndex+1].low>a.reference);
+ assert.ok(bars.slice(a.referenceIndex+1,a.breachIndex).every(b=>b.low>a.reference));
+ assert.ok(bars[a.breachIndex].close<a.reference);assert.equal(bars[a.lowIndex].low,98);
+ assert.ok(bars.slice(a.breachIndex,a.reclaimIndex).every(b=>b.close<a.reference));
+ assert.ok(bars[a.reclaimIndex].close>a.reference);assert.equal(bars.at(-1).closedAt,c.evidence.cutoff);
+ for(const chart of Object.values(c.charts)){
+  for(const b of chart.bars){assert.ok(b.low<=Math.min(b.open,b.close));assert.ok(b.high>=Math.max(b.open,b.close));assert.equal(b.completed,true);assert.ok(Date.parse(b.closedAt)<=Date.parse(c.evidence.cutoff));}
+  assert.ok(chart.lines.every(l=>l.role==='key'));assert.deepEqual(chart.nodes,[]);assert.deepEqual(chart.zones,[]);
+ }
+ assert.match(c.avoid.join(' '),/只有长下影线不够/);assert.match(c.avoid.join(' '),/不是直接买点/);
+ assert.match(c.assumptions.join(' '),/跨多根收回，不一定是一根针/);
+});
+test('the upper-period pin is an exact aggregation of ten consecutive 3-minute candles',()=>{
+ const c=D.cases[0],a=c.aggregation,source=c.charts[a.sourcePeriod].bars.slice(a.startIndex,a.endIndex+1),target=c.charts[a.targetPeriod].bars;
+ assert.equal(source.length,10);assert.equal(target.length,1);
+ for(let i=0;i<source.length;i++){
+  assert.equal(Date.parse(source[i].closedAt)-Date.parse(source[i].dt),3*60000);
+  if(i)assert.equal(source[i].dt,source[i-1].closedAt);
+ }
+ const pin=target[0];
+ assert.equal(pin.dt,source[0].dt);assert.equal(pin.closedAt,source.at(-1).closedAt);
+ assert.equal(Date.parse(pin.closedAt)-Date.parse(pin.dt),30*60000);
+ assert.equal(pin.open,source[0].open);assert.equal(pin.close,source.at(-1).close);
+ assert.equal(pin.high,Math.max(...source.map(b=>b.high)));assert.equal(pin.low,Math.min(...source.map(b=>b.low)));
+ assert.equal(pin.volume,source.reduce((sum,b)=>sum+b.volume,0));assert.equal(pin.low,98);
+ assert.ok(pin.open>a.reference&&pin.close>a.reference);
+ assert.ok(Math.min(pin.open,pin.close)-pin.low>5*Math.abs(pin.close-pin.open));
 });
 test('catalog covers every designed family in both directions and keeps feature tags under one main mode',()=>{
  assert.equal(tradingCases.length,28);assert.equal(new Set(tradingCases.map(c=>c.id)).size,28);

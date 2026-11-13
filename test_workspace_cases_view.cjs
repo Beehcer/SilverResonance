@@ -1,13 +1,19 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const V=require('./static/workspace-cases.js'),D=require('./static/workspace-cases-data.js');
 const tradingCases=D.cases.filter(c=>!c.educational);
-test('2B definition renders its actual 100 and 98 levels without an entry line or future target',()=>{
-  const c=D.cases[0],chart=c.charts.m30,svg=V.chartSvg(chart,'m30',{id:c.id,direction:c.direction});
-  assert.doesNotMatch(svg,/NaN|Infinity|undefined/);
-  assert.equal((svg.match(/data-bar=/g)||[]).length,8);
-  assert.match(svg,/100/);assert.match(svg,/98/);
-  assert.doesNotMatch(svg,/data-case-wave="conditional"|data-case-node="4"|入场 [\d,.]+|止损 [\d,.]+|已完成触发/);
-  assert.equal(V.filterCases(D.cases,{query:'先认识 2B'})[0],c);
+test('2B comparison shows the same support in both periods and only the aggregated pin on the right',()=>{
+  const c=D.cases[0],small=V.conceptChartSvg(c,'m3'),large=V.conceptChartSvg(c,'m30');
+  for(const svg of [small,large]){
+    assert.doesNotMatch(svg,/NaN|Infinity|undefined/);
+    assert.match(svg,/100/);assert.match(svg,/98/);
+    assert.doesNotMatch(svg,/data-case-wave="conditional"|data-case-node="4"|入场 [\d,.]+|止损 [\d,.]+|已完成触发|证[123]/);
+  }
+  assert.equal((small.match(/data-bar=/g)||[]).length,c.charts.m3.bars.length);
+  assert.equal((large.match(/data-bar=/g)||[]).length,1);
+  const support=svg=>svg.match(/<line x1="22" x2="495" y1="([^"]+)"/)[1];
+  assert.equal(support(small),support(large));
+  assert.match(large,/长下影针/);assert.match(small,/同一段30分钟/);
+  assert.equal(V.filterCases(D.cases,{query:'2B：先突破'})[0],c);
   assert.ok(!V.filterCases(D.cases,{mode:'reversal_a'}).includes(c));
 });
 

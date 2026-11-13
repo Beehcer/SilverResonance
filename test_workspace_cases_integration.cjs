@@ -42,12 +42,12 @@ test('the introductory definition never inherits executable entry controls or la
   Cases.Controller.prototype.renderCase.call(controller);
   assert.equal(chartCase,concept);
   assert.match(content.innerHTML,/2B = 突破失败 = 原方向依据减弱；<\/strong><b>不等于行情一定反转/);
-  assert.match(content.innerHTML,/概念教学 · 非开仓信号/);
-  assert.doesNotMatch(content.innerHTML,/按本例预设条件可入场|示例入场|保护止损|cases-price-strip|cases-risk|class="long"/);
-  assert.equal((content.innerHTML.match(/data-period=/g)||[]).length,1);
-  const svg=Cases.chartSvg(concept.charts.m30,'m30',{direction:concept.direction,id:concept.id});
+  assert.match(content.innerHTML,/2B 入门/);
+  assert.doesNotMatch(content.innerHTML,/示例条件已满足|示例入场|保护止损|cases-price-strip|cases-risk|class="long"/);
+  assert.equal((content.innerHTML.match(/data-period=/g)||[]).length,2);
+  const svg=Cases.conceptChartSvg(concept,'m30');
   assert.doesNotMatch(svg,/编号4为条件预期|已完成触发/);
   controller.selected=data.cases[1].id;
   Cases.Controller.prototype.renderCase.call(controller);
-  assert.match(content.innerHTML,/按本例预设条件可入场/);
+  assert.match(content.innerHTML,/示例条件已满足/);
 });
