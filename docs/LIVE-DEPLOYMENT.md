@@ -8,9 +8,9 @@
 
 - 服务器：47.96.180.144，使用既有宝塔 Nginx。
 - DNS：阿里云，resonance A 记录指向服务器，TTL 600。
-- 源码版本：`/opt/SilverResonance/releases/20261113-6776b4710359`，运行代码提交 `77c858e`；交易分钟分段和固定预测线基准、文本自由拖动、绘制操作浮层，以及塑料/棕榈/聚丙烯共19品种；保留手机只读协作与自动备份。
+- 源码版本：`/opt/SilverResonance/releases/20261113-8b313c03d590`，运行代码提交 `07bda9a`，Git 标签 `workspace-major-fix-20261113`；完整双品种、全屏双侧栏收展、精简标题、个人分组与碳酸锂共20品种；保留交易分钟固定基准、手机只读协作与自动备份。
 - 当前版本链接：`/opt/SilverResonance/current`。
-- 镜像：`silver-resonance:20261113-6776b4710359`。
+- 镜像：`silver-resonance:20261113-8b313c03d590`。
 - 容器：`silver-resonance-workspace-1`，单进程，监听 `127.0.0.1:8850`，自动重启。
 - 配置与真实计划：`/var/lib/SilverResonance`，专用 UID 10001，仅该用户可读写。
 - 规则文件：`/etc/SilverResonance/trading-system.md`。
@@ -21,6 +21,22 @@
 - 依赖快照：`/opt/SilverResonance/staging/dependencies.lock.txt`。
 
 本机原来的真实行情进程已停止，避免同一账号重复连接。原 `127.0.0.1:8850` 地址在本机转跳线上工作台；该转跳进程只在本机运行时有效。长期请收藏 HTTPS 地址，或使用仓库根目录的 `打开在线工作台.bat`。模拟计划仍保留在本地 `state/workspace-preview.json`，未套用到真实价格。
+
+## 2026-11-13 18:38 双品种重大修正版
+
+用户授权同步线上、提交 Git，并追加删除整行计划管理入口、上移图表布局切换。发布 `20261113-8b313c03d590`，代码 `07bda9a`，已推送 `main` 与重大修正版标签。60个运行文件加清单，ZIP 344557字节，SHA-256 `8b313c03d590ac1877239790a22c1916e162b13bd17d81d57791137b625fc319`。
+
+- 桌面默认完整工作台，拖入第二品种上下排列；小 × 关闭单窗。全屏保留双窗、左右栏默认收起、边缘按钮独立展开，切换不重置侧栏。整行计划选择/新建/复制/归档入口不占高度，布局切换移到品种标题栏；已有计划和入场/止损内容保留。
+- 正式页面接入原行情/API/session/state，未发布样板服务、模拟行情或本地数据。手机继续原单窗只读。首次启动先建立身份，浏览器布局按身份隔离；默认/喜爱新组为空，已有分组成员保留，初始显示全部。显式默认计划链接 `board=` 可覆盖以前选过的预案，避免误开其他计划。
+- 停写最终备份 `/var/backups/SilverResonance/20261113-8b313c03d590/data-before-update.tgz`，SHA-256 `595f854cfae839ffbea820ce12cbfcbb84627b1ac0662fb91b02828b62c90545`。7个文件逐项校验，28计划、76图层、8固定行情基准全部保留，后检没有版本或内容变化。Nginx、规则、行情配置、挂载及1792MiB限额均保持原样。
+- 新旧镜像均只读验证当前schema 2，`workspace_store.py`、`workspace_market.py`、`workspace_candles.py`与上一版逐字节相同。保留 `20261113-6776b4710359` 镜像及目录作为本次代码回退版本；回退必须再次验证最新数据兼容，不能解包恢复旧计划或退回11月12日旧schema代码。本次未执行回退。
+- 唯一行情连接于18:37:51确认20品种，碳酸锂真实主力为 `GFEX.lc2701`。公网甲醇/纸浆三周期分别180/2352/10000和180/2364/10000根，`source=live`、`connected=true`、缓存检查有效；休市 `feed_status=idle`，未冒充当前成交。两品种事件流的合约与计划scope分别正确。
+- 本地Python执行627项，624通过、3项平台条件跳过；JavaScript540项通过，独立持仓量脚本9项通过；发布控制脚本11项离线检查通过。另完整样板48项回归通过。本地真实浏览器验证双窗拖入、切换、全屏收展、计划行高度0、布局按钮上移，两窗标题高度均40px，控制台无错误。
+- 公网23个资源逐项与发布包一致（两份动态脚本按服务端文本读取的换行规则生成后核对）；会话、20品种、两品种行情及事件流通过。首轮资源校验误将ZIP中的CRLF直接作为生成脚本输入，修正校验器后通过，没有因此修改已发布代码。
+- 公网浏览器成功读取新版完整页面及真实行情，计划管理行未出现、布局入口在标题栏；后续自动交互连接多次超时，未声称完成公网双窗逐项交互复验。可视验收截图 `backtest/dual-major-compact-preview.png` 是本地隔离模拟页面，不能当作线上成交截图。
+- 最后后检：healthy、零重启、无OOM、无Python异常/HTTP500；容器526.8MiB/1.75GiB，宿主可用约1.19GiB，CPU单次1.91%。自动备份正常，40修改+10定时。此为发布后采样，不是全品种并发压力测试。
+
+已有页面等待“已同步”后刷新加载新版。后检结果位于本地 `backtest/dual-release-public-result.json`、`backtest/postcheck-dual.log`；发布脚本与私有备份记录留在服务器staging及受保护备份目录，不进入公开源码。
 
 ## 2026-11-13 交易分钟、绘图交互与19品种发布
 
@@ -203,7 +219,8 @@
 
 ```sh
 cd /opt/SilverResonance/current
-export SILVER_RELEASE=20261112-367d88ebb6b5
+. /opt/SilverResonance/release.env
+export SILVER_RELEASE
 docker compose -f deploy/compose.yaml -f /etc/SilverResonance/compose.runtime.yaml ps
 curl --fail --silent http://127.0.0.1:8850/healthz
 docker stats --no-stream silver-resonance-workspace-1
