@@ -145,7 +145,7 @@
       this.closeChartZoom(false);
       this.categoryState[this.category]={filters:{...this.filters},selected:this.selected,stage:this.stage,scroll:this.content.scrollTop,bodyScroll:this.dialog.querySelector('.cases-body').scrollTop,listScroll:this.list.scrollTop};
       this.category=category;const saved=this.categoryState[category];
-      this.filters=saved?.filters||{query:'',mode:'',direction:'',family:''};this.selected=saved?.selected||catalog(this)[0]?.id;this.stage=saved?.stage||'all';
+      this.filters=saved?.filters||{query:'',mode:'',direction:'',family:''};this.selected=saved?saved.selected:catalog(this)[0]?.id;this.stage=saved?.stage||'all';
       this.dialog.querySelectorAll('[data-category]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.category===category)));
       this.dialog.querySelector('.cases-total').textContent=catalog(this).length+' 项图解';
       const search=this.dialog.querySelector('input[type=search]');search.value=this.filters.query;search.placeholder=category==='trend'?'搜索选点、破线、周期…':'搜索结构、2B、孕线…';

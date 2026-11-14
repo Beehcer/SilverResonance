@@ -15,6 +15,11 @@
     const c=WorkspaceCases.mount({button:document.querySelector('#open'),getRules:()=>({available:true,version:WorkspaceCasesData.source.sha256})});
     await c.open();
     check(c.category==='candles'&&c.selected==='2b-definition','default Kline catalog');
+    const emptySearch=c.dialog.querySelector('input[type=search]');
+    emptySearch.value='__no_matching_case__';emptySearch.dispatchEvent(new Event('input'));
+    c.switchCategory('trend');c.switchCategory('candles');
+    check(c.selected===undefined&&c.filtered().length===0&&!c.content.querySelector('svg'),'empty result stays empty after category restore');
+    emptySearch.value='';emptySearch.dispatchEvent(new Event('input'));
     for(const category of ['candles','trend']){
       c.dialog.querySelector('[data-category='+category+']').click();
       for(const item of WorkspaceCases.catalog(c)){
