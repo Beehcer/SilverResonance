@@ -35,6 +35,7 @@ import workspace_store
 import workspace_api
 import workspace_web
 from workspace_market import MAX_APPEND_BARS, WorkspaceMarketCache, data_length_for_period
+from workspace_history import WorkspaceHistoryArchive
 
 _trading_store = trading.TradingStore(os.path.join(user_settings.app_dir(), "state", "trading_state.json"))
 _board_demo_store = board_demo.SharedPlanStore(os.path.join(user_settings.app_dir(), "state", "plan_board_demo.json"))
@@ -46,6 +47,8 @@ _workspace_market = WorkspaceMarketCache(allowed_symbols=lambda: [preset["symbol
     reference_loader=lambda symbol: _workspace_store.candle_reference(symbol))
 _workspace_quote_lock = threading.Lock()
 _workspace_live_quotes = {}
+_workspace_history = WorkspaceHistoryArchive(os.path.join(user_settings.app_dir(), "state", "market-history"))
+_workspace_history_publisher = None
 
 
 def _resource_dir():
@@ -1883,13 +1886,19 @@ def apply_user_settings():
 
 def start_data_thread():
     """启动行情线程 + 基本面后台线程（各只启动一次）。"""
-    global _data_thread
+    global _data_thread, _workspace_history_publisher
     with _thread_lock:
         if _data_thread and _data_thread.is_alive():
             return
         target = _mock_loop if config.MOCK_MODE else _tqsdk_loop
         _data_thread = threading.Thread(target=target, daemon=True)
         _data_thread.start()
+        if not config.MOCK_MODE and _workspace_history_publisher is None:
+            from workspace_history_oss import configure_history_publication
+            _workspace_history_publisher = configure_history_publication(
+                _workspace_history, os.path.join(user_settings.app_dir(), "history-oss.json"),
+                snapshot_provider=lambda: (_workspace_market_provider(symbol)
+                                           for symbol in _workspace_market.requested()))
     fundamentals.start()
 
 
@@ -2298,7 +2307,19 @@ def _workspace_market_provider(symbol, history_token=None, preview=False):
     market["setup_required"] = state.get("boot_phase") == "need_config"
     if market["setup_required"]:
         market["message"] = "主机尚未配置行情来源 · 主机可打开 /setup 完成配置，协作成员无需行情账号"
+    if preview and not all(market["periods"].values()):
+        cached = _workspace_history.preview(symbol, source="mock" if config.MOCK_MODE else "live",
+                                            expected_reference_id=market.get("anchor_reference_id"))
+        if cached:
+            cached["setup_required"] = market["setup_required"]
+            return cached
     return market
+
+
+def _workspace_market_bootstrap_provider(symbol):
+    # Capture once: the tail, immutable history and opaque incremental cursor
+    # must describe the same snapshot even while the producer advances.
+    return _workspace_history.bootstrap(_workspace_market_provider(symbol))
 
 
 def _workspace_quotes_provider():
@@ -2332,7 +2353,9 @@ workspace_api.register_workspace(app, _workspace_store, _workspace_market_provid
                                  _workspace_symbols_provider, workspace_rules.rule_manifest,
                                  workspace_rules.evaluate_plan, _workspace_quotes_provider,
                                  market_incremental_provider=_workspace_market_provider,
-                                 market_preview_provider=lambda symbol: _workspace_market_provider(symbol, preview=True))
+                                 market_preview_provider=lambda symbol: _workspace_market_provider(symbol, preview=True),
+                                 market_bootstrap_provider=_workspace_market_bootstrap_provider,
+                                 market_history_provider=_workspace_history.read_block)
 
 
 def _open_browser_later():

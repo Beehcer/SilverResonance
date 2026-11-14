@@ -4,6 +4,8 @@
   const KEY = 'resonance-workspace-dual-layout-v1:';
   let layoutKey = KEY;
   const frames = new Map();
+  // Public market data outlives individual panes; drafts and shared plans do not.
+  window.WorkspaceMarketHub = new WorkspaceHistoryCache.Hub();
   let startupOpened = false;
   let symbols = [], ids = [], state, busy = false, drag = null, animation = 0, toastTimer;
   // A temporary view of this browser page, never part of the saved/shared plan.

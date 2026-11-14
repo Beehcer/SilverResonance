@@ -8,6 +8,8 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
+from workspace_history import six_month_cutoff
+
 TZ = timezone(timedelta(hours=8))
 PERIODS = {"day": 86400, "m30": 1800, "m3": 180}
 RETENTION_BARS = {86400: 180, 1800: 6000, 900: 10000, 180: 10000}
@@ -332,6 +334,22 @@ class WorkspaceMarketCache:
                 entries["m30"] = self.data.get((symbol, "trade_m30"), {})
             reference = self.references.get(symbol) if not simulated else None
             coverage = self.coverage.get(symbol)
+            current_reference_id = self.reference_ids.get(symbol) if reference else None
+        # Apply the six-calendar-month display boundary before creating the
+        # cursor. Keep source serials and the fixed drawing reference untouched:
+        # both are needed to validate SDK tails and old annotation coordinates.
+        cutoff = six_month_cutoff(now)
+        for key, cached in entries.items():
+            rows = cached.get("bars", [])
+            if rows and timestamp(rows[0]["dt"]) < cutoff:
+                low, high = 0, len(rows)
+                while low < high:
+                    middle = (low + high) // 2
+                    if timestamp(rows[middle]["dt"]) < cutoff:
+                        low = middle + 1
+                    else:
+                        high = middle
+                entries[key] = {**cached, "bars": rows[low:]}
         token, starts, drops = self._cursor(symbol, entries, history_token) if not preview else (None, None, None)
         incremental = starts is not None
         counts = {}
@@ -388,13 +406,14 @@ class WorkspaceMarketCache:
             "feed_status": feed_status,
             "quote_at": freshness["m3"]["quote_at"], "periods": periods, "freshness": freshness,
             "history_token": token, "incremental": incremental, "period_counts": counts,
+            "history_retention": {"months": 6, "cutoff": iso(cutoff)},
             "message": message,
         }
         if incremental:
             result.update(base_history_token=history_token, period_drops=drops)
         if reference:
             result["candle_basis"] = {"m30": "trading_minutes_v1"}
-            result["anchor_reference_id"] = self.reference_ids[symbol]
+            result["anchor_reference_id"] = current_reference_id
             result["history_coverage"] = {"m30": dict(coverage or {})}
             if not incremental:
                 result["anchor_reference"] = {"m30": reference}

@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const Model = require('./static/workspace-dual-model.js');
+const WorkspaceHistoryCache = require('./static/workspace-history-cache.js');
 const root = __dirname;
 const source = () => fs.readFileSync(path.join(root, 'static/workspace-dual-shell.js'), 'utf8');
 const template = () => fs.readFileSync(path.join(root, 'templates/workspace-dual.html'), 'utf8');
@@ -71,7 +72,7 @@ function harness({runShell = true, html = template(), href = 'https://example.te
     addEventListener(type, callback) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(callback); }
   };
   window.parent = window;
-  const context = vm.createContext({window, document, location,
+  const context = vm.createContext({window, document, location, WorkspaceHistoryCache,
     navigator: {userAgent: 'Desktop', platform: 'Win32', maxTouchPoints: 0, onLine: true},
     Date: class extends Date { static now() { return now; } }, performance: {now: () => now},
     URL, URLSearchParams, AbortController, Promise, Map, Set,

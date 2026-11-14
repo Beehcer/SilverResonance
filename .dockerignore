@@ -19,6 +19,8 @@
 !/workspace_api.py
 !/workspace_backup.py
 !/workspace_candles.py
+!/workspace_history.py
+!/workspace_history_oss.py
 !/workspace_market.py
 !/workspace_rules.py
 !/workspace_runtime.py
@@ -43,6 +45,8 @@
 !/static/workspace-layers.js
 !/static/workspace-cases-data.js
 !/static/workspace-cases.js
+!/static/workspace-cases-loader.js
+!/static/workspace-history-cache.js
 !/static/workspace.js
 !/deploy/
 !/deploy/Dockerfile

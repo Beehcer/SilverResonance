@@ -23,7 +23,7 @@ class DualWorkspaceWebTests(unittest.TestCase):
         for route in ("/", "/workspace?symbol=CZCE.MA701&board=existing"):
             response = self.client.get(route)
             self.assertEqual(response.status_code, 200)
-            self.assertIn(b"workspace-dual-shell.js", response.data)
+            self.assertIn(b"workspace-shell-runtime.js", response.data)
             self.assertNotIn(b"/preview/", response.data)
         for route, agent in (("/workspace?view=single", "Desktop"), ("/workspace", "Mozilla iPhone Mobile")):
             response = self.client.get(route, headers={"User-Agent": agent})
@@ -35,7 +35,7 @@ class DualWorkspaceWebTests(unittest.TestCase):
         for pane in ("pane-a", "pane-b"):
             response = self.client.get("/workspace?pane=" + pane)
             self.assertEqual(response.status_code, 200)
-            for asset in (b"workspace-dual-runtime.js", b"workspace-dual-chart.js", b"workspace-dual-embed.js", b"workspace-dual-embed.css"):
+            for asset in (b"workspace-dual-runtime.js", b"workspace-dual-chart.js", b"workspace-core.js", b"workspace-dual-embed.css"):
                 self.assertIn(asset, response.data)
             self.assertIn(b'id="plan-form"', response.data)
             self.assertNotIn(b'/static/workspace.js?', response.data)
@@ -52,6 +52,37 @@ class DualWorkspaceWebTests(unittest.TestCase):
                 self.assertNotIn(forbidden, response.data)
         response = self.client.get("/static/workspace-dual-runtime.js")
         self.assertIn(b"resonance-workspace-v1:", response.data)
+
+    def test_critical_bundles_preserve_dependencies_and_cases_are_lazy(self):
+        from html.parser import HTMLParser
+
+        class ActiveScripts(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.in_template = 0
+                self.urls = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "template":
+                    self.in_template += 1
+                if tag == "script" and not self.in_template:
+                    self.urls.extend(value for key, value in attrs if key == "src")
+
+            def handle_endtag(self, tag):
+                if tag == "template":
+                    self.in_template -= 1
+
+        for route, count in (("/", 1), ("/workspace?pane=pane-a", 3)):
+            parser = ActiveScripts()
+            parser.feed(self.client.get(route).text)
+            self.assertEqual(len(parser.urls), count)
+            self.assertFalse(any("workspace-cases" in url for url in parser.urls))
+        shell = self.client.get("/static/workspace-shell-runtime.js").data
+        for module in (b"WorkspaceHistoryCache", b"WorkspaceMarketCache", b"WorkspaceMarketHub"):
+            self.assertIn(module, shell)
+        core = self.client.get("/static/workspace-core.js").data
+        for module in (b"WorkspaceHistoryCache", b"WorkspaceCases", b"cases-resources"):
+            self.assertIn(module, core)
 
     def test_pages_load_versioned_oss_assets_without_redirecting_api_or_iframe(self):
         from html.parser import HTMLParser

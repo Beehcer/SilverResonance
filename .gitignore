@@ -13,5 +13,6 @@ state/outlook_state.json
 
 # Personal market-data credentials stay on this machine.
 /user_config.json
+/history-oss.json
 /backups/
 /.runtime.lock

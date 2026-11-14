@@ -112,9 +112,9 @@ test('cached previews cannot seed the verified full-history delta cache',()=>{
   const before=cache.get(SYMBOL);cache.accept(SYMBOL,preview,cache.begin(SYMBOL));assert.deepEqual(cache.get(SYMBOL),before);assert.equal(cache.history(SYMBOL),null);
 });
 
-test('stored previews expire exactly at TTL and reject future, mismatched and corrupt records',async()=>{
+test('stored previews expire after six calendar months and reject future, mismatched and corrupt records',async()=>{
   const saved=1000,item=P.prepare(small(),saved);
-  for(const [now,expected] of [[saved,true],[saved+P.TTL-1,true],[saved+P.TTL,false],[saved-1,false]]){
+  for(const [now,expected] of [[saved,true],[saved+180*86400000,true],[saved+P.TTL,false],[saved-1,false]]){
     const store=new P.Store({now:()=>now,storage:{get:async()=>copy(item)}});assert.equal(Boolean(await store.get(SYMBOL)),expected);
   }
   for(const corrupt of [{...item,symbol:'other'},{...item,market:{...item.market,symbol:'other'}},{...item,saved_at:NaN},{...item,saved_at:'1000'},
@@ -160,6 +160,20 @@ test('offline, stale, unavailable and already partial snapshots never renew disk
 test('mock snapshots remain previews and are never upgraded to live freshness',async()=>{
   const store=new P.Store({now:()=>1000,indexedDB:null});store.put({...small(),source:'mock',fresh:false});
   const read=await store.get(SYMBOL);assert.equal(read.source,'mock');assert.equal(read.fresh,false);assert.equal(read.partial,true);assert.equal(read.history_token,null);
+});
+
+test('checked idle history survives weekends without claiming a new quote or live permission',async()=>{
+  let now=Date.parse('2026-11-13T15:01:00+08:00');const saved=new Map(),storage={put:async item=>saved.set(item.symbol,copy(item)),get:async key=>saved.get(key)};
+  const data={...small(),connected:true,fresh:false,feed_status:'idle',freshness:Object.fromEntries(PERIODS.map(period=>[period,{checked_recent:true}]))};
+  const store=new P.Store({now:()=>now,storage});store.put(data);await writesDone(store);assert.equal(saved.size,1);
+  now+=3*86400000;const restored=await new P.Store({now:()=>now,storage}).get(SYMBOL);assert.ok(restored);assert.equal(restored.fresh,false);assert.equal(restored.feed_status,'preview');assert.equal(restored.history_token,null);
+  const bad={...data,freshness:{...data.freshness,m3:{checked_recent:false}}};store.put(bad);await writesDone(store);assert.equal(saved.get(SYMBOL).saved_at,now-3*86400000);
+});
+
+test('six-month boundary clamps month ends and old candles never return from a retained preview',async()=>{
+  const now=Date.parse('2026-08-31T09:00:00+08:00');assert.equal(P.cutoff(now),Date.parse('2026-02-28T09:00:00+08:00'));
+  const data=small();for(const period of PERIODS)data.periods[period]=['2026-02-27T09:00:00+08:00','2026-02-28T09:00:00+08:00'].map(dt=>({...data.periods[period][0],dt}));
+  const item=P.prepare(data,now);assert.equal(item.market.periods.day.length,1);assert.match(item.market.periods.day[0].dt,/02-28/);
 });
 
 test('per-symbol save throttling preserves the last saved picture until the exact 30-second boundary',async()=>{

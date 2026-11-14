@@ -12,8 +12,10 @@ class ShellFocusTests(unittest.TestCase):
         make_frame = source[source.index('  function makeFrame('):source.index('  async function waitReady(')] if delayed_ready else ''
         messages = source[source.index("  window.addEventListener('message'"):source.index("  $('drop-shield').addEventListener")]
         model = (Path(__file__).parent / 'static/workspace-dual-model.js').as_posix()
+        history_cache = (Path(__file__).parent / 'static/workspace-history-cache.js').as_posix()
         harness = r"""
 const assert = require('node:assert/strict');
+const WorkspaceHistoryCache = require(HISTORY);
 const events={}, saved=[], notices=[], raf=[], appended=[], readyWaits=[];
 const node=()=>({hidden:false,textContent:'',style:{},attributes:{},setAttribute(key,value){this.attributes[key]=value;},classList:{add(){},remove(){},toggle(){}},getBoundingClientRect:()=>({left:0,top:25,width:1400,height:1000})});
 const nodes={stage:node(),toast:node(),startup:node(),'sidebar-left-toggle':node(),'sidebar-right-toggle':node()};
@@ -24,7 +26,7 @@ const location={origin:'http://localhost'};
 const localStorage={setItem:(key,value)=>saved.push(JSON.parse(value))};
 const requestAnimationFrame=fn=>(raf.push(fn),raf.length);
 const setTimeout=()=>1,clearTimeout=()=>{};
-""".replace('MODEL', repr(model))
+""".replace('MODEL', repr(model)).replace('HISTORY', repr(history_cache))
         fixtures = r"""
 function record(id) {
   const attrs={}, calls={prepare:0,deactivate:0,focus:0,switches:[]}, ui={dockOpen:true,dockWidth:204,group:'all',panel:'quick-plan-panel'};

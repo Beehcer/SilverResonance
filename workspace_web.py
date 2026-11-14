@@ -11,10 +11,35 @@ from workspace_api import MOBILE_USER_AGENT
 from workspace_runtime import adapt_workspace_chart_js, adapt_workspace_js
 
 
+CORE_SCRIPTS = (
+    'plan-board-model.js', 'workspace-editing.js', 'workspace-ticket.js',
+    'workspace-presence.js', 'workspace-layouts.js', 'workspace-properties.js',
+    'workspace-merge.js', 'workspace-layers.js', 'workspace-cases-loader.js',
+    'workspace-market-cache.js', 'workspace-market-preview.js',
+    'workspace-history-cache.js', 'workspace-symbols.js', 'workspace-shortcuts.js',
+)
+SHELL_SCRIPTS = ('workspace-dual-model.js', 'workspace-market-cache.js',
+                 'workspace-history-cache.js', 'workspace-dual-shell.js')
+
+
+def compiled_workspace_assets(directory):
+    directory = Path(directory)
+    def source(name):
+        return (directory / name).read_text(encoding='utf-8')
+    def combine(names):
+        return '\n;\n'.join(source(name) for name in names)
+    return {
+        'workspace-core.js': combine(CORE_SCRIPTS).encode(),
+        'workspace-shell-runtime.js': combine(SHELL_SCRIPTS).encode(),
+        'workspace-dual-runtime.js': (source('workspace-dual-embed.js') + '\n;\n' + adapt_workspace_js(source('workspace.js'))).encode(),
+        'workspace-dual-chart.js': adapt_workspace_chart_js(source('workspace-chart.js')).encode(),
+    }
+
+
 def render_asset_page(template, **context):
     html = render_template(template, **context)
     manifest = Path(current_app.static_folder) / 'workspace-assets.json'
-    if manifest.is_file():
+    if manifest.is_file() and not current_app.config.get('WORKSPACE_LOCAL_ASSETS', False):
         mapping = json.loads(manifest.read_text(encoding='utf-8'))['assets']
         def replace(match):
             original = match.group(2)
@@ -41,10 +66,9 @@ def render_workspace_page():
 
 
 def register_workspace_assets(app):
-    def runtime_response(filename, adapter):
+    def runtime_response(filename):
         try:
-            source = (Path(app.static_folder) / filename).read_text(encoding="utf-8")
-            result = adapter(source)
+            result = compiled_workspace_assets(app.static_folder)[filename]
         except (OSError, ValueError):
             app.logger.exception("Workspace integration is incompatible with this release")
             abort(503, "工作台版本尚未就绪，请稍后刷新。")
@@ -55,8 +79,16 @@ def register_workspace_assets(app):
 
     @app.get("/static/workspace-dual-runtime.js")
     def workspace_dual_runtime():
-        return runtime_response("workspace.js", adapt_workspace_js)
+        return runtime_response("workspace-dual-runtime.js")
 
     @app.get("/static/workspace-dual-chart.js")
     def workspace_dual_chart():
-        return runtime_response("workspace-chart.js", adapt_workspace_chart_js)
+        return runtime_response("workspace-dual-chart.js")
+
+    @app.get("/static/workspace-core.js")
+    def workspace_core():
+        return runtime_response("workspace-core.js")
+
+    @app.get("/static/workspace-shell-runtime.js")
+    def workspace_shell_runtime():
+        return runtime_response("workspace-shell-runtime.js")

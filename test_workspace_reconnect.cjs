@@ -27,15 +27,15 @@ test('reconnecting clears old readiness before an early disk preview while boots
     refreshMarket:()=>{calls.push('UNEXPECTED_MARKET_RETRY');return pending;},
     notice:noop,setUnavailable:noop,renderLoadState:noop,applyViewMode:noop,
   });
-  for(const name of ['cancelObsoleteReads','closeObjectContext','preloadSavedMarket','enter','poll'])vm.runInContext(helper(name),context);
+  for(const name of ['cancelObsoleteReads','closeObjectContext','preloadSavedMarket','readConfiguration','enter','poll'])vm.runInContext(helper(name),context);
   void context.enter({user:{id:'restored-user'}});
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(savedDrafts,[oldPlan],'The old draft must be retained before clearing live state.');
-  assert.equal(oldRead.cancelled,true);assert.equal(oldRead.controller.signal.aborted,true);assert.equal(context.readRequests.size,0);assert.equal(context.marketRequests.size,0);assert.equal(closedEvents,1);assert.equal(state.contextObject,null);assert.equal(state.contextGeneration,null);
-  assert.deepEqual(calls,['/symbols','/rules','/risk']);assert.equal(state.symbol,symbol);assert.equal(state.market.partial,true);
+  assert.equal(oldRead.cancelled,true);assert.equal(oldRead.controller.signal.aborted,true);assert.equal(context.readRequests.size,0);assert.equal(context.marketRequests.size,1);assert.equal(closedEvents,1);assert.equal(state.contextObject,null);assert.equal(state.contextGeneration,null);
+  assert.deepEqual(calls,['/rules','/risk','/symbols']);assert.equal(state.symbol,symbol);assert.equal(state.market.partial,true);
   assert.equal(state.loading,true);assert.equal(state.planReady,false);assert.equal(state.plan,null);assert.equal(state.evaluation,null);assert.equal(state.lastSignal,null);
   await context.poll();
-  assert.deepEqual(calls,['/symbols','/rules','/risk'],'A timer must not request the previous board/revision or full market before bootstrap completes.');
+  assert.deepEqual(calls,['/rules','/risk','/symbols'],'A timer must not request the previous board/revision or full market before bootstrap completes.');
 });
 
 function modeHarness(overrides={}){
@@ -46,7 +46,7 @@ function modeHarness(overrides={}){
     pageZoomGuard:{setReadOnly:noop},openPanel:noop,renderLoadState:noop,width:1200,mobileDevice(){return context.width<=900;},clone:structuredClone,$:node,document:{documentElement:{classList:{toggle:noop}}},
     storageGet:(key,fallback=null)=>storage.has(key)?structuredClone(storage.get(key)):fallback,storageSet:(key,value)=>{calls.writes.push(key);storage.set(key,structuredClone(value));return true;},localStorage:{removeItem:key=>storage.delete(key.slice(5))},
     emptyPending:M.empty,hasPending:pending=>M.hasPending(pending??state.pending),persistDraft:noop,readPlan:()=>state.plan,computePending:()=>M.diff(state.saved||{},state.plan||{}),
-    setLayout:id=>{state.layout=state.viewOnly?'mobile':id;},setPlanLoading:value=>{state.loading=value;},renderMobilePlan:noop,renderSyncStatus:noop,renderMembers:noop,alertKey:()=>'',el:(tag,text)=>({tag,textContent:text}),notice:noop,setUnavailable:noop,
+    setLayout:id=>{state.layout=state.viewOnly?'mobile':id;},setPlanLoading:value=>{state.loading=value;},renderMobilePlan:noop,renderSyncStatus:noop,renderMembers:noop,alertKey:()=>'',el:(tag,text)=>({tag,textContent:text}),notice:noop,setUnavailable:noop,setSaveDisabled:noop,marketComplete:()=>false,renderEvaluation:noop,poll:noop,flush:noop,
     switchSymbol:async(symbol,board,options={})=>{calls.navigations.push({symbol,board,...options});if(!options.skipSaveViews)context.saveViews();context.restoreViews();},
   });
   for(const name of ['documentKey','currentPlan','draftKey','viewKey','saveViews','restoreViews','closeObjectContext','applyViewMode'])vm.runInContext(helper(name),context);
@@ -57,11 +57,29 @@ test('resizing to viewer during delayed bootstrap does not abandon enter or issu
   const {context,state,calls}=modeHarness({symbol:null,session:null,plan:null,saved:null});
   let release;const gate=new Promise(resolve=>{release=resolve;}),requests=[];
   context.api=async url=>{requests.push(url);await gate;return url==='/symbols'?{symbols:[{symbol:'SHFE.rb2701',name:'螺纹'}]}:url==='/rules'?{rules:{version:'1'}}:{risk:{}};};
-  for(const name of ['cancelObsoleteReads','preloadSavedMarket','enter'])vm.runInContext(helper(name),context);
+  for(const name of ['cancelObsoleteReads','preloadSavedMarket','readConfiguration','enter'])vm.runInContext(helper(name),context);
   const entering=context.enter({user:{id:'test-user'},mobile_device:false});await new Promise(resolve=>setImmediate(resolve));
-  const generation=state.generation;assert.equal(state.bootstrapping,true);assert.equal(state.symbol,null);assert.deepEqual(requests,['/symbols','/rules','/risk']);
+  const generation=state.generation;assert.equal(state.bootstrapping,true);assert.equal(state.symbol,null);assert.deepEqual(requests,['/rules','/risk','/symbols']);
   context.width=390;context.applyViewMode();assert.equal(state.viewOnly,true);assert.equal(state.generation,generation,'Mode resize must not invalidate the pending symbol/rules bootstrap.');assert.deepEqual(calls.navigations,[]);assert.equal(state.layout,'mobile');
   release();await entering;assert.equal(state.bootstrapping,false);assert.equal(state.symbols[0].symbol,'SHFE.rb2701');assert.equal(calls.navigations.length,1);assert.equal(calls.navigations[0].symbol,'SHFE.rb2701');assert.equal(state.layout,'mobile');
+});
+
+test('contract history and plan startup no longer wait for delayed rules and risk',async()=>{
+  const {context,state,calls}=modeHarness({symbol:null,session:null,plan:null,saved:null});let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  context.api=async path=>{if(path==='/symbols')return{symbols:[{symbol:'SHFE.rb2701',name:'螺纹'}]};await gate;return path==='/rules'?{rules:{version:'r1'}}:{risk:{}};};
+  for(const name of ['cancelObsoleteReads','preloadSavedMarket','readConfiguration','enter'])vm.runInContext(helper(name),context);
+  const work=context.enter({user:{id:'test-user'}});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.navigations.length,1);assert.equal(calls.navigations[0].backgroundLoad,true);assert.equal(state.configurationReady,false);assert.equal(state.bootstrapping,true);
+  release();await work;assert.equal(state.configurationReady,true);assert.equal(state.bootstrapError,null);
+});
+
+test('configuration reads retry only transient failures with bounded timeouts and never restart the workspace',async()=>{
+  const state={cacheEpoch:1},calls=[],delays=[];let failures=2;
+  const context=vm.createContext({state,Promise,api:async(...args)=>{calls.push(args);if(failures-->0)throw new Error('transient TLS failure');return{rules:{version:'r1'}};},renderLoadState(){},setTimeout:(callback,delay)=>{delays.push(delay);queueMicrotask(callback);}});
+  vm.runInContext(helper('readConfiguration'),context);assert.equal((await context.readConfiguration('/rules')).rules.version,'r1');assert.equal(calls.length,3);assert.deepEqual(delays,[250,500]);assert.ok(calls.every(args=>args[1]==='GET'&&args[4].timeout===4500));
+  calls.length=0;context.api=async()=>{calls.push(1);throw Object.assign(new Error('forbidden'),{status:403});};await assert.rejects(context.readConfiguration('/risk'),/forbidden/);assert.equal(calls.length,1);
+  await assert.rejects(context.readConfiguration('/plans/X'),/Unsupported/);assert.equal(calls.length,1);
 });
 
 test('desktop and viewer viewport ranges are saved under their old mode before either transition',()=>{

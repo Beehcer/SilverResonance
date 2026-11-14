@@ -5,6 +5,8 @@ const M=require('./static/workspace-merge.js'),E=require('./static/workspace-edi
 const T=require('./static/workspace-ticket.js'),C=require('./static/workspace-chart.js');
 const MarketCache=require('./static/workspace-market-cache.js');
 const MarketPreview=require('./static/workspace-market-preview.js');
+const HistoryCache=require('./static/workspace-history-cache.js');
+const BASE=Math.floor(Date.now()/86400000)*86400000-5*86400000;
 const source=fs.readFileSync(path.join(__dirname,'static/workspace.js'),'utf8');
 const copy=value=>JSON.parse(JSON.stringify(value)),tick=()=>new Promise(resolve=>setImmediate(resolve));
 const A='SHFE.rb2701',B='CZCE.RM701',D='DCE.jd2612';
@@ -15,12 +17,12 @@ function helper(name){
 }
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 function market(symbol,token='token-'+symbol,price=101){
-  const periods=Object.fromEntries(Object.entries(C.INTERVAL).map(([period,step])=>[period,Array.from({length:4},(_,i)=>({dt:new Date(1700000000000+i*step).toISOString(),open:100,high:110,low:90,close:price,volume:0,oi:0}))]));
+  const periods=Object.fromEntries(Object.entries(C.INTERVAL).map(([period,step])=>[period,Array.from({length:4},(_,i)=>({dt:new Date(BASE+i*step).toISOString(),open:100,high:110,low:90,close:price,volume:0,oi:0}))]));
   return{symbol,name:symbol,history_token:token,incremental:false,period_counts:{day:4,m30:4,m3:4},periods,price,fresh:true,connected:true,source:'live',feed_status:'live'};
 }
 function plan(symbol,board='',revision=1){return{symbol,board_id:board,revision,title:'Plan '+board,objects:[],notes:'',enabled:true,rule_version:'r1'};}
 function harness(){
-  const state={session:{user:{id:'me'},csrf_token:'test-token'},symbol:A,board:'',plan:plan(A),saved:plan(A),market:market(A),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false,generation:1,cacheEpoch:1,visitedSymbols:new Set([A]),markedSymbols:new Set(),active:'m30',rules:{version:'r1'},risk:{},planVerified:true,alerts:[],evaluation:{status:'ready',source:'live',signal_key:'old'},lastSignal:'old',lastSuccess:1};
+  const state={configurationReady:true,session:{user:{id:'me'},csrf_token:'test-token'},symbol:A,board:'',plan:plan(A),saved:plan(A),market:market(A),revision:1,baseRevision:1,pending:M.empty(),outbox:null,dirty:false,saving:false,loading:false,conflict:false,generation:1,cacheEpoch:1,visitedSymbols:new Set([A]),markedSymbols:new Set(),active:'m30',rules:{version:'r1'},risk:{},planVerified:true,alerts:[],evaluation:{status:'ready',source:'live',signal_key:'old'},lastSignal:'old',lastSuccess:1};
   const elements=new Map(),storage=new Map(),calls={network:[],paints:[],notices:[],events:0,flush:0,views:0};
   const $=id=>{if(!elements.has(id))elements.set(id,{dataset:{},style:{},value:'',hidden:false,textContent:'',elements:[],setAttribute(key,value){this[key]=value;}});return elements.get(id);};
   const charts=Object.fromEntries(['day','m30','m3'].map(period=>[period,{path:[],setTool(){},setPlan(){},setPresence(){},setData(value,shared,reset){calls.paints.push({period,market:value?copy(value):null,plan:shared?copy(shared):null,reset,active:state.symbol});}}]));
@@ -46,7 +48,10 @@ function harness(){
     connectEvents:()=>{calls.events++;},recoverableDraft:()=>null,loadBoards:async()=>{},
     flush:async()=>{calls.flush++;},
   });
-  const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','batchCharts','preloadSavedMarket','paintOpeningPreview','loadOpeningMarket','applyActiveMarket','api','refreshMarket','refreshBackground','documentKey','currentPlan','marketComplete','cancelObsoleteReads','renderLoadState','closeObjectContext','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
+  const hub=new HistoryCache.Hub({fetch:context.fetch,blocks:new HistoryCache.Blocks({indexedDB:null})});
+  hub.cache=context.marketCache;hub.full=async symbol=>(await hub.read('/api/workspace/market?symbol='+encodeURIComponent(symbol),{json:true})).market;
+  context.marketHub=hub;context.marketRequests=hub.requests;
+  const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','batchCharts','preloadSavedMarket','paintOpeningPreview','loadOpeningMarket','applyActiveMarket','api','readConfiguration','refreshMarket','refreshBackground','documentKey','currentPlan','marketComplete','cancelObsoleteReads','renderLoadState','closeObjectContext','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
   for(const name of names)vm.runInContext(helper(name),context);
   return{context,state,calls,elements,storage,charts,$,respond:fn=>{responder=fn;},seed:value=>context.marketCache.accept(value.symbol,value,context.marketCache.begin(value.symbol))};
 }
@@ -373,8 +378,13 @@ test('configuration loading and failure remain visible without a symbol and offe
 
 test('failed configuration keeps editing locked and records an actionable startup error',async()=>{
   const h=harness();h.context.persistDraft=()=>{};h.context.applyViewMode=()=>{};h.context.preloadSavedMarket=async()=>{};h.context.alertKey=()=>'';
-  h.respond(()=>Promise.reject(new Error('configuration unavailable')));vm.runInContext(helper('enter'),h.context);
+  h.respond(()=>Promise.reject(Object.assign(new Error('configuration unavailable'),{status:403})));vm.runInContext(helper('enter'),h.context);
   await h.context.enter({user:{id:'me'}});
   assert.equal(h.state.bootstrapping,false);assert.ok(h.state.bootstrapError);assert.equal(h.state.loading,true);assert.equal(h.state.planReady,false);assert.equal(h.$('retry-market').hidden,false);
   assert.notEqual(h.$('decision').dataset.status,'READY');
+});
+
+test('a server READY response cannot enable or describe entry permission before local configuration completes',()=>{
+  const h=harness();h.state.configurationReady=false;h.state.evaluation={status:'ready',source:'live',label:'可开仓',signal_key:'new-ready'};h.context.renderEvaluation();
+  assert.equal(h.$('decision').dataset.status,'WAIT');assert.notEqual(h.$('decision-title').textContent,'可开仓');assert.match(h.$('decision-reason').textContent,/规则与风控/);assert.equal(h.state.lastSignal,null);
 });

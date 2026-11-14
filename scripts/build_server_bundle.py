@@ -47,6 +47,8 @@ RUNTIME_PY_FILES = (
     "workspace_api.py",
     "workspace_backup.py",
     "workspace_candles.py",
+    "workspace_history.py",
+    "workspace_history_oss.py",
     "workspace_market.py",
     "workspace_rules.py",
     "workspace_runtime.py",
@@ -67,6 +69,7 @@ ASSET_FILES = (
     "static/workspace-cases-data.js",
     "static/workspace-cases.css",
     "static/workspace-cases.js",
+    "static/workspace-cases-loader.js",
     "static/workspace-chart.js",
     "static/workspace-editing.js",
     "static/workspace-layers.js",
@@ -74,6 +77,7 @@ ASSET_FILES = (
     "static/workspace-merge.js",
     "static/workspace-market-cache.js",
     "static/workspace-market-preview.js",
+    "static/workspace-history-cache.js",
     "static/workspace-symbols.js",
     "static/workspace-shortcuts.js",
     "static/workspace-presence.js",
@@ -178,7 +182,7 @@ def _check_template_assets(payloads: dict[str, bytes]) -> None:
                 if url.scheme or url.netloc or not url.path.startswith("/static/"):
                     continue
                 relative = unquote(url.path).lstrip("/")
-                generated = relative in {"static/workspace-dual-runtime.js", "static/workspace-dual-chart.js"} and {"workspace_web.py", "workspace_runtime.py"} <= payloads.keys()
+                generated = relative in {"static/workspace-dual-runtime.js", "static/workspace-dual-chart.js", "static/workspace-core.js", "static/workspace-shell-runtime.js"} and {"workspace_web.py", "workspace_runtime.py"} <= payloads.keys()
                 if relative not in payloads and not generated:
                     raise BundleError(f"Unlisted template asset: {relative}; review the asset allowlist.")
 

@@ -16,9 +16,9 @@ function harness(){
   return{context,state,requests,timers,notices,$};
 }
 function answer(request,value){request.resolve({ok:true,json:async()=>value});}
-test('switch cancels obsolete reads and frees queued market slots but never aborts writes',async()=>{
+test('switch cancels pane reads without clearing shared market work or aborting writes',async()=>{
   const h=harness(),read=h.context.api('/market?symbol=A'),write=h.context.api('/plans/A/patch','POST',{mutation_id:'1'});h.context.marketRequests.set('A',read);
-  h.context.cancelObsoleteReads();await assert.rejects(read,error=>error.cancelled===true);assert.equal(h.requests[0].signal.aborted,true);assert.equal(h.requests[1].signal.aborted,false);assert.equal(h.context.marketRequests.size,0);assert.equal(h.state.connectionLost,undefined);
+  h.context.cancelObsoleteReads();await assert.rejects(read,error=>error.cancelled===true);assert.equal(h.requests[0].signal.aborted,true);assert.equal(h.requests[1].signal.aborted,false);assert.equal(h.context.marketRequests.size,1);assert.equal(h.state.connectionLost,undefined);
   answer(h.requests[1],{ok:true});await write;
 });
 test('market timeout is contextual and cannot label a working collaboration connection offline',async()=>{

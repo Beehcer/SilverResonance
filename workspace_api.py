@@ -26,7 +26,8 @@ VIEW_ONLY_MESSAGE = "移动端仅供查看，请在桌面端编辑计划、图�
 
 
 def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None,
-                       market_incremental_provider=None, market_preview_provider=None):
+                       market_incremental_provider=None, market_preview_provider=None,
+                       market_bootstrap_provider=None, market_history_provider=None):
     """Providers: market(symbol), optional incremental(symbol, token), symbols(),
     rules(), evaluate(plan, market, risk, version). Reviews always read full data.
     """
@@ -212,7 +213,8 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
 
     @bp.after_request
     def private_response(response):
-        response.headers["Cache-Control"] = "no-store, private"
+        if request.endpoint != "workspace.market_history" or response.status_code not in (200, 304):
+            response.headers["Cache-Control"] = "no-store, private"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Vary"] = "Cookie, User-Agent, X-Workspace-View-Only"
         return response
@@ -349,9 +351,42 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
             result = market_preview_provider(symbol)
         elif history and len(history) <= 128 and market_incremental_provider is not None:
             result = market_incremental_provider(symbol, history)
+            if request.args.get("history_fallback") == "bootstrap" and result.get("incremental") is False:
+                # New clients can reuse durable content hashes after a restart,
+                # missed window or historical correction. Do not attach a new
+                # cursor to old client rows: obtain one coherent bootstrap next.
+                return jsonify(status="bootstrap_required")
         else:
             result = market_provider(symbol)
         return jsonify(status="ok", market=result)
+
+    @bp.get("/market/bootstrap")
+    @authenticated
+    def market_bootstrap():
+        symbol = symbol_requested()
+        if market_bootstrap_provider is None:
+            return fail("历史分块暂不可用，请使用完整行情", 503)
+        try:
+            result = market_bootstrap_provider(symbol)
+        except (OSError, ValueError):
+            return fail("历史缓存暂不可用，请使用完整行情", 503)
+        response = jsonify(status="ok", bootstrap=result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @bp.get("/market/history/<digest>.json")
+    @authenticated
+    def market_history(digest):
+        if market_history_provider is None or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return fail("历史块不存在", 404)
+        try:
+            content = market_history_provider(digest)
+        except (OSError, ValueError):
+            return fail("历史块暂不可用，请重新加载历史", 404)
+        response = Response(content, mimetype="application/json")
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        response.set_etag(digest)
+        return response.make_conditional(request)
 
     @bp.get("/review")
     @authenticated
