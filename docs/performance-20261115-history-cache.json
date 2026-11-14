@@ -1,0 +1,984 @@
+{
+  "method": "Median of completed samples only; failures counted separately. Fresh Edge profile per round; same 1366x900 browser/network. Cold total includes local network startup before the first request, so also compare time after initial HTML response. Transfer totals are completed CDP encodedDataLength through UI ready, including headers; exclude unfinished SSE and failed partial bodies. New runtime verification flags cover shared requests that began before a scenario; legacy uses completed new market response plus ready UI.",
+  "before": {
+    "cold": {
+      "label": "首次打开",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 23666,
+      "verified_ui_ms": 24530,
+      "verified_after_html_ms": 11960.3,
+      "verified_samples_ms": [
+        22898,
+        30234,
+        24530
+      ],
+      "completed_transfer_bytes": {
+        "all": 634121,
+        "market_api": 442048,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 174496,
+        "document": 8775,
+        "other_api": 8141
+      },
+      "cache_activity": {
+        "stats": {},
+        "blocks": {}
+      },
+      "js_error_count": 0,
+      "navigation_medians": {
+        "request": 12034.9,
+        "responseStart": 12568.7,
+        "responseEnd": 12569.7,
+        "dns": 0,
+        "connect": 1717.7
+      },
+      "request_to_html_end_ms": 534.8
+    },
+    "reload": {
+      "label": "刷新",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 5135,
+      "verified_ui_ms": 6814,
+      "verified_after_html_ms": 5928.8,
+      "verified_samples_ms": [
+        6116,
+        6814,
+        7047
+      ],
+      "completed_transfer_bytes": {
+        "all": 458935,
+        "market_api": 442040,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 8774,
+        "other_api": 8121
+      },
+      "cache_activity": {
+        "stats": {},
+        "blocks": {}
+      },
+      "js_error_count": 0,
+      "navigation_medians": {
+        "request": 6.9,
+        "responseStart": 836.4,
+        "responseEnd": 841.8,
+        "dns": 0,
+        "connect": 0
+      },
+      "request_to_html_end_ms": 834.9
+    },
+    "switch_new": {
+      "label": "首次切入另一品种",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 1437,
+      "verified_ui_ms": 2093,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        2093,
+        3654,
+        2012
+      ],
+      "completed_transfer_bytes": {
+        "all": 383651,
+        "market_api": 380838,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 0,
+        "other_api": 2813
+      },
+      "cache_activity": {
+        "stats": {},
+        "blocks": {}
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    },
+    "switch_back": {
+      "label": "切回已看品种",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 80,
+      "verified_ui_ms": 1174,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        1174,
+        1372,
+        1058
+      ],
+      "completed_transfer_bytes": {
+        "all": 4953,
+        "market_api": 1535,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 0,
+        "other_api": 3418
+      },
+      "cache_activity": {
+        "stats": {},
+        "blocks": {}
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    },
+    "dual_open": {
+      "label": "打开第二窗",
+      "attempted": 3,
+      "successes": 2,
+      "failures": [
+        {
+          "round": 2,
+          "network_errors": [
+            "net::ERR_SSL_PROTOCOL_ERROR"
+          ],
+          "js_errors": []
+        }
+      ],
+      "first_candles_ms": 3595.0,
+      "verified_ui_ms": 3595.0,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        3857,
+        3333
+      ],
+      "completed_transfer_bytes": {
+        "all": 391988.0,
+        "market_api": 380847.5,
+        "history_origin": 0.0,
+        "history_oss": 0.0,
+        "static": 0.0,
+        "document": 7216.0,
+        "other_api": 3924.5
+      },
+      "cache_activity": {
+        "stats": {},
+        "blocks": {}
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    },
+    "dual_reopen": {
+      "label": "关闭后重开第二窗",
+      "attempted": 2,
+      "successes": 1,
+      "failures": [
+        {
+          "round": 3,
+          "network_errors": [
+            "net::ERR_SSL_PROTOCOL_ERROR"
+          ],
+          "js_errors": []
+        }
+      ],
+      "first_candles_ms": 3499,
+      "verified_ui_ms": 3500,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        3500
+      ],
+      "completed_transfer_bytes": {
+        "all": 394087,
+        "market_api": 380837,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 7216,
+        "other_api": 6034
+      },
+      "cache_activity": {
+        "stats": {},
+        "blocks": {}
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    }
+  },
+  "after": {
+    "cold": {
+      "label": "首次打开",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 21221,
+      "verified_ui_ms": 24255,
+      "verified_after_html_ms": 8139.5,
+      "verified_samples_ms": [
+        20449,
+        24255,
+        26843
+      ],
+      "completed_transfer_bytes": {
+        "all": 523983,
+        "market_api": 61669,
+        "history_origin": 0,
+        "history_oss": 306841,
+        "static": 137577,
+        "document": 8782,
+        "other_api": 8457
+      },
+      "cache_activity": {
+        "stats": {
+          "bootstrap": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          },
+          "full": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "incremental": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "quotes": {
+            "samples": [
+              1,
+              2,
+              1
+            ],
+            "median": 1
+          }
+        },
+        "blocks": {
+          "diskHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "downloads": {
+            "samples": [
+              13,
+              13,
+              13
+            ],
+            "median": 13
+          },
+          "fallbacks": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "memoryHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          }
+        }
+      },
+      "js_error_count": 0,
+      "navigation_medians": {
+        "request": 15591.3,
+        "responseStart": 16110.2,
+        "responseEnd": 16115.5,
+        "dns": 0,
+        "connect": 1423.8
+      },
+      "request_to_html_end_ms": 509.8
+    },
+    "reload": {
+      "label": "刷新",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 3463,
+      "verified_ui_ms": 4214,
+      "verified_after_html_ms": 3332.9,
+      "verified_samples_ms": [
+        3080,
+        4214,
+        4385
+      ],
+      "completed_transfer_bytes": {
+        "all": 75944,
+        "market_api": 61664,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 8767,
+        "other_api": 5499
+      },
+      "cache_activity": {
+        "stats": {
+          "bootstrap": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          },
+          "full": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "incremental": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "quotes": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          }
+        },
+        "blocks": {
+          "diskHits": {
+            "samples": [
+              13,
+              13,
+              0
+            ],
+            "median": 13
+          },
+          "downloads": {
+            "samples": [
+              0,
+              0,
+              13
+            ],
+            "median": 0
+          },
+          "fallbacks": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "memoryHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          }
+        }
+      },
+      "js_error_count": 0,
+      "navigation_medians": {
+        "request": 356.8,
+        "responseStart": 852.8,
+        "responseEnd": 853.5,
+        "dns": 0,
+        "connect": 0
+      },
+      "request_to_html_end_ms": 524.3
+    },
+    "switch_new": {
+      "label": "首次切入另一品种",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 786,
+      "verified_ui_ms": 2863,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        1652,
+        2863,
+        3789
+      ],
+      "completed_transfer_bytes": {
+        "all": 316630,
+        "market_api": 40788,
+        "history_origin": 0,
+        "history_oss": 271899,
+        "static": 0,
+        "document": 0,
+        "other_api": 3943
+      },
+      "cache_activity": {
+        "stats": {
+          "bootstrap": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          },
+          "full": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "incremental": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "quotes": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          }
+        },
+        "blocks": {
+          "diskHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "downloads": {
+            "samples": [
+              13,
+              13,
+              13
+            ],
+            "median": 13
+          },
+          "fallbacks": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "memoryHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          }
+        }
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    },
+    "switch_back": {
+      "label": "切回已看品种",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 75,
+      "verified_ui_ms": 835,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        612,
+        835,
+        942
+      ],
+      "completed_transfer_bytes": {
+        "all": 4327,
+        "market_api": 1559,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 0,
+        "other_api": 2768
+      },
+      "cache_activity": {
+        "stats": {
+          "bootstrap": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "full": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "incremental": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          },
+          "quotes": {
+            "samples": [
+              0,
+              0,
+              1
+            ],
+            "median": 0
+          }
+        },
+        "blocks": {
+          "diskHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "downloads": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "fallbacks": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "memoryHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          }
+        }
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    },
+    "dual_open": {
+      "label": "打开第二窗",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 1418,
+      "verified_ui_ms": 1418,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        1308,
+        1453,
+        1418
+      ],
+      "completed_transfer_bytes": {
+        "all": 12003,
+        "market_api": 1503,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 7201,
+        "other_api": 3299
+      },
+      "cache_activity": {
+        "stats": {
+          "bootstrap": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "full": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "incremental": {
+            "samples": [
+              1,
+              1,
+              1
+            ],
+            "median": 1
+          },
+          "quotes": {
+            "samples": [
+              1,
+              1,
+              0
+            ],
+            "median": 1
+          }
+        },
+        "blocks": {
+          "diskHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "downloads": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "fallbacks": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "memoryHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          }
+        }
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    },
+    "dual_reopen": {
+      "label": "关闭后重开第二窗",
+      "attempted": 3,
+      "successes": 3,
+      "failures": [],
+      "first_candles_ms": 1393,
+      "verified_ui_ms": 1393,
+      "verified_after_html_ms": null,
+      "verified_samples_ms": [
+        1420,
+        1393,
+        1267
+      ],
+      "completed_transfer_bytes": {
+        "all": 12000,
+        "market_api": 1503,
+        "history_origin": 0,
+        "history_oss": 0,
+        "static": 0,
+        "document": 7201,
+        "other_api": 3299
+      },
+      "cache_activity": {
+        "stats": {
+          "bootstrap": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "full": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "incremental": {
+            "samples": [
+              2,
+              1,
+              1
+            ],
+            "median": 1
+          },
+          "quotes": {
+            "samples": [
+              1,
+              0,
+              1
+            ],
+            "median": 1
+          }
+        },
+        "blocks": {
+          "diskHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "downloads": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "fallbacks": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          },
+          "memoryHits": {
+            "samples": [
+              0,
+              0,
+              0
+            ],
+            "median": 0
+          }
+        }
+      },
+      "js_error_count": 0,
+      "navigation_medians": null,
+      "request_to_html_end_ms": null
+    }
+  },
+  "comparison": {
+    "cold": {
+      "label": "首次打开",
+      "first_candles_ms": {
+        "before": 23666,
+        "after": 21221,
+        "reduction_percent": 10.3
+      },
+      "verified_ui_ms": {
+        "before": 24530,
+        "after": 24255,
+        "reduction_percent": 1.1
+      },
+      "verified_after_html_ms": {
+        "before": 11960.3,
+        "after": 8139.5,
+        "reduction_percent": 31.9
+      }
+    },
+    "reload": {
+      "label": "刷新",
+      "first_candles_ms": {
+        "before": 5135,
+        "after": 3463,
+        "reduction_percent": 32.6
+      },
+      "verified_ui_ms": {
+        "before": 6814,
+        "after": 4214,
+        "reduction_percent": 38.2
+      },
+      "verified_after_html_ms": {
+        "before": 5928.8,
+        "after": 3332.9,
+        "reduction_percent": 43.8
+      }
+    },
+    "switch_new": {
+      "label": "首次切入另一品种",
+      "first_candles_ms": {
+        "before": 1437,
+        "after": 786,
+        "reduction_percent": 45.3
+      },
+      "verified_ui_ms": {
+        "before": 2093,
+        "after": 2863,
+        "reduction_percent": -36.8
+      },
+      "verified_after_html_ms": {
+        "before": null,
+        "after": null,
+        "reduction_percent": null
+      }
+    },
+    "switch_back": {
+      "label": "切回已看品种",
+      "first_candles_ms": {
+        "before": 80,
+        "after": 75,
+        "reduction_percent": 6.2
+      },
+      "verified_ui_ms": {
+        "before": 1174,
+        "after": 835,
+        "reduction_percent": 28.9
+      },
+      "verified_after_html_ms": {
+        "before": null,
+        "after": null,
+        "reduction_percent": null
+      }
+    },
+    "dual_open": {
+      "label": "打开第二窗",
+      "first_candles_ms": {
+        "before": 3595.0,
+        "after": 1418,
+        "reduction_percent": 60.6
+      },
+      "verified_ui_ms": {
+        "before": 3595.0,
+        "after": 1418,
+        "reduction_percent": 60.6
+      },
+      "verified_after_html_ms": {
+        "before": null,
+        "after": null,
+        "reduction_percent": null
+      }
+    },
+    "dual_reopen": {
+      "label": "关闭后重开第二窗",
+      "first_candles_ms": {
+        "before": 3499,
+        "after": 1393,
+        "reduction_percent": 60.2
+      },
+      "verified_ui_ms": {
+        "before": 3500,
+        "after": 1393,
+        "reduction_percent": 60.2
+      },
+      "verified_after_html_ms": {
+        "before": null,
+        "after": null,
+        "reduction_percent": null
+      }
+    }
+  },
+  "metadata": {
+    "before": {
+      "started": "2026-11-14T17:19:01.803Z",
+      "finished": "2026-11-14T17:23:18.976Z",
+      "base": "https://resonance.cg-x.com",
+      "environment": "isolated headless Edge 1366x900; default system network; no throttling; warm server; no plan edits",
+      "source_commit": null,
+      "release": null,
+      "recorded_rounds": 3,
+      "actual_browser_rounds": 3,
+      "definition": null,
+      "notes": null
+    },
+    "after": {
+      "started": "2026-11-14T18:46:56.285Z",
+      "finished": "2026-11-14T18:48:46.771Z",
+      "base": "https://resonance.cg-x.com",
+      "environment": "isolated headless Edge 1366x900; default system network; no throttling; warm server; no plan edits",
+      "source_commit": "679e651",
+      "release": "20261115-70f69347160b",
+      "recorded_rounds": 3,
+      "actual_browser_rounds": 3,
+      "definition": "Market and plan verified, configuration ready, loader hidden and panes ready. Legacy release lacks verification flags, so additionally await a completed fresh market request. Shared in-flight requests may legitimately have started before an after-phase.",
+      "notes": "Exactly three complete formal fresh browser rounds, default system network; no repeats or dropped samples. Each phase requires actual candles, latest market/plan/config verification and hidden loader. Earlier release measurements and failures preserved separately. No product source modified by QA."
+    }
+  },
+  "harness_startup_errors": {
+    "before": [],
+    "after": []
+  },
+  "baseline_success_actual_candles_verified": true,
+  "limitations": [
+    "Exactly three complete formal fresh-browser rounds, all18 scenarios passed. No repetitions or discarded samples.",
+    "Before dual_open has2/3 successes and dual_reopen1/2; medians use successful samples and do not imply equal reliability or statistical guarantees.",
+    "First-candles preview and complete verification are distinct; complete verification of a first uncached symbol remains slower than original baseline in this run.",
+    "Cold browser requestStart medians include local browser/network setup. HTML-response-to-ready is reported separately; prior direct diagnostic shows this delay cannot be assigned entirely to the configured proxy.",
+    "Refresh rounds1and2 reused13 IndexedDB blocks each. Round3 reused the same13 hash URLs from browser HTTP disk cache, with no history network bytes; Hub downloads counts attempted fetches, not wire downloads. Immediate refresh may precede asynchronous IndexedDB commit; actual cause of this round was not independently established.",
+    "Prior failed formal f559 round and pilot deadline fallback remain archived and are not overwritten.",
+    "Only favicon404 was observed; no JS exceptions or failed application API requests in the new final18 scenarios."
+  ],
+  "cache_verification": {
+    "cold13_blocks_each": [
+      13,
+      13,
+      13
+    ],
+    "reload_idb_hits": [
+      13,
+      13,
+      0
+    ],
+    "reload_http_disk_cache_hits": [
+      0,
+      0,
+      13
+    ],
+    "reload_history_network_bytes": [
+      0,
+      0,
+      0
+    ],
+    "full_fallbacks_all_phases": 0,
+    "oss_fallbacks_all_phases": 0,
+    "js_errors": 0,
+    "noncritical_favicon_404": 3
+  },
+  "prior_evidence": {
+    "previous_f559": "history-perf-final-comparison.json",
+    "earlier0c2": "history-perf-comparison-0c2a033.json",
+    "public_ui15_unchangedDOM": "history-ui-public-final.json",
+    "progress_timeout6_checks": "history-progress-public.json",
+    "direct_diagnostic_excluded": "history-perf-direct-diagnostic.json",
+    "idb_write_pair_excluded": "history-idb-write-diagnostic.json"
+  }
+}
