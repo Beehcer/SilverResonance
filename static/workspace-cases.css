@@ -52,3 +52,40 @@
 @media(max-width:900px){.cases-concept-compare{grid-template-columns:1fr;gap:12px}.cases-concept-compare section{max-width:640px;width:100%}.cases-concept-explanation strong{display:block}.cases-concept-compare h4{font-size:14px}}
 
 .cases-concept-section{margin:24px 0 36px;padding-top:8px;border-top:1px solid #344956}.cases-concept-section>h3{color:#e8d18a;font-size:18px}.cases-concept-section>p{color:#b3c8d5;font-size:13px}.cases-concept-quick{max-width:900px;margin:20px 0 8px;border:1px solid #344956;border-radius:6px;padding:12px 16px;background:#0c151d}.cases-concept-quick h4{margin:0;color:#d6e4ed}.cases-concept-quick p{color:#b3c8d5;font-size:13px}
+
+/* Each diagram can be enlarged without changing the case or its scroll position. */
+.cases-chart-slot{position:relative}
+.cases-chart-expand{position:absolute;right:8px;top:8px;z-index:2;width:32px;height:32px;padding:6px;display:grid;place-items:center;border:1px solid #547080;border-radius:4px;background:#15232feb;color:#d3e8f3;opacity:0;transition:opacity .12s;cursor:pointer}
+.cases-chart-expand svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6}
+.cases-expandable-card:hover>.cases-chart-slot>.cases-chart-expand,.cases-chart-slot:focus-within>.cases-chart-expand{opacity:1}
+.cases-chart-slot:focus-within>.cases-chart-expand{transition:none}
+@media(hover:none),(pointer:coarse){.cases-chart-expand{opacity:1}}
+.cases-chart-zoom{position:fixed;inset:0;box-sizing:border-box;width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#0b1117;color:#d8e0e7;overflow:hidden}
+.cases-chart-zoom[open]{display:flex;flex-direction:column}
+.cases-chart-zoom::backdrop{background:#030609ed}
+.cases-chart-zoom>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 16px;border-bottom:1px solid #344956;flex:none}
+.cases-chart-zoom h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0;font-size:14px;font-weight:500}
+.cases-chart-restore{flex:none;padding:7px 12px;color:#d3e8f3;background:#1b2b38;border:1px solid #547080;border-radius:4px;cursor:pointer}
+.cases-chart-restore span{margin-left:8px;color:#91a8b9;font-size:11px}
+.cases-chart-restore:focus-visible{outline:2px solid #f1ce54;outline-offset:2px}
+.cases-chart-zoom-plot{flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center;padding:12px;overflow:hidden}
+.cases-chart-zoom-plot>svg{display:block;width:100%;height:100%;min-height:0;max-width:none;max-height:none;margin:0}
+.cases-chart-zoom-notes{flex:none;max-height:20vh;overflow:auto;border-top:1px solid #344956}
+.cases-chart-zoom-notes .cases-chart-notes{font-size:12px;border:0}
+.cases-chart-zoom-notes>p{padding:8px 14px;margin:0;color:#9cb6c7;font-size:12px;line-height:1.6}
+@media(prefers-reduced-motion:reduce){.cases-chart-expand{transition:none}}
+
+.cases-categories{display:flex;gap:6px;margin-right:auto}
+.cases-categories button{font:inherit;font-size:13px;white-space:nowrap;color:#b3c8d5;background:#101a23;border:1px solid #415362;border-radius:4px;padding:8px 16px;cursor:pointer}
+.cases-categories button[aria-pressed=true]{color:#f0d58b;background:#302e1e;border-color:#a58c43}
+.cases-filters select[hidden]{display:none}
+.cases-trend-card{border:1px solid #344956;background:#0c151d;border-radius:5px;overflow:hidden}
+.cases-trend-card>h4{margin:0;padding:12px 16px;color:#d6e4ed;background:#172530;font-size:14px;font-weight:500}
+.cases-trend-card>p{margin:0;padding:10px 16px;border-top:1px solid #273945;color:#9cb6c7;font-size:12px}
+.cases-trend-svg{display:block;width:100%;height:auto;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+.cases-trend-notes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.cases-trend-notes>section{padding:12px 16px;border:1px solid #293c49;background:#121d26;border-radius:4px}
+.cases-trend-notes h4{font-size:13px;font-weight:500;color:#e1d29f;margin:0 0 6px}
+.cases-trend-notes p,.cases-trend-followup{font-size:13px;line-height:1.8;color:#b5c7d4;margin:0}
+.cases-trend-followup{margin-top:14px;padding:10px 14px;border-left:2px solid #d4b258;background:#18222b}
+@media(max-width:760px){.cases-header{flex-wrap:wrap;gap:8px}.cases-categories{order:3;width:100%;margin:0}.cases-categories button{flex:1}.cases-close{margin-left:auto}.cases-trend-notes{grid-template-columns:1fr}}

@@ -200,7 +200,47 @@
       diagrams:{body:{bars:bars([mother,[101,107,100.5,102]]),motherIndex:0,childIndex:1},inside:{bars:bars([mother,child]),motherIndex:0,childIndex:1},long:{bars:long,motherIndex:3,childIndex:4,triggerIndex:5,level:104},short:{bars:short,motherIndex:3,childIndex:4,triggerIndex:5,level:96}},
       ruleRefs:['二·10 孕线／内包线与入场'],assumptions:['合成教学示意；各图均为3分钟K线，母子线已收盘。','多空过程仅演示子线触发，不证明主周期条件已成立，不提供开仓许可。']};
   }
+  // Anchors are fixed before later prices arrive. Synthetic OHLCs, not fitted history.
+  function trendLessons(){
+    const values=[
+      [98,99.2,97.5,99],[99,101,98.7,100.5],[100.5,102,100,101.6],[101.6,103,101.2,102.7],
+      [102.7,104,102.2,103.6],[103.6,103.8,101.5,102],[102,103,101.8,102.6],[102.6,103.5,102.3,103.1],
+      [103.1,106,102,105.5],[105.5,107,105,106.6],[106.6,108,106.1,107.5],[107.5,108.5,106.7,107],
+      [107,109,106.8,108.5],[108.5,109.5,108,109],[109,110,108.6,109.6],[109.6,109.8,108,108.4],
+      [108.4,108.7,106.8,107],[107,107.4,105.9,106.2],[106.2,107.8,106.1,107.3],[107.3,108.5,107,108],
+      [108,109.1,107.8,108.7],[108.7,109.4,108.4,108.8],[108.8,112.8,108,112.2],[112.2,114,111.3,113.5],
+      [113.5,115,112.8,114.6],[114.6,116,114,115.6],[115.6,116.2,113.5,114],[114,115.5,113.7,115.1],
+      [115.1,117,114.7,116.5],[116.5,116.8,114.3,114.7],[114.7,115,112.8,113.1],[113.1,113.4,111.5,112.4],
+      [112.4,112.6,110.9,111.7]
+    ];
+    const bars=values.map(([open,high,low,close],index)=>({index,open,high,low,close,completed:true}));
+    const anchors=[{index:8,price:102,referenceIndex:4,reference:104},{index:22,price:108,referenceIndex:14,reference:110}];
+    const shared={educational:true,concept:'trend',mode:'concept',entry:null,period:'m30',family:'trend-basics',category:'趋势线教学',
+      ruleRefs:['二·1 关键K线','二·2 趋势线','四 趋势逆转的标准流程','五 两类点3','十二 需要进一步固定的规则'],
+      assumptions:['合成教学，均为已收盘30分钟K线；不是当前合约行情。','本例取整根K线的最低／最高价（含影线），并用收盘确认越界；这是事前选定的示例口径。','原文尚未统一所有选点、有效破位与缓冲阈值；本例不新增通用参数。']};
+    const up={...shared,id:'trend-up',title:'上升线：连关键K的底部',direction:'long',tags:['选点连线','上涨','关键K','底部','锚点'],
+      summary:'先找突破前高的K线，再取这两根K线的底部连线。',headline:'先有突破，再选锚点；不是随意连两个低点。',
+      chart:{bars:bars.slice(0,30),anchors,side:'up',kind:'anchors',title:'30分钟 · 上升趋势线'},
+      notes:[['① 找关键K','前高先定为104、110；①收105.5、②收112.2，都在对应前高上方。'],['② 连底部','取①最低102、②最低108，连线并向右延伸。②收盘后，这条两点线才可使用。'],['为什么这样放','本例选两次回撤后的突破K，按系统取底部作参照；不混用普通回撤低点。'],['这条线管什么','辅助观察上涨方向是否松动。回到线上不等于可以买，破线也不等于可以卖。']]};
+    const mirror=p=>Math.round((220-p)*100)/100;
+    const down={...shared,id:'trend-down',title:'下降线：连关键K的顶部',direction:'short',tags:['选点连线','下跌','关键K','顶部','锚点'],
+      summary:'先找跌破前低的K线，再取这两根K线的顶部连线。',headline:'先有跌破，再连顶部；与上升线镜像。',
+      chart:{bars:up.chart.bars.map(b=>({...b,open:mirror(b.open),high:mirror(b.low),low:mirror(b.high),close:mirror(b.close)})),anchors:anchors.map(a=>({...a,price:mirror(a.price),reference:mirror(a.reference)})),side:'down',kind:'anchors',title:'30分钟 · 下降趋势线'},
+      notes:[['① 找关键K','前低先定为116、110；①收114.5、②收107.8，都在对应前低下方。'],['② 连顶部','取①最高118、②最高112，连线并向右延伸。②收盘后，这条两点线才可使用。'],['为什么这样放','本例选两次反弹后的破低K，取顶部作参照；不混用普通反弹高点。'],['这条线管什么','反弹接近线，只是观察区。还要受阻、转弱，并满足点3位置与风险条件。']]};
+    const broken={...shared,id:'trend-break',title:'破线以后：还不能直接反手',direction:'neutral',tags:['破线验证','A类','B类','点3','转弱'],
+      summary:'趋势线看方向变化，水平线看结构破坏，两者分开核对。',headline:'破线 → 检查结构 → 点3验证 → 区内触发。',
+      chart:{bars,anchors,side:'up',kind:'break',title:'30分钟 · 破线，但关键前低仍未破',key:{index:17,price:105.9},breakIndex:32},
+      notes:[['图中发生了什么','末根收111.7，低于原趋势线；事前选定的30分钟关键前低105.9尚未跌破。'],['A类看什么','同一层级的趋势线和关键水平都已有效破坏，再等点3回抽验证；不是破线当根追空。'],['B类看什么','关键水平允许未破，但仍须反向局部进攻、点3验证和区内转弱；只有破线不自动算B。'],['现在缺什么','图中还没给出破线后的点3回抽验证和更晚的3分钟触发，所以仍等待。']],
+      followup:'做空的完整顺序：破坏原结构 → 确认转弱 → 反弹受阻 → 3分钟再转弱。位置、止损、最近障碍和风险也要合格。做多镜像。'};
+    const fixed={...shared,id:'trend-fixed',title:'别挪线：固定周期与锚点',direction:'neutral',tags:['常见错误','重画','周期','影线','锚点'],
+      summary:'价格破线后，把锚点拖到新低，会把已经发生的破坏藏起来。',headline:'原线保留原判断；新结构另建，不回改历史。',
+      chart:{...broken.chart,kind:'fixed',title:'30分钟 · 原线与事后挪线对照',wrongAnchor:{index:32,price:110.9}},
+      notes:[['黄线：原始依据','①与②在后续破坏前已选定。观察时保留原锚点和原线，不为了“仍有效”而挪线。'],['灰线：错误示范','末根跌破后，改连末根低点110.9。它改变了原判断，不能拿来证明原趋势没被破坏。'],['新线何时再画','新单元的关键K与选点条件独立满足后，另画并记录启用时间；不能抹掉旧线的失效记录。'],['周期别混','日线看背景，30分钟看主结构，3分钟找扳机。3分钟破线不能替代30分钟结构破坏。']],
+      followup:'画前固定：合约、周期、关键K与参考水平、影线／实体口径、有效破位条件。不要盘中切换口径来保住原判断。'};
+    return[up,down,broken,fixed];
+  }
+  const trendCases=trendLessons();
   const intro=definitionCase();intro.topExample=topDefinitionCase();intro.title="2B：多空与快速案例";intro.tags.push("顶部2B","做空线索","快速3分钟");
   const cases=[intro,haramiDefinitionCase(),...families.flatMap(family=>[create(family,false),create(family,true)])];
-  return{version:2,source,cases,coverage:{families:14,examples:28,concepts:2,coreModes:4,scope:'前两项解释2B与孕线，不发入场许可；其余28例覆盖现行规则的主要许可分支与多空镜像，附加形态是同一主模式的条件示例，不穷举市场走势组合。'},get:id=>id==='2b-top-definition'?intro.topExample:cases.find(c=>c.id===id)};
+  return{version:2,source,cases,trendCases,coverage:{families:14,examples:28,concepts:2,coreModes:4,scope:'前两项解释2B与孕线，不发入场许可；其余28例覆盖现行规则的主要许可分支与多空镜像，附加形态是同一主模式的条件示例，不穷举市场走势组合。'},get:id=>id==='2b-top-definition'?intro.topExample:[...cases,...trendCases].find(c=>c.id===id)};
 }));

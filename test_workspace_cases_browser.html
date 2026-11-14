@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>案例专栏与单图放大 · 本地验收</title>
+<link rel="stylesheet" href="static/workspace.css">
+<link rel="stylesheet" href="static/workspace-cases.css">
+<button id="open">案例</button>
+<script src="static/workspace-cases-data.js"></script>
+<script src="static/workspace-cases.js"></script>
+<script>
+(async()=>{
+  const results=[];
+  function check(value,name){if(!value)throw Error(name);results.push(name);}
+  try{
+    const c=WorkspaceCases.mount({button:document.querySelector('#open'),getRules:()=>({available:true,version:WorkspaceCasesData.source.sha256})});
+    await c.open();
+    check(c.category==='candles'&&c.selected==='2b-definition','default Kline catalog');
+    for(const category of ['candles','trend']){
+      c.dialog.querySelector('[data-category='+category+']').click();
+      for(const item of WorkspaceCases.catalog(c)){
+        c.select(item.id);
+        const slots=[...c.content.querySelectorAll('.cases-chart-slot')];
+        check(slots.length>0&&slots.every(s=>s.querySelector('.cases-chart-expand')),'expand controls: '+item.id);
+        for(const slot of slots){
+          const count=slot.querySelectorAll('svg [data-bar]').length,button=slot.querySelector('button');
+          c.content.scrollTop=100;const top=c.content.scrollTop;
+          button.focus({preventScroll:true});
+          check(getComputedStyle(button).opacity==='1','keyboard visible: '+item.id);
+          button.click();check(c.chartZoom.open&&c.dialog.open,'nested dialog');
+          check(c.chartZoom.querySelectorAll('[data-bar]').length===count,'same candles');
+          const ids=[...document.querySelectorAll('[id]')].map(e=>e.id);
+          check(ids.length===new Set(ids).size,'unique SVG references');
+          const r=c.chartZoom.getBoundingClientRect();check(r.width===innerWidth&&r.height===innerHeight,'viewport filled');
+          c.chartZoom.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+          check(!c.chartZoom.open&&c.dialog.open,'Escape restores only diagram');
+          check(c.content.scrollTop===top,'scroll restored');
+          check(document.activeElement===button,'focus restored');
+        }
+      }
+    }
+    c.switchCategory('candles');
+    const item=WorkspaceCasesData.cases.find(x=>!x.educational&&x.direction==='short');
+    c.select(item.id);const trigger=c.content.querySelector('[data-stage=trigger]');trigger?.click();
+    const stage=c.stage;
+    const search=c.dialog.querySelector('input[type=search]');search.value=item.title;search.dispatchEvent(new Event('input'));
+    trigger?.click();c.content.scrollTop=80;const top=c.content.scrollTop;
+    c.switchCategory('trend');
+    check(c.dialog.querySelector('input[type=search]').value==='','independent search');
+    c.select('trend-down');c.switchCategory('candles');
+    check(c.selected===item.id&&c.filters.query===item.title,'restored Kline selection and filter');
+    check(c.content.scrollTop===top,'restored Kline position');
+    if(stage!=='all')check(c.stage===stage,'restored structure step');
+    c.switchCategory('trend');check(c.selected==='trend-down','restored trend selection');
+    check(c.dialog.querySelector('.cases-count').textContent==='4 / 4 个案例','trend count');
+    const current=WorkspaceCasesData.get(c.selected);
+    c.content.querySelector('.cases-chart-expand').click();
+    c.renderCharts(current);c.chartZoom.querySelector('button').click();
+    check(!c.chartZoom.open&&document.activeElement.classList.contains('cases-chart-expand'),'resize restores fresh control');
+    c.content.querySelector('.cases-chart-expand').click();c.close();
+    check(!c.chartZoom.open&&!c.dialog.open,'closing library also closes enlargement');
+    await c.open();
+    c.rule=WorkspaceCases.ruleState(WorkspaceCasesData.source,{available:true,version:'changed'});c.renderRule();
+    check(c.dialog.querySelector('.cases-rule-state').dataset.kind==='changed','stale source remains visible in trend tab');
+    c.rule=WorkspaceCases.ruleState(WorkspaceCasesData.source,{available:true,version:WorkspaceCasesData.source.sha256});c.renderRule();
+    c.select(location.hash.includes('break')?'trend-break':location.hash.includes('fixed')?'trend-fixed':location.hash.includes('down')?'trend-down':'trend-up');
+    if(location.hash.includes('zoom'))c.content.querySelector('.cases-chart-expand').click();
+    const header=c.dialog.querySelector('.cases-header');check(header.scrollWidth<=header.clientWidth,'header fits viewport');
+    document.body.dataset.qa='passed';document.body.dataset.checks=results.length;
+  }catch(e){document.body.dataset.qa='failed';document.body.dataset.error=e.message;}
+})();
+</script>
+</html>

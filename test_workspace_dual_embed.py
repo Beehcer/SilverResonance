@@ -142,8 +142,9 @@ class EmbedFocusTests(unittest.TestCase):
     def test_cases_fill_the_page_and_stay_full_page_when_repositioned(self):
         self.run_js(r"""
 const cases = new Element('dialog', 'cases-dialog'); cases.open = true; body.append(cases);
+const zoom = new Element('dialog', 'case-chart-zoom'); zoom.classList.add('cases-chart-zoom'); zoom.open = true; body.append(zoom);
 const localDialog = new Element('dialog', 'local-dialog'); localDialog.open = true; body.append(localDialog);
-document.querySelectorAll = () => [cases, localDialog];
+document.querySelectorAll = () => [cases, zoom, localDialog];
 for (const maximized of [false, true, false]) {
   mode(maximized);
   while (animationFrames.length) animationFrames.shift()();
@@ -151,6 +152,9 @@ for (const maximized of [false, true, false]) {
   assert.equal(cases.style.left, '0px'); assert.equal(cases.style.top, '0px');
   assert.equal(cases.style.width, '1500px'); assert.equal(cases.style.height, '900px');
   assert.equal(cases.style.maxWidth, '1500px'); assert.equal(cases.style.maxHeight, '900px');
+  assert.equal(zoom.style.left, '0px'); assert.equal(zoom.style.top, '0px');
+  assert.equal(zoom.style.width, '1500px'); assert.equal(zoom.style.height, '900px');
+  assert.equal(zoom.style.maxWidth, '1500px'); assert.equal(zoom.style.maxHeight, '900px');
   assert.equal(localDialog.style.maxWidth, '888px'); assert.equal(localDialog.style.maxHeight, '488px');
 }
 cases.open = false;

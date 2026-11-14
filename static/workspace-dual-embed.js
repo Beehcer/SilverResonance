@@ -57,7 +57,7 @@
     const nodes = document.querySelectorAll('dialog[open],#members-panel:not([hidden]),#layout-picker[open] .layout-menu,#decision-detail:not([hidden]),#object-context-menu:not([hidden])');
     for (const node of nodes) {
       if (!node.getClientRects().length) continue;
-      const isCases = node.id === 'cases-dialog', isDialog = node.tagName === 'DIALOG';
+      const isCases = node.id === 'cases-dialog' || node.classList.contains('cases-chart-zoom'), isDialog = node.tagName === 'DIALOG';
       const area = isCases ? {left: 0, top: 0, width: innerWidth, height: innerHeight} : popupArea(node);
       const isLayout = node.classList.contains('layout-menu'), isDecision = node.id === 'decision-detail';
       node.classList.add('dual-scoped-popup');
