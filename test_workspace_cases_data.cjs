@@ -4,7 +4,7 @@ const D=require('./static/workspace-cases-data.js');
 const tradingCases=D.cases.filter(c=>!c.educational);
 test('first entry teaches 2B without inventing an entry permission or assigning a trading mode',()=>{
  const c=D.cases[0];
- assert.equal(D.cases.length,29);assert.equal(new Set(D.cases.map(c=>c.id)).size,29);
+ assert.equal(D.cases.length,30);assert.equal(new Set(D.cases.map(c=>c.id)).size,30);
  assert.equal(c.id,'2b-definition');assert.equal(D.get('2b-definition'),c);assert.equal(c.educational,true);
  assert.equal(c.mode,'concept');assert.equal(c.direction,'neutral');assert.equal(c.entry,null);
  assert.equal(c.headline,'2B = 突破失败 = 原方向依据减弱；');assert.equal(c.caution,'不等于行情一定反转');
@@ -12,7 +12,7 @@ test('first entry teaches 2B without inventing an entry permission or assigning 
  assert.match(c.summary,/先真正越界，再迅速收回/);assert.match(c.context,/仍可再跌/);
  assert.equal(c.evidence.mainPermissionAt,undefined);assert.equal(c.evidence.triggerAt,undefined);
  assert.deepEqual(c.steps.map(s=>s.key),['reference','breach','reclaim']);
- assert.equal(D.coverage.examples,28);assert.equal(D.coverage.concepts,1);
+ assert.equal(D.coverage.examples,28);assert.equal(D.coverage.concepts,2);
 });
 test('2B definition establishes the prior low before its breach and reclaim without later results',()=>{
  const c=D.cases[0],a=c.aggregation,bars=c.charts.m3.bars;
@@ -114,5 +114,5 @@ test('quick examples use continuous closed three-minute bars and a prior boundar
   }
   assert.equal(q.samples,undefined);assert.equal(c.entry,null);
  }
- assert.equal(D.cases.filter(c=>c.educational).length,1);
+ assert.equal(D.cases.filter(c=>c.educational).length,2);
 });

@@ -189,7 +189,18 @@
       }
     };
   }
+  function haramiDefinitionCase(){
+    const bars=values=>values.map(([open,high,low,close],index)=>({index,dt:new Date(T0+index*3*MIN).toISOString(),closedAt:new Date(T0+(index+1)*3*MIN).toISOString(),open,high,low,close,completed:true}));
+    const mother=[105,106,99,100],child=[101,104,100.5,102];
+    const long=bars([[108,108.5,106.5,107],[107,107.5,105.5,106],[106,106.5,104.8,105],mother,child,[102,104.8,101.8,104.5]]);
+    const short=long.map(b=>({...b,open:200-b.open,high:200-b.low,low:200-b.high,close:200-b.close}));
+    return {id:'harami-definition',family:'concept-harami',title:'孕线：先包含，再等触发',category:'概念定义',mode:'concept',modeLabel:'概念教学',direction:'neutral',educational:true,concept:'harami',entry:null,
+      tags:['孕线入门','实体孕线','内包线','母线','子线','多空对照'],summary:'小实体藏在大实体内。先认母子，再选边界，不凭形态直接开仓。',
+      headline:'孕线 = 小实体被前一根大实体包含',caution:'实体缩小，不等于趋势反转',
+      diagrams:{body:{bars:bars([mother,[101,107,100.5,102]]),motherIndex:0,childIndex:1},inside:{bars:bars([mother,child]),motherIndex:0,childIndex:1},long:{bars:long,motherIndex:3,childIndex:4,triggerIndex:5,level:104},short:{bars:short,motherIndex:3,childIndex:4,triggerIndex:5,level:96}},
+      ruleRefs:['二·10 孕线／内包线与入场'],assumptions:['合成教学示意；各图均为3分钟K线，母子线已收盘。','多空过程仅演示子线触发，不证明主周期条件已成立，不提供开仓许可。']};
+  }
   const intro=definitionCase();intro.topExample=topDefinitionCase();intro.title="2B：多空与快速案例";intro.tags.push("顶部2B","做空线索","快速3分钟");
-  const cases=[intro,...families.flatMap(family=>[create(family,false),create(family,true)])];
-  return{version:2,source,cases,coverage:{families:14,examples:28,concepts:1,coreModes:4,scope:'首项合页解释底部与顶部2B，不发入场许可；其余28例覆盖现行规则的主要许可分支与多空镜像，附加形态是同一主模式的条件示例，不穷举市场走势组合。'},get:id=>id==='2b-top-definition'?intro.topExample:cases.find(c=>c.id===id)};
+  const cases=[intro,haramiDefinitionCase(),...families.flatMap(family=>[create(family,false),create(family,true)])];
+  return{version:2,source,cases,coverage:{families:14,examples:28,concepts:2,coreModes:4,scope:'前两项解释2B与孕线，不发入场许可；其余28例覆盖现行规则的主要许可分支与多空镜像，附加形态是同一主模式的条件示例，不穷举市场走势组合。'},get:id=>id==='2b-top-definition'?intro.topExample:cases.find(c=>c.id===id)};
 }));
