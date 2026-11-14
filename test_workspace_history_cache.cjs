@@ -20,6 +20,64 @@ function fixture(symbol='CZCE.MA701'){
 function memory(){const items=new Map();return{items,get:async key=>items.has(key)?clone(items.get(key)):undefined,put:async value=>items.set(value.sha256,clone(value)),prune:async()=>{}};}
 function blocks(storage){return new H.Blocks({storage,crypto:webcrypto,indexedDB:null,now:()=>NOW});}
 async function settled(store){await Promise.all([...store.writes]);await tick();}
+const nextTask=()=>new Promise(resolve=>setTimeout(resolve,0));
+function manyChunks(){
+  const f=fixture();f.values.clear();
+  for(const period of PERIODS){
+    const rows=Array.from({length:8},(_,index)=>({dt:new Date(NOW-86400000+index*180000).toISOString(),open:100,high:110,low:90,close:101}));
+    f.bundle.market.periods[period]=rows.slice(-2);f.bundle.market.period_counts[period]=8;f.bundle.history_counts[period]=6;f.bundle.history[period]=[];
+    for(let index=0;index<6;index+=2){const bars=rows.slice(index,index+2),text=JSON.stringify({schema:1,symbol:f.bundle.market.symbol,period,candle_basis:f.bundle.market.candle_basis[period]||'native_v1',anchor_reference_id:f.bundle.market.anchor_reference_id,bars}),hash=sha(text),desc={sha256:hash,url:'/api/workspace/market/history/'+hash+'.json',count:2,first:bars[0].dt,last:bars[1].dt};f.bundle.history[period].push(desc);f.values.set(desc.url,text);}
+  }
+  return f;
+}
+
+test('all history reads finish before one asynchronous write transaction, including chunks beyond the first four',async()=>{
+  const f=manyChunks(),events=[];let releaseWrite;
+  const storage={get:async()=>{events.push('read');return undefined;},put:async()=>assert.fail('Use one batch transaction'),putMany:async items=>{events.push('write:'+items.length);await new Promise(resolve=>{releaseWrite=resolve;});}};
+  const store=blocks(storage),market=await store.assemble(f.bundle,async path=>f.values.get(path));
+  assert.equal(market.periods.m3.length,8);assert.deepEqual(events,Array(9).fill('read'));assert.equal(store.writes.size,1);
+  await nextTask();assert.deepEqual(events,[...Array(9).fill('read'),'write:9']);
+  releaseWrite();await settled(store);assert.equal(store.writes.size,0);
+});
+
+test('concurrent restores defer writes and pruning until both readers finish',async()=>{
+  const a=fixture(),b=fixture('SHFE.sp2701'),storage=memory(),batches=[];let release,prunes=0;
+  const gate=new Promise(resolve=>{release=resolve;});
+  storage.putMany=async items=>{batches.push(items.map(item=>item.sha256));for(const item of items)await storage.put(item);};storage.prune=async()=>{prunes++;};
+  const store=blocks(storage),first=store.assemble(a.bundle,async path=>a.values.get(path)),second=store.assemble(b.bundle,async path=>{await gate;return b.values.get(path);});
+  await first;await nextTask();assert.equal(batches.length,0);assert.equal(prunes,0);assert.equal(store.activeAssemblies,1);
+  release();await second;await settled(store);await nextTask();
+  assert.equal(batches.length,1);assert.equal(batches[0].length,6);assert.equal(storage.items.size,6);assert.equal(store.activeAssemblies,0);assert.equal(prunes,1);
+});
+
+test('a failed assembly still persists completed blocks and later completing valid blocks',async()=>{
+  const f=fixture(),storage=memory(),store=blocks(storage);let rejectMiddle,releaseLast,firstProgress,lateProgress;
+  const middle=new Promise((_,reject)=>{rejectMiddle=reject;}),last=new Promise(resolve=>{releaseLast=resolve;}),one=new Promise(resolve=>{firstProgress=resolve;}),two=new Promise(resolve=>{lateProgress=resolve;});let count=0;
+  const work=store.assemble(f.bundle,async path=>{if(path===f.bundle.history.m30[0].url)await middle;if(path===f.bundle.history.m3[0].url)await last;return f.values.get(path);},()=>{if(++count===1)firstProgress();else lateProgress();});
+  const failure=assert.rejects(work,/offline/);await one;rejectMiddle(new Error('offline'));await failure;await settled(store);
+  assert.equal(storage.items.size,1);assert.equal(store.activeAssemblies,0);
+  releaseLast();await two;await settled(store);assert.equal(storage.items.size,2);
+});
+
+test('abort releases the write queue even if an IndexedDB read has not returned',async()=>{
+  const f=fixture(),storage=memory(),store=blocks(storage),controller=new AbortController();let releaseRead,completed;const gate=new Promise(resolve=>{releaseRead=resolve;}),ready=new Promise(resolve=>{completed=resolve;});let count=0;
+  storage.get=async key=>{if(key===f.bundle.history.m30[0].sha256)await gate;return undefined;};
+  const work=store.assemble(f.bundle,async path=>{if(controller.signal.aborted)throw new Error('cancelled');return f.values.get(path);},()=>{if(++count===2)completed();},controller.signal);
+  const failure=assert.rejects(work,/cancelled/);await ready;controller.abort();await settled(store);
+  assert.equal(storage.items.size,2);assert.equal(store.activeAssemblies,0);
+  releaseRead();await failure;assert.equal(store.activeAssemblies,0);
+});
+
+test('large concurrent restores use bounded write backpressure instead of starving persistence or dropping blocks',async()=>{
+  const saved=[],storage=memory(),store=blocks(storage);let releaseWrite;
+  storage.putMany=async items=>{if(!saved.length)await new Promise(resolve=>{releaseWrite=resolve;});saved.push(...items);};
+  store.activeAssemblies=1;
+  const item=index=>({sha256:String(index),bytes:13*1024*1024,text:'bounded payload metadata'});
+  await store.save(item(1));const pending=store.save(item(2));await nextTask();
+  assert.ok(releaseWrite,'The budget forces a batch even while readers are active');assert.equal(saved.length,0);
+  releaseWrite();await pending;assert.ok(store.writeBatch.bytes<=H.MAX_MEMORY_BYTES);assert.equal(saved.length,1);
+  store.activeAssemblies=0;store.scheduleWrites();await settled(store);assert.deepEqual(saved.map(item=>item.sha256),['1','2']);
+});
 
 test('cold bootstrap assembles a coherent full snapshot and persists verified historical chunks',async()=>{
   const f=fixture(),storage=memory(),store=blocks(storage),calls=[];
