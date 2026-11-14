@@ -39,3 +39,12 @@ test('harami long page renders all four diagrams without granting a trade or inv
  }
  assert.equal(V.filterCases(D.cases,{query:'孕线入门'})[0],c);
 });
+
+test('mother, child, range and trigger captions have explicit leaders',()=>{
+ for(const kind of ['body','inside','long','short']){
+  const svg=V.haramiChartSvg(c,kind);
+  for(const name of ['母线','子线'])assert.ok(svg.includes('data-harami-callout="'+name+'"><path'));
+  assert.doesNotMatch(svg,/>母<|>子</);
+  assert.match(svg,kind==='body'||kind==='inside'?/data-harami-callout="range"/:/data-harami-callout="trigger"/);
+ }
+});

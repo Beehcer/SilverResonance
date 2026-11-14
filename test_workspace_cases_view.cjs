@@ -117,3 +117,16 @@ test('trend anchors never create a long fake horizontal leader and price leaders
     }
   }
 });
+
+test('case annotations use descriptive words, stay within the plot, and keep full explanations',()=>{
+ for(const c of tradingCases)for(const period of ['m30','m3']){
+  const chart=c.charts[period],g=V.scene(chart,period,{compact:true}),labels=V.annotationPlacements(chart,g),svg=V.chartSvg(chart,period,{compact:true});
+  assert.doesNotMatch(svg,/证\d/);assert.equal(labels.length,chart.annotations.length);
+  for(const a of labels){
+   assert.ok(a.x>=g.plot.x&&a.y>=g.plot.y);assert.ok(a.x+a.w<=g.plot.x+g.plot.w&&a.y+a.h<=g.plot.y+g.plot.h);
+   assert.ok(a.label.length>1);assert.ok(svg.includes(a.label));assert.ok(svg.includes('<title>'+a.text+'</title>'));
+  }
+ }
+ assert.equal(V.annotationLabel('关键K：收盘破前高'),'突破前高');
+ assert.equal(V.annotationLabel('另一关键K低点锚'),'低点锚');
+});
