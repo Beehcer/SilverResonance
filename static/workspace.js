@@ -235,10 +235,10 @@
   function showAuth(){state.session=null;$('workspace').hidden=true;$('auth-screen').hidden=false;$('connection-message').textContent='连接暂时中断。重连后会恢复这个浏览器的身份与个人风控。';$('retry-connection').hidden=false;}
   function peerId(peer){return peer.user_id||peer.id||peer.user?.id;}
   function stopFollowing(restore=true){if(!state.following)return;state.following=null;state.followSignature=null;if(restore&&state.beforeFollow){for(const [period,view] of Object.entries(state.beforeFollow.views)){if(view){charts[period].view=clone(view.range);charts[period].autoPrice=view.autoPrice;charts[period].followLatest=view.followLatest;charts[period].viewCustomized=view.viewCustomized;charts[period].render();}}setLayout(state.beforeFollow.layout);activate(state.beforeFollow.active);}state.beforeFollow=null;$('follow-banner').hidden=true;state.memberSignature=null;saveViews();}
-  function followPeer(peer){if(state.market?.partial||peerId(peer)===state.session?.user.id)return;$('members-panel').hidden=true;$('members-button').setAttribute('aria-expanded','false');$('mobile-members-toggle')?.setAttribute('aria-expanded','false');if(!state.following)state.beforeFollow={views:Object.fromEntries(Object.entries(charts).map(([p,c])=>[p,c.view?{range:clone(c.view),autoPrice:c.autoPrice,followLatest:c.followLatest,viewCustomized:c.viewCustomized}:null])),layout:state.layout,active:state.active};state.following=peerId(peer);state.followSignature=null;state.memberSignature=null;applyFollow(peer);renderMembers();}
+  function followPeer(peer){if(state.market?.partial||peerId(peer)===state.session?.user.id)return;membersPopover.close();if(!state.following)state.beforeFollow={views:Object.fromEntries(Object.entries(charts).map(([p,c])=>[p,c.view?{range:clone(c.view),autoPrice:c.autoPrice,followLatest:c.followLatest,viewCustomized:c.viewCustomized}:null])),layout:state.layout,active:state.active};state.following=peerId(peer);state.followSignature=null;state.memberSignature=null;applyFollow(peer);renderMembers();}
   function applyFollow(peer){if(state.market?.partial)return;if(!peer?.view){$('follow-label').textContent='等待伙伴的视角…';$('follow-banner').hidden=false;return;}const signature=JSON.stringify(peer.view);$('follow-label').textContent='正在跟随 '+(peer.name||peer.user?.name||'伙伴')+' · 操作盘面即可退出';$('follow-banner').hidden=false;if(signature===state.followSignature)return;state.followSignature=signature;const chart=charts[peer.view.period];if(!chart)return;if(chart.host.closest('.chart-panel').hidden)setLayout('columns');activate(chart.period);chart.view=clone(peer.view.range);chart.autoPrice=false;chart.followLatest=false;chart.viewCustomized=true;chart.render();}
   $('stop-following').addEventListener('click',()=>{stopFollowing();renderMembers();});
-  function renderMembers(){const session=state.session;if(!session?.user)return;const members=state.presence?.length?state.presence:session.members||[],signature=JSON.stringify([state.following,members.map(m=>[peerId(m),m.name,m.color,m.object_id,Boolean(m.view)])]);if(signature!==state.memberSignature){state.memberSignature=signature;$('members-list').replaceChildren();for(const item of members){const m=item.user||item,id=peerId(item),row=el('div',undefined,'member-row'),name=el('span'),avatar=el('span',(m.name||'伙伴').slice(0,1),'member-avatar');avatar.style.background=m.color||item.color||'#468b92';avatar.style.color='#fff';name.append(avatar,document.createTextNode((m.name||'伙伴')+(id===session.user.id?' · 我':'')));row.append(name,el('span',item.object_id?'正在编辑':'在线','small muted'));if(id!==session.user.id){const follow=el('button',state.following===id?'退出跟随':'跟随视角');follow.type='button';follow.disabled=!item.view&&state.following!==id;follow.addEventListener('click',()=>{if(state.following===id){stopFollowing();renderMembers();}else followPeer(item);});row.append(follow);}$('members-list').append(row);}$('members-button').textContent=`${session.user.name} · ${members.length||1} 人在线`;if($('mobile-members-toggle'))$('mobile-members-toggle').textContent=`${members.length||1} 人在线`;$('presence-count').textContent='自行选择是否跟随';if(document.activeElement!==$('profile-name'))$('profile-name').value=session.user.name;if(document.activeElement!==$('profile-color'))$('profile-color').value=session.user.color||'#45878c';}const peers=(state.presence||[]).filter(p=>peerId(p)!==session.user.id);for(const chart of Object.values(charts))chart.setPresence(state.market?.partial?[]:peers);if(state.following){const peer=peers.find(p=>peerId(p)===state.following);if(peer)applyFollow(peer);else{stopFollowing();notice('伙伴已离开，已回到你的视角。');}}layerController.update({scope:layerScope(),objects:currentPlan()?state.plan.objects||[]:[],selected:state.selected,period:state.active,peers});}
+  function renderMembers(){const session=state.session;if(!session?.user)return;const members=state.presence?.length?state.presence:session.members||[],signature=JSON.stringify([state.following,members.map(m=>[peerId(m),m.name,m.color,m.object_id,Boolean(m.view)])]);if(signature!==state.memberSignature){state.memberSignature=signature;$('members-list').replaceChildren();for(const item of members){const m=item.user||item,id=peerId(item),row=el('div',undefined,'member-row'),name=el('span'),avatar=el('span',(m.name||'伙伴').slice(0,1),'member-avatar');avatar.style.background=m.color||item.color||'#468b92';avatar.style.color='#fff';name.append(avatar,document.createTextNode((m.name||'伙伴')+(id===session.user.id?' · 我':'')));row.append(name,el('span',item.object_id?'正在编辑':'在线','small muted'));if(id!==session.user.id){const follow=el('button',state.following===id?'退出跟随':'跟随视角');follow.type='button';follow.disabled=!item.view&&state.following!==id;follow.addEventListener('click',()=>{if(state.following===id){stopFollowing();renderMembers();}else followPeer(item);});row.append(follow);}$('members-list').append(row);}$('members-button').textContent=`${session.user.name} · ${members.length||1} 人在线`;if($('mobile-members-toggle'))$('mobile-members-toggle').textContent=`${members.length||1} 人在线`;if(!state.profileDirty&&!state.profileSaving&&($('members-panel').hidden||document.activeElement!==$('profile-name')))$('profile-name').value=session.user.name;if(!state.profileDirty&&!state.profileSaving&&($('members-panel').hidden||document.activeElement!==$('profile-color')))$('profile-color').value=session.user.color||'#45878c';}const peers=(state.presence||[]).filter(p=>peerId(p)!==session.user.id);for(const chart of Object.values(charts))chart.setPresence(state.market?.partial?[]:peers);if(state.following){const peer=peers.find(p=>peerId(p)===state.following);if(peer)applyFollow(peer);else{stopFollowing();notice('伙伴已离开，已回到你的视角。');}}layerController.update({scope:layerScope(),objects:currentPlan()?state.plan.objects||[]:[],selected:state.selected,period:state.active,peers});}
 
   function setPlanLoading(loading){loading=Boolean(loading||!state.configurationReady);state.loading=loading;document.body.classList.toggle('is-loading',loading);for(const control of document.querySelectorAll('[form=plan-form],#plan-form input,#plan-form textarea,#plan-form select,#new-board,#copy-board,#archive-board,#board-select,#object-form input,#object-form select,#object-form textarea,#object-form button,[data-tool],[data-chart-tool],#add-zone,#restore-draft,#mark-entry-stop,#plan-entry,#plan-stop,#add-expectation,#cancel-plan-tool'))control.disabled=loading;$('save-state').textContent=loading?'正在读取三周期行情…':state.viewOnly?'只读 · 实时协作':state.dirty?'同步中…':'已同步';if(!loading){renderObjects();setSaveDisabled(state.conflict);}renderQuickPlan();renderLoadState();}
   function favorites(){return symbolGroups().favorites;}
@@ -558,12 +558,82 @@
   window.addEventListener('offline',()=>{state.connectionLost=true;persistDraft();renderSyncStatus();});
   $('dismiss-draft').addEventListener('click',()=>{const recovery=recoverableDraft();if(recovery)storageSet(recovery.key+':dismissed',recovery.draft);$('draft-recovery').hidden=true;});
   $('symbol').addEventListener('change',event=>switchSymbol(event.target.value));
-  $('members-button').addEventListener('click',()=>{$('members-panel').hidden=!$('members-panel').hidden;$('members-button').setAttribute('aria-expanded',String(!$('members-panel').hidden));});
-  async function saveProfile(){if(state.viewOnly)return;
-    clearTimeout(state.profileTimer);if(state.profileSaving){state.profileAgain=true;return;}const name=$('profile-name').value.trim(),color=$('profile-color').value;if(!name){$('profile-status').textContent='请输入昵称';return;}state.profileSaving=true;
-    try{const result=await api('/profile','POST',{name,color});state.session.user=result.user||result.session?.user||state.session.user;$('profile-status').textContent='已同步';await refreshPresence();}catch(error){$('profile-status').textContent=error.message;}finally{state.profileSaving=false;if(state.profileAgain){state.profileAgain=false;saveProfile();}}
+  function installMembersPopover(){
+    const panel=$('members-panel'),buttons=[$('members-button'),$('mobile-members-toggle')].filter(Boolean);
+    let anchor=buttons[0];
+    const changed=()=>window.FullWorkspace?.queueState();
+    function close({restoreFocus=false}={}){
+      if(panel.hidden)return;
+      panel.hidden=true;for(const button of buttons)button.setAttribute('aria-expanded','false');
+      // Hiding the panel must not cancel a queued profile save or move focus
+      // away from the chart/control the user has just clicked.
+      if(restoreFocus&&anchor?.getClientRects().length)anchor.focus({preventScroll:true});
+      changed();
+    }
+    function position(){
+      if(panel.hidden)return;
+      if(!anchor?.getClientRects().length){close();return;}
+      const rect=anchor.getBoundingClientRect(),gap=6,top=rect.bottom+gap;
+      Object.assign(panel.style,{position:'fixed',boxSizing:'border-box',right:'auto',bottom:'auto',margin:'0',width:Math.min(310,Math.max(1,innerWidth-gap*2))+'px',maxWidth:Math.max(1,innerWidth-gap*2)+'px',maxHeight:Math.max(1,innerHeight-top-gap)+'px',overflowY:'auto',top:top+'px'});
+      const width=panel.getBoundingClientRect().width;
+      panel.style.left=Math.max(gap,Math.min(rect.right-width,innerWidth-width-gap))+'px';
+      changed();
+    }
+    function toggle(button){
+      if(!panel.hidden){close();return;}
+      anchor=button;panel.hidden=false;
+      for(const item of buttons)item.setAttribute('aria-expanded',String(item===anchor));
+      position();
+      const field=panel.querySelector('input:not(:disabled)');
+      if(field?.getClientRects().length)field.focus({preventScroll:true});
+    }
+    for(const button of buttons)button.addEventListener('click',()=>toggle(button));
+    const dismissOutside=event=>{
+      if(!panel.contains(event.target)&&!buttons.some(button=>button.contains(event.target)))close();
+    };
+    document.addEventListener('pointerdown',dismissOutside,true);
+    document.addEventListener('click',dismissOutside,true);
+    document.addEventListener('keydown',event=>{
+      if(panel.hidden||event.key!=='Escape'||event.repeat||event.isComposing||event.keyCode===229)return;
+      event.preventDefault();event.stopImmediatePropagation();close({restoreFocus:true});
+    },true);
+    // A native color picker may blur the window. Only an actual outside click
+    // closes this non-modal editor; keep the original DOM and form listeners.
+    window.addEventListener('resize',position);
+    return{close,position,isOpen:()=>!panel.hidden};
   }
-  for(const name of ['input','change','compositionend'])$('profile-form').addEventListener(name,event=>{if(event.isComposing)return;clearTimeout(state.profileTimer);state.profileTimer=setTimeout(saveProfile,150);$('profile-status').textContent='同步中…';});
+  const membersPopover=installMembersPopover();
+  window.WorkspaceMembersPopover=membersPopover;
+  function receiveProfile(user){
+    if(!state.session?.user||user?.id!==state.session.user.id||typeof user.name!=='string'||!user.name.trim()||!/^#[0-9a-f]{6}$/i.test(user.color||''))return;
+    state.session.user={...state.session.user,name:user.name,color:user.color};
+    const updated=item=>peerId(item)===user.id?item.user?{...item,user:{...item.user,name:user.name,color:user.color}}:{...item,name:user.name,color:user.color}:item;
+    if(state.presence)state.presence=state.presence.map(updated);
+    if(state.session.members)state.session.members=state.session.members.map(updated);
+    state.memberSignature=null;renderMembers();
+  }
+  window.WorkspaceProfile={receive:receiveProfile};
+  async function saveProfile(){if(state.viewOnly)return;
+    clearTimeout(state.profileTimer);if(state.profileSaving){state.profileAgain=true;return;}
+    const name=$('profile-name').value.trim(),color=$('profile-color').value,fields=state.profileFields||new Set(['name','color']),patch={};
+    if(fields.has('name')){if(!name){$('profile-status').textContent='请输入昵称';return;}patch.name=name;}
+    if(fields.has('color'))patch.color=color;
+    if(!Object.keys(patch).length)return;
+    state.profileFields=fields;state.profileSaving=true;
+    try{
+      // The endpoint accepts partial fields. A color-only edit must never send
+      // a nickname cached by a different pane back to the server.
+      const result=await api('/profile','POST',patch);state.session.user=result.user||result.session?.user||state.session.user;
+      if(patch.name!==undefined&&$('profile-name').value.trim()===patch.name)fields.delete('name');
+      if(patch.color!==undefined&&$('profile-color').value===patch.color)fields.delete('color');
+      state.profileDirty=fields.size>0;$('profile-status').textContent='已同步';
+      window.FullWorkspace?.profileSaved?.(state.session.user,Object.keys(patch));await refreshPresence();
+    }catch(error){state.profileDirty=true;$('profile-status').textContent=error.message;}
+    finally{state.profileSaving=false;state.memberSignature=null;renderMembers();if(state.profileAgain){state.profileAgain=false;saveProfile();}}
+  }
+  function markProfileField(event){state.profileFields ||= new Set();if(event.target.id==='profile-name')state.profileFields.add('name');if(event.target.id==='profile-color')state.profileFields.add('color');state.profileDirty=state.profileFields.size>0;}
+  $('profile-form').addEventListener('compositionstart',event=>{clearTimeout(state.profileTimer);markProfileField(event);});
+  for(const name of ['input','change','compositionend'])$('profile-form').addEventListener(name,event=>{markProfileField(event);if(event.isComposing)return;clearTimeout(state.profileTimer);state.profileTimer=setTimeout(saveProfile,150);$('profile-status').textContent='同步中…';});
   $('profile-form').addEventListener('submit',event=>{event.preventDefault();saveProfile();});
   $('ack-alert').addEventListener('click',()=>{if(!state.lastSignal)return;const keys=storageGet('ack:'+state.session.user.id,[]);storageSet('ack:'+state.session.user.id,[...keys,state.lastSignal].slice(-300));$('ack-alert').hidden=true;addAlert('已确认提醒',state.symbol+' · 本次提醒已由我确认',state.lastSignal);});
   const PANEL_IDS=['quick-plan-panel','objects-details','chart-help-details'];
@@ -639,7 +709,6 @@
   async function boot(){try{const session=await api('/session');await enter(session);}catch(error){showAuth();$('connection-message').textContent=error.message;}}
   $('retry-connection').addEventListener('click',boot);
   WorkspaceCases.mount({button:$('cases-button'),getRules:()=>api('/rules').then(result=>result.rules)});
-  $('mobile-members-toggle')?.addEventListener('click',()=>{$('members-panel').hidden=!$('members-panel').hidden;$('mobile-members-toggle').setAttribute('aria-expanded',String(!$('members-panel').hidden));});
   let resizeModeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeModeTimer);resizeModeTimer=setTimeout(()=>{if(Boolean(mobileDevice()||state.session?.mobile_device)!==state.viewOnly)applyViewMode();},80);});
   applyViewMode();
   boot();

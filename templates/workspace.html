@@ -15,7 +15,7 @@
     <span class="mobile-only mobile-readonly-label">只读看盘</span>
     <span class="workspace-title">多周期工作台</span>
     <div class="terminal-notice-slot"><div id="notice" class="notice terminal-notice" hidden role="status" aria-live="polite" aria-atomic="true"></div></div>
-    <div class="terminal-header-actions"><button id="cases-button" class="cases-entry" type="button" aria-haspopup="dialog" title="查看交易系统开仓案例">案例</button><button id="members-button" class="members-button" aria-expanded="false">成员</button><button id="mobile-members-toggle" class="mobile-only" type="button" aria-expanded="false" aria-controls="members-panel">伙伴</button><span class="live-dot"></span><span id="connection-status">连接中</span></div>
+    <div class="terminal-header-actions"><button id="cases-button" class="cases-entry" type="button" aria-haspopup="dialog" title="查看交易系统开仓案例">案例</button><button id="members-button" class="members-button" type="button" aria-expanded="false" aria-controls="members-panel" aria-haspopup="dialog">成员</button><button id="mobile-members-toggle" class="mobile-only" type="button" aria-expanded="false" aria-controls="members-panel">伙伴</button><span class="live-dot"></span><span id="connection-status">连接中</span></div>
   </header>
   <div class="terminal-menu">
     <div class="menu-group"><button id="follow-latest">跟随最新</button><button id="global-fit">复位</button></div>
@@ -110,7 +110,7 @@
 
   </div>
 </div>
-<section id="members-panel" class="members-panel" hidden><div class="section-heading"><h3>一起看这张计划</h3><span id="presence-count">在线伙伴</span></div><div id="members-list"></div><form id="profile-form"><label>伙伴看到的名字<input id="profile-name" maxlength="40" required></label><label>我的颜色<input id="profile-color" type="color"></label><span id="profile-status" class="small"></span></form><p class="small desktop-members-help">同一网络中，请分享主机的局域网地址；127.0.0.1 只在本机可用。多人打开同一计划，可同步图上标记与鼠标位置；不同属性与节点分别合并；同一处以后提交的编辑为准。跟随视角需主动开启，编辑或平移即可退出。</p><p class="mobile-only mobile-members-help">伙伴的标注与操作会同步显示在图上。手机端可查看计划和跟随视角，不修改共同画板。</p></section>
+<section id="members-panel" class="members-panel" role="dialog" aria-modal="false" aria-labelledby="members-heading" hidden><div class="section-heading"><h3 id="members-heading">编辑在线状态</h3></div><div id="members-list"></div><form id="profile-form"><label>伙伴看到的名字<input id="profile-name" maxlength="40" required></label><label>我的颜色<input id="profile-color" type="color"></label><span id="profile-status" class="small"></span></form><p class="mobile-only mobile-members-help">伙伴的标注与操作会同步显示在图上。手机端可查看计划和跟随视角，不修改共同画板。</p></section>
 <template id="cases-resources"><link rel="stylesheet" href="/static/workspace-cases.css?v=20261114-trend-lessons-1"><script src="/static/workspace-cases-data.js?v=20261114-trend-lessons-1"></script><script src="/static/workspace-cases.js?v=20261114-trend-lessons-1"></script></template>
 <script src="/static/workspace-core.js"></script>
 {% if dual_pane %}<script src="/static/workspace-dual-chart.js?v=20261114-feedback-1"></script><script src="/static/workspace-dual-runtime.js?v=20261114-feedback-1"></script>{% else %}<script src="/static/workspace-chart.js?v=20261114-feedback-1"></script><script src="/static/workspace.js?v=20261114-feedback-1"></script>{% endif %}

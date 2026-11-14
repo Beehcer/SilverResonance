@@ -411,6 +411,10 @@ const layout = new Element('details', 'layout-picker'); layout.open = true;
 const members = new Element('section', 'members-panel'); members.hidden = false;
 const membersButton = new Element('button', 'members-button'); membersButton.setAttribute('aria-expanded', 'true');
 const mobileMembers = new Element('button', 'mobile-members-toggle'); mobileMembers.setAttribute('aria-expanded', 'true');
+window.WorkspaceMembersPopover = {
+  isOpen:()=>!members.hidden,
+  close:({restoreFocus=false}={})=>{members.hidden=true;membersButton.setAttribute('aria-expanded','false');mobileMembers.setAttribute('aria-expanded','false');if(restoreFocus)membersButton.focus();}
+};
 const decision = new Element('section', 'decision-detail'); decision.hidden = false;
 const decisionButton = new Element('button', 'decision-toggle'); decisionButton.setAttribute('aria-expanded', 'true');
 let cancelledDrafts = 0, priorityChecks = 0, drawing = true;
@@ -418,7 +422,7 @@ runtime.escapeHasPriority = () => { priorityChecks++; return drawing; };
 document.addEventListener('keydown', value => {
   if (value.key === 'Escape' && drawing) { cancelledDrafts++; drawing = false; value.preventDefault(); value.stopImmediatePropagation(); }
 });
-for (const popup of [layout, members, decision]) {
+for (const popup of [members, layout, decision]) {
   const escape = event(body, {key: 'Escape'}); dispatch('keydown', escape);
   assert.equal(popup === layout ? popup.open : !popup.hidden, false);
   assert.equal(escape.prevented, true);

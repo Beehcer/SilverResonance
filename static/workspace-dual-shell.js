@@ -74,12 +74,23 @@
         const box = slotRect(pane.id); if (!box) continue;
         record.frame.className = 'workspace-frame is-passive';
         rectStyle(record.frame, {...box, left: box.left - stageRect.left, top: box.top - stageRect.top});
+        record.frame.style.clipPath = membersClip(record, selected, bridge(selected)?.snapshot().membersPopup);
       }
     }
     renderSidebarControls();
     if (drag) showGuide(drag.x, drag.y);
   }
   function scheduleLayout() { if (animation) return; animation = requestAnimationFrame(() => { animation = 0; layout(); }); }
+  function membersClip(record, selected, popup) {
+    // Keep the active frame behind its sibling. Only the profile rectangle
+    // covers the passive chart; both frames remain mounted and interactive.
+    if (!popup) return '';
+    const own = record.frame.getBoundingClientRect(), host = selected.frame.getBoundingClientRect();
+    const left = Math.max(0, host.left + popup.left - own.left), top = Math.max(0, host.top + popup.top - own.top);
+    const right = Math.min(own.width, host.left + popup.right - own.left), bottom = Math.min(own.height, host.top + popup.bottom - own.top);
+    if (![left, top, right, bottom, own.width, own.height].every(Number.isFinite) || right <= left || bottom <= top) return '';
+    return `polygon(evenodd, 0px 0px, ${own.width}px 0px, ${own.width}px ${own.height}px, 0px ${own.height}px, 0px 0px, ${left}px ${top}px, ${right}px ${top}px, ${right}px ${bottom}px, ${left}px ${bottom}px, ${left}px ${top}px, 0px 0px)`;
+  }
   function maximizeWorkspace(id) {
     if (busy || drag || !state || workspaceMaximized) return;
     if (!frames.get(id)?.ready || !activeFrame()?.ready) { announce('工作区仍在加载，请稍后再全屏。'); return; }
@@ -255,10 +266,24 @@
         if (snapshot.showable) markShowable(record);
         if (record.modalOpen !== snapshot.modalOpen) { record.modalOpen = snapshot.modalOpen; scheduleLayout(); }
         if (record.pageDialogOpen !== snapshot.pageDialogOpen) { record.pageDialogOpen = snapshot.pageDialogOpen; scheduleLayout(); }
+        const membersPopup = JSON.stringify(snapshot.membersPopup || null);
+        if (record.membersPopup !== membersPopup) { record.membersPopup = membersPopup; scheduleLayout(); }
         if (snapshot.symbol && record.symbol !== snapshot.symbol && ids.includes(snapshot.symbol) && !busy) { record.symbol = snapshot.symbol; const pane = state.panes.find(pane => pane.id === id); if (pane) pane.symbol = snapshot.symbol; persist(); }
         break;
       }
       case 'full-workspace:activate': if (id !== state.activeId) void transition(M.activate(state, id)); break;
+      case 'full-workspace:outside-members': bridge(activeFrame())?.closeMembers?.(); break;
+      case 'full-workspace:profile-saved': {
+        const user = data.user, existing = window.DualWorkspaceBootstrap?.session?.user;
+        if (!existing || user?.id !== existing.id || typeof user.name !== 'string' || !user.name.trim() || user.name.length > 40 || !/^#[0-9a-f]{6}$/i.test(user.color || '')) break;
+        const fields = Array.isArray(data.fields) ? data.fields : ['name', 'color'];
+        const shared = {...existing};
+        if (fields.includes('name')) shared.name = user.name;
+        if (fields.includes('color')) shared.color = user.color;
+        window.DualWorkspaceBootstrap.session.user = shared;
+        for (const item of frames.values()) bridge(item)?.profileChanged?.(shared);
+        break;
+      }
       case 'full-workspace:maximize': maximizeWorkspace(id); break;
       case 'full-workspace:restore': restoreMaximized(); break;
       case 'full-workspace:dock-toggle': if (id === state.activeId) setFullscreenSidebar('right', data.open); break;
@@ -270,6 +295,7 @@
     }
   });
   $('drop-shield').addEventListener('dragover', event => { if (!drag) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; showGuide(event.clientX, event.clientY); });
+  window.addEventListener('pointerdown', () => bridge(activeFrame())?.closeMembers?.(), true);
   $('drop-shield').addEventListener('drop', event => { event.preventDefault(); endDrag(event.clientX, event.clientY); });
   $('drop-shield').addEventListener('dragleave', () => { $('drop-guide').hidden = true; });
   for (const side of ['left', 'right']) {

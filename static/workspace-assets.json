@@ -1,5 +1,5 @@
 {
-  "version": "bf1291dacb6eb019dc03a35a",
+  "version": "05ec1f7294722c5a79866f26",
   "assets": {
     "/static/plan-board-model.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/plan-board-model.js",
     "/static/workspace-cases-data.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-cases-data.js",
@@ -10,11 +10,11 @@
     "/static/workspace-core.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/12a0bd4fb46cd55f3b2fa49a/workspace-core.js",
     "/static/workspace-dual-chart.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-dual-chart.js",
     "/static/workspace-dual-embed.css": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-dual-embed.css",
-    "/static/workspace-dual-embed.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-dual-embed.js",
+    "/static/workspace-dual-embed.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/cbcdf7ca789b91866dc28472/workspace-dual-embed.js",
     "/static/workspace-dual-model.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-dual-model.js",
-    "/static/workspace-dual-runtime.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/a115b4b1f110fcfd46250449/workspace-dual-runtime.js",
+    "/static/workspace-dual-runtime.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/742195df762b8baf41ab1d8e/workspace-dual-runtime.js",
     "/static/workspace-dual-shell.css": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-dual-shell.css",
-    "/static/workspace-dual-shell.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/312b9c1da9a9c1fa5beea0aa/workspace-dual-shell.js",
+    "/static/workspace-dual-shell.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/957b157c8ab1ed6747ad7a2f/workspace-dual-shell.js",
     "/static/workspace-editing.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-editing.js",
     "/static/workspace-history-cache.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/5e59c9c88ef515d2a5e7886f/workspace-history-cache.js",
     "/static/workspace-layers.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-layers.js",
@@ -24,12 +24,12 @@
     "/static/workspace-merge.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-merge.js",
     "/static/workspace-presence.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-presence.js",
     "/static/workspace-properties.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-properties.js",
-    "/static/workspace-shell-runtime.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/53dd697fbc0244cb26591da7/workspace-shell-runtime.js",
+    "/static/workspace-shell-runtime.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/f55289250f06a4770a1ee872/workspace-shell-runtime.js",
     "/static/workspace-shortcuts.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-shortcuts.js",
     "/static/workspace-symbols.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-symbols.js",
     "/static/workspace-ticket.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-ticket.js",
     "/static/workspace.css": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace.css",
-    "/static/workspace.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/fc2ea2a9d1aff13d9f60b077/workspace.js"
+    "/static/workspace.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/e418cc2a0dd59a109d51ceab/workspace.js"
   },
   "sha256": {
     "plan-board-model.js": "614f64ff6f0b4d1767b6d1f978ade7d2926b6bb382c3e6c230e7e1a76d953cb7",
@@ -41,11 +41,11 @@
     "workspace-core.js": "12a0bd4fb46cd55f3b2fa49ad70a2715dc72bbe9ed3f564600ae5eda1014d0bf",
     "workspace-dual-chart.js": "0f8cbcaf2dd351383c9f0c11e8227285426b10a160803a7ea2c52bafc7f6f42b",
     "workspace-dual-embed.css": "59fc2d4454def612834b87215108dbc80e6d404efa7641bff16008d2d75eadbc",
-    "workspace-dual-embed.js": "62dacc0516cc06bf6dec44908e732c0b8e6b79d88d7b5fb2cb26c90b3bf81652",
+    "workspace-dual-embed.js": "cbcdf7ca789b91866dc284721e2dee07914723fda501af96509dcf56c18ccae0",
     "workspace-dual-model.js": "a4a3daa0a664c7b3d9d5a4aaa6629aed8ea45dde443a0ab9cca8c9c6d19e82bc",
-    "workspace-dual-runtime.js": "a115b4b1f110fcfd46250449c4cf31247b90fd0c03689afa2eed3099364d7d41",
+    "workspace-dual-runtime.js": "742195df762b8baf41ab1d8eda21b637d2e3f7dd79ef7e45996ab8f238652e66",
     "workspace-dual-shell.css": "9337fe939bfa084756d0874919edb5e376b6494bc78863c004b8c52cf2379975",
-    "workspace-dual-shell.js": "312b9c1da9a9c1fa5beea0aa1cbfdc2aef37c1377ce0b88b9d1822691b4692b6",
+    "workspace-dual-shell.js": "957b157c8ab1ed6747ad7a2fb7c211ede1a3072db4363ad01355a81896295e66",
     "workspace-editing.js": "eea148335e645c6fb959a6f0d4ee8e1e1a6cbcf7de59e8fa34d590f3da0eb71b",
     "workspace-history-cache.js": "5e59c9c88ef515d2a5e7886f5cf28e1d12d3a3cd0641a0afc9e9baa18e1975d5",
     "workspace-layers.js": "126ca6404690eddcb9904d4eac219b0e59317e00c2075d01ddcd1784d58e6319",
@@ -55,11 +55,11 @@
     "workspace-merge.js": "ee22744f2a3661e1e5d37ebd77942a64759b239eb0861087432b2916b8b13ff6",
     "workspace-presence.js": "ddfc9a0a86699af92acc9b3a105f66fb8dbd52e41ee2333469ead68a00bb4fdb",
     "workspace-properties.js": "7f95d0f0e4fc3e1a8145fa549ccbf32f0e3da55c8d2aa8bb45392ee4664a18f7",
-    "workspace-shell-runtime.js": "53dd697fbc0244cb26591da70c1696d9659fec3af7d8f1d89fe602540f81eee3",
+    "workspace-shell-runtime.js": "f55289250f06a4770a1ee872f67b26bd6c6978293414d9693203b3d5a47c8f06",
     "workspace-shortcuts.js": "e236cdc27c9fc3d8f5bea5787c07ef2084fdeb69f8d50f9335ffc4fbebe04ca8",
     "workspace-symbols.js": "2e23ac0807942fecf1c081cd8b7a706ca0a296863a8febe362c2d11a107de948",
     "workspace-ticket.js": "bab8320f92d44928c347729e0179b9dc2b3c2c5dc30869684b344cc7e6d6e16a",
     "workspace.css": "0c37acfc21441f28e3254fda51f0ae5659336083d7951fd2a0d6ab3c7374d213",
-    "workspace.js": "fc2ea2a9d1aff13d9f60b077130f784ed71279f1f755341e2fff462756866250"
+    "workspace.js": "e418cc2a0dd59a109d51ceab35576ff83e6503e0eff939c173471fbc7fbf125f"
   }
 }

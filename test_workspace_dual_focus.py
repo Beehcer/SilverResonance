@@ -1,5 +1,6 @@
 """Exercise the real shell's focus lifecycle with live frame stand-ins."""
 from pathlib import Path
+import json
 import subprocess
 import unittest
 
@@ -13,6 +14,7 @@ class ShellFocusTests(unittest.TestCase):
         messages = source[source.index("  window.addEventListener('message'"):source.index("  $('drop-shield').addEventListener")]
         model = (Path(__file__).parent / 'static/workspace-dual-model.js').as_posix()
         history_cache = (Path(__file__).parent / 'static/workspace-history-cache.js').as_posix()
+        bootstrap = next(line.strip() for line in source.splitlines() if '= {session, symbols: response, createdAt:' in line)
         harness = r"""
 const assert = require('node:assert/strict');
 const WorkspaceHistoryCache = require(HISTORY);
@@ -26,7 +28,8 @@ const location={origin:'http://localhost'};
 const localStorage={setItem:(key,value)=>saved.push(JSON.parse(value))};
 const requestAnimationFrame=fn=>(raf.push(fn),raf.length);
 const setTimeout=()=>1,clearTimeout=()=>{};
-""".replace('MODEL', repr(model)).replace('HISTORY', repr(history_cache))
+function initializeBootstrap(session){const response={symbols:[]};eval(BOOTSTRAP_CODE);}
+""".replace('MODEL', repr(model)).replace('HISTORY', repr(history_cache)).replace('BOOTSTRAP_CODE', json.dumps(bootstrap))
         fixtures = r"""
 function record(id) {
   const attrs={}, calls={prepare:0,deactivate:0,focus:0,switches:[]}, ui={dockOpen:true,dockWidth:204,group:'all',panel:'quick-plan-panel'};
@@ -125,6 +128,42 @@ assert.equal(a.symbol,'AU');assert.equal(state.panes[0].symbol,'AU');assert.equa
 modalOpen=true;
 events.message({origin:location.origin,source:a.frame.contentWindow,data:{type:'full-workspace:state',paneId:'pane-a',snapshot:{symbol:'AU',modalOpen:true}}});
 assert.equal(a.modalOpen,true);
+""")
+
+    def test_profile_cover_is_local_and_cross_frame_click_restores_both_panes(self):
+        self.run_scenario(r"""
+let popup={left:900,top:38,right:1210,bottom:288},dismissed=0;
+a.api.snapshot=()=>({symbol:'MA',membersPopup:popup,ui:{...a.api.ui}});
+a.api.closeMembers=()=>{popup=null;dismissed++;};
+layout();
+assert.match(b.frame.style.clipPath,/^polygon\(evenodd,/);
+assert.equal(a.frame.className,'workspace-frame is-active');
+assert.equal(b.frame.className,'workspace-frame is-passive');
+for(const r of [a,b]){assert.equal(r.frame.hidden,false);assert.equal(r.frame.inert,false);assert.equal(r.frame.removed,undefined);}
+events.message({origin:location.origin,source:b.frame.contentWindow,data:{type:'full-workspace:outside-members',paneId:'pane-b'}});
+layout();
+assert.equal(dismissed,1);assert.equal(b.frame.style.clipPath,'');
+assert.equal(state.activeId,'pane-a');assert.equal(saved.length,0);
+assert.equal(a.calls.deactivate,0);assert.equal(a.calls.prepare,0);
+""")
+
+    def test_profile_changes_refresh_live_panes_and_bootstrap_without_stale_fields(self):
+        self.run_scenario(r"""
+initializeBootstrap({user:{id:'me',name:'旧名',color:'#112233'}});
+const received=[];
+a.api.profileChanged=user=>received.push({...user});b.api.profileChanged=user=>received.push({...user});
+function savedProfile(user,fields){events.message({origin:location.origin,source:a.frame.contentWindow,data:{type:'full-workspace:profile-saved',paneId:'pane-a',user,fields}});}
+savedProfile({id:'me',name:'新名',color:'#112233'},['name']);
+assert.equal(window.DualWorkspaceBootstrap.session.user.name,'新名');assert.equal(received.length,2);
+savedProfile({id:'me',name:'旧名',color:'#445566'},['color']);
+assert.equal(window.DualWorkspaceBootstrap.session.user.name,'新名');
+assert.equal(window.DualWorkspaceBootstrap.session.user.color,'#445566');
+assert.equal(received[3].name,'新名');assert.equal(received[3].color,'#445566');
+savedProfile({id:'someone-else',name:'不应覆盖',color:'#ffffff'},['name']);
+assert.equal(received.length,4);assert.equal(window.DualWorkspaceBootstrap.session.user.name,'新名');
+events.message({origin:location.origin,source:{},data:{type:'full-workspace:profile-saved',paneId:'pane-a',user:{id:'me',name:'伪来源',color:'#ffffff'},fields:['name']}});
+assert.equal(received.length,4);assert.equal(window.DualWorkspaceBootstrap.session.user.name,'新名');
+assert.equal(saved.length,0);assert.equal(a.calls.deactivate,0);assert.equal(b.calls.deactivate,0);
 """)
 
     def test_switching_panes_and_fullscreen_never_reopens_or_resets_selected_boards(self):

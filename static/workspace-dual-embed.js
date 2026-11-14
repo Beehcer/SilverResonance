@@ -57,6 +57,8 @@
     const nodes = document.querySelectorAll('dialog[open],#members-panel:not([hidden]),#layout-picker[open] .layout-menu,#decision-detail:not([hidden]),#object-context-menu:not([hidden])');
     for (const node of nodes) {
       if (!node.getClientRects().length) continue;
+      // The profile belongs to the visible header, not the active chart slot.
+      if (node.id === 'members-panel') { window.WorkspaceMembersPopover?.position(); continue; }
       const isCases = node.id === 'cases-dialog' || node.classList.contains('cases-chart-zoom'), isDialog = node.tagName === 'DIALOG';
       const area = isCases ? {left: 0, top: 0, width: innerWidth, height: innerHeight} : popupArea(node);
       const isLayout = node.classList.contains('layout-menu'), isDecision = node.id === 'decision-detail';
@@ -67,7 +69,6 @@
         continue;
       }
       if (isDialog) node.style.width = Math.min(390, area.width) + 'px';
-      else if (node.id === 'members-panel') node.style.width = Math.min(310, area.width) + 'px';
       else if (isLayout) {
         node.style.width = Math.min(440, area.width) + 'px';
         node.style.gridTemplateColumns = area.width < 400 ? 'repeat(2,minmax(0,1fr))' : 'repeat(4,minmax(0,1fr))';
@@ -75,12 +76,12 @@
       node.style.overflowY = 'auto';
       let bounds = node.getBoundingClientRect(), x = bounds.left, y = bounds.top;
       if (isDialog) { x = area.left + (area.width - bounds.width) / 2; y = area.top + (area.height - bounds.height) / 2; }
-      else if (node.id === 'members-panel') { x = area.right - bounds.width; y = area.top; }
       else if (isLayout) { const anchor = document.querySelector('#layout-picker > summary').getBoundingClientRect(); x = anchor.right - bounds.width; y = anchor.bottom + 4; }
       else if (isDecision) { const anchor = document.getElementById('decision-toggle').getBoundingClientRect(); x = area.left; y = anchor.bottom + 4; }
       node.style.left = Math.max(area.left, Math.min(x, area.right - bounds.width)) + 'px';
       node.style.top = Math.max(area.top, Math.min(y, area.bottom - bounds.height)) + 'px';
     }
+    queueState();
   }
   function queuePopups() {
     if (popupFrame !== null) return;
@@ -119,7 +120,9 @@
   }
   function snapshot() {
     const value = runtime?.snapshot() || {symbol: initialSymbol, name: initialSymbol, board: '', loading: true, ready: false};
-    return {...value, pageDialogOpen: Boolean(document.getElementById('cases-dialog')?.open), paneId, active: mode.active, slot: mode.slot, count: mode.count, maximized: mode.maximized, sidebars: mode.maximized ? {...fullscreenSidebars} : null};
+    const members = document.getElementById('members-panel');
+    const membersPopup = mode.active && members && !members.hidden && members.getClientRects().length ? rect(members) : null;
+    return {...value, membersPopup, pageDialogOpen: Boolean(document.getElementById('cases-dialog')?.open), paneId, active: mode.active, slot: mode.slot, count: mode.count, maximized: mode.maximized, sidebars: mode.maximized ? {...fullscreenSidebars} : null};
   }
   function queueState() {
     if (stateTimer !== null) return;
@@ -149,6 +152,7 @@
   function setMode(next) {
     const previous = mode.active, wasMaximized = mode.maximized;
     mode = {active: Boolean(next.active), slot: next.slot === 'bottom' ? 'bottom' : 'top', count: next.count === 2 ? 2 : 1, maximized: Boolean(next.maximized)};
+    if (!mode.active || mode.maximized) window.WorkspaceMembersPopover?.close();
     document.documentElement.classList.toggle('dual-active', mode.active);
     document.documentElement.classList.toggle('dual-passive', !mode.active);
     document.documentElement.classList.toggle('dual-maximized', mode.maximized);
@@ -164,6 +168,9 @@
   }
   window.FullWorkspace = {
     snapshot, geometry, queueState, setMode, applyFullscreenSidebars,
+    closeMembers: options => window.WorkspaceMembersPopover?.close(options),
+    profileSaved: (user, fields) => emit('profile-saved', {user: {id: user.id, name: user.name, color: user.color}, fields}),
+    profileChanged: user => window.WorkspaceProfile?.receive(user),
     isActive: () => mode.active,
     isMaximized: () => mode.maximized,
     canChangeFocus: options => runtime?.canChangeFocus?.(options) ?? false,
@@ -187,7 +194,7 @@
     }
     if (event.target.closest('.dual-close')) { event.preventDefault(); return; }
     if (!mode.active) {
-      event.preventDefault(); event.stopImmediatePropagation(); emit('activate'); return;
+      event.preventDefault(); event.stopImmediatePropagation(); emit('outside-members'); emit('activate'); return;
     }
     const button = event.target.closest('.quote-row');
     if (button && event.button === 0 && !runtime?.snapshot().viewOnly) {
@@ -212,6 +219,7 @@
     if (event.key === 'Escape') {
       if (event.repeat || event.isComposing || event.keyCode === 229) return;
       const consume = () => { event.preventDefault(); event.stopImmediatePropagation(); };
+      if (window.WorkspaceMembersPopover?.isOpen()) { window.WorkspaceMembersPopover.close({restoreFocus: true}); consume(); return; }
       // A page-wide case dialog owns Escape even outside workspace fullscreen.
       // Keep native cancellation enabled; underlying chart shortcuts stay idle.
       if (document.getElementById('cases-dialog')?.open) { event.stopImmediatePropagation(); return; }
@@ -223,13 +231,6 @@
         if (contextMenu && !contextMenu.hidden) return;
         const layout = document.getElementById('layout-picker');
         if (layout?.open) { layout.open = false; consume(); return; }
-        const members = document.getElementById('members-panel');
-        if (members && !members.hidden) {
-          members.hidden = true;
-          document.getElementById('members-button')?.setAttribute('aria-expanded', 'false');
-          document.getElementById('mobile-members-toggle')?.setAttribute('aria-expanded', 'false');
-          consume(); return;
-        }
         const decision = document.getElementById('decision-detail');
         if (decision && !decision.hidden) {
           decision.hidden = true;
