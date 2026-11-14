@@ -1,6 +1,19 @@
 # 当前线上工作台
 
-2026-11-14 已更新：https://resonance.cg-x.com/workspace
+2026-11-15 已更新：https://resonance.cg-x.com/workspace
+
+## 2026-11-15 00:44 OSS静态资源与整站光标规则
+
+源码 `94f7f8e` 已推送，00:44:13激活 `20261115-3a9dace6ac8b`。61文件、366538字节，SHA-256 `3a9dace6ac8b64b594bdae480d120c5b1b2a87687d9ea4780dc59a6dd3f4ed48`。运行变化仅工作台页面资源改写、两份CSS、OSS资源清单及Docker白名单；数据结构、行情与协作服务不变。
+
+- 按用户明确授权关闭silver-resonance桶级阻止公共访问；桶ACL仍private，仅workspace版本目录下25个JS/CSS对象public-read。包含两份预生成双窗适配脚本，gzip共221674字节（原770121），内容指纹路径 `0a87071b7942056927f19094`，一年immutable缓存。没有上传模板、服务器代码、交易计划、配置或密钥；发布脚本匿名校验全部对象后才生成资源清单。
+- 公网实际入口及iframe的23个资源均直连OSS，哈希与发布包相符。初始HTML、API、SSE与协作仍同源；原服务资源保留用于代码回退。OSS直出不等于CDN，压缩体积不等于整站提速比例，未宣称已消除完整历史等待。流程见 [OSS资源说明](OSS-ASSETS.md)。
+- 插入光标只对真实文字/数字/日期时间及正文编辑器启用，颜色、滑杆、按钮、下拉框与静态区域禁用；键盘焦点保留。修正原先input:not(range)把color误判为文字输入的问题。公网浏览器核对163个非文字控件透明caret、10个文字输入框保留caret，并验证案例专栏、整页放大与真实Esc还原。
+- 本地网页/打包/双窗检查58项（3项Windows条件跳过）通过，补充部署及页面检查34项（3项跳过），发布保护11项通过。测试中的bad anchor日志为预期故障注入。公网20品种、甲醇/纸浆三周期与独立事件scope正常，所查品种idle。
+- 最终停写备份 `/var/backups/SilverResonance/20261115-3a9dace6ac8b/data-before-update.tgz`，SHA-256 `2d4d7098fa591461c4644af0201878c993fc73d0c6507015c67948bde9e0b4dc`；28计划、77图层、17固定基准保留，版本内容未变。配置、挂载不变；旧3da72e55efd4和OSS版本均保留，未回退。
+- 最终healthy、0重启、无OOM/异常/HTTP500，492.7MiB/1.75GiB，CPU单次0.77%，宿主可用约1.44GB，自动备份40+10正常。此为单次采样，不是性能压测。
+
+证据 `backtest/ossassets-release-public-result.json`、`oss-public-page-result.json`、`ossassets-activate.log`、`ossassets-postcheck.log`。已有页面等“已同步”后刷新加载新版。仅本机临时预览服务被停止，测试数据归档在backtest；不影响用户原有本地8870服务。
 
 ## 2026-11-14 18:49 趋势线专栏与案例单图全屏
 
