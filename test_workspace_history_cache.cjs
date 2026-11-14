@@ -33,9 +33,11 @@ test('cold bootstrap assembles a coherent full snapshot and persists verified hi
 test('page reload reuses disk chunks but takes current tails, freshness and token from a new bootstrap',async()=>{
   const f=fixture(),storage=memory(),first=blocks(storage);await first.assemble(f.bundle,async path=>f.values.get(path));await settled(first);
   const next=clone(f.bundle);next.market.history_token='new-process-token';next.market.fresh=false;next.market.feed_status='idle';next.market.periods.m3.at(-1).close=104;
-  const reloaded=blocks(storage),full=await reloaded.assemble(next,async()=>assert.fail('Unchanged historical chunks must not be downloaded again'));
+  let progress=0;
+  const reloaded=blocks(storage),full=await reloaded.assemble(next,async()=>assert.fail('Unchanged historical chunks must not be downloaded again'),()=>progress++);
   assert.equal(reloaded.stats.diskHits,3);assert.equal(full.history_token,'new-process-token');assert.equal(full.periods.m3.at(-1).close,104);assert.equal(full.fresh,false);assert.equal(full.feed_status,'idle');
-  await reloaded.assemble(next,async()=>assert.fail('Memory hit expected'));assert.equal(reloaded.stats.memoryHits,3);
+  assert.equal(progress,3);
+  await reloaded.assemble(next,async()=>assert.fail('Memory hit expected'),()=>progress++);assert.equal(reloaded.stats.memoryHits,3);assert.equal(progress,6);
 });
 
 test('corrupted disk data is replaced and public OSS failures retry the exact same hash at the origin',async()=>{
@@ -130,6 +132,51 @@ test('a failed or timed-out bootstrap aborts all its pending block downloads bef
     }});
     const result=await hub.refresh(full.symbol);assert.equal(result.symbol,full.symbol);assert.equal(fallbackPending,0);assert.ok(aborted>=2);assert.equal(hub.requests.size,0);
   }
+});
+
+test('validated block progress keeps a slow restore instead of discarding finished blocks at the initial deadline',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=fixture(),waiting=new Map(),signals=[];let metadata;
+  const store=new H.Blocks({storage:memory(),indexedDB:null,now:()=>NOW,crypto:{subtle:{digest:async(_,bytes)=>new Uint8Array(createHash('sha256').update(bytes).digest()).buffer}}});
+  const hub=new H.Hub({now:()=>NOW,bootstrapTimeout:30,bootstrapMaxTimeout:120,blocks:store,fetch:async(path,{signal})=>{
+    signals.push(signal);
+    if(path.includes('/bootstrap'))return new Promise(resolve=>{metadata=()=>resolve({ok:true,json:async()=>({bootstrap:f.bundle})});});
+    assert.ok(f.values.has(path),'A progressing restore must not request the full market');
+    return new Promise(resolve=>waiting.set(path,()=>resolve({ok:true,text:async()=>f.values.get(path)})));
+  }});
+  const result=hub.refresh(f.bundle.market.symbol);
+  t.mock.timers.tick(20);metadata();await tick();assert.equal(waiting.size,3);
+  for(const period of PERIODS){t.mock.timers.tick(20);waiting.get(f.bundle.history[period][0].url)();await tick();}
+  const market=await result;
+  assert.equal(market.periods.m3.length,4);assert.equal(hub.stats.full,0);assert.equal(store.stats.downloads,3);assert.equal(hub.requests.size,0);
+  // Total 80 > idle limit 30, but each actual completion arrives within 20.
+  t.mock.timers.tick(1000);await tick();assert.ok(signals.every(signal=>!signal.aborted));
+});
+
+test('continued progress cannot extend restoration beyond the hard cap and the last request is aborted before fallback',async t=>{
+  const f=fixture(),full=await blocks(memory()).assemble(f.bundle,async path=>f.values.get(path));
+  t.mock.timers.enable({apis:['setTimeout']});
+  const waiting=new Map();let metadata,pending=0,fallbackPending=null,aborted=0;
+  const store=new H.Blocks({storage:memory(),indexedDB:null,now:()=>NOW,crypto:{subtle:{digest:async(_,bytes)=>new Uint8Array(createHash('sha256').update(bytes).digest()).buffer}}});
+  const hub=new H.Hub({now:()=>NOW,bootstrapTimeout:30,bootstrapMaxTimeout:70,blocks:store,fetch:async(path,{signal})=>{
+    if(path.includes('/bootstrap'))return new Promise(resolve=>{metadata=()=>resolve({ok:true,json:async()=>({bootstrap:f.bundle})});});
+    if(f.values.has(path)){
+      pending++;
+      return new Promise((resolve,reject)=>{
+        const abort=()=>{pending--;aborted++;reject(new Error('cancelled'));};signal.addEventListener('abort',abort,{once:true});
+        waiting.set(path,()=>{signal.removeEventListener('abort',abort);pending--;resolve({ok:true,text:async()=>f.values.get(path)});});
+      });
+    }
+    fallbackPending=pending;return{ok:true,json:async()=>({market:full})};
+  }});
+  const result=hub.refresh(f.bundle.market.symbol);
+  t.mock.timers.tick(20);metadata();await tick();
+  for(const period of ['day','m30']){t.mock.timers.tick(20);waiting.get(f.bundle.history[period][0].url)();await tick();}
+  assert.equal(pending,1);assert.equal(hub.stats.full,0);
+  t.mock.timers.tick(10);await tick();
+  assert.equal((await result).periods.m3.length,4);assert.equal(hub.stats.full,1);assert.equal(fallbackPending,0);assert.equal(aborted,1);assert.equal(hub.requests.size,0);
+  // The hard cap fires only 10 after the last progress, before idle limit 30.
+  t.mock.timers.tick(1000);await tick();assert.equal(hub.stats.full,1);
 });
 
 test('new candles and rolling drops preserve fixed references while old coordinate generations force a full recovery',async()=>{

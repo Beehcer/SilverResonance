@@ -65,7 +65,7 @@
       }
       item=await task;validateBlock(item.value,desc,market,period);return item.value.bars;
     }
-    async assemble(bundle,read){
+    async assemble(bundle,read,onProgress=()=>{}){
       if(!record(bundle)||bundle.schema!==1||typeof bundle.snapshot_id!=='string'||!bundle.snapshot_id||!record(bundle.market)||bundle.market.incremental!==false||!record(bundle.history)||!record(bundle.history_counts))throw new Error('Invalid history bootstrap');
       const market=bundle.market;if(MarketCache.coordinateError(market))throw new Error('Invalid history coordinate basis');
       const periods={},jobs=[];
@@ -74,7 +74,7 @@
         if(!Array.isArray(chunks)||chunks.length>128||!Array.isArray(tail)||tail.length>2||!Number.isInteger(count)||count<0||!Number.isInteger(market.period_counts?.[period])||market.period_counts[period]>MarketCache.LIMITS[period]||count+tail.length!==market.period_counts[period])throw new Error('Invalid history count');
         if(chunks.reduce((sum,item)=>sum+descriptor(item).count,0)!==count)throw new Error('History chunks are incomplete');
         periods[period]=new Array(chunks.length);
-        chunks.forEach((desc,index)=>jobs.push(async()=>{periods[period][index]=await this.block(desc,market,period,read);}));
+        chunks.forEach((desc,index)=>jobs.push(async()=>{periods[period][index]=await this.block(desc,market,period,read);onProgress();}));
       }
       let at=0;await Promise.all(Array.from({length:Math.min(4,jobs.length)},async()=>{while(at<jobs.length){const job=jobs[at++];await job();}}));
       for(const period of PERIODS){
@@ -87,18 +87,24 @@
     }
   }
   class Hub{
-    constructor({fetch=globalThis.fetch?.bind(globalThis),blocks=new Blocks(),now=()=>Date.now(),bootstrapTimeout=7000}={}){this.fetch=fetch;this.blocks=blocks;this.now=now;this.bootstrapTimeout=bootstrapTimeout;this.cache=new MarketCache.Store({limit:32});this.requests=new Map();this.quoteRequest=null;this.quoteResult=null;this.quoteAt=0;this.timings=[];this.stats={bootstrap:0,full:0,incremental:0,quotes:0};}
+    constructor({fetch=globalThis.fetch?.bind(globalThis),blocks=new Blocks(),now=()=>Date.now(),bootstrapTimeout=7000,bootstrapMaxTimeout=20000}={}){this.fetch=fetch;this.blocks=blocks;this.now=now;this.bootstrapTimeout=bootstrapTimeout;this.bootstrapMaxTimeout=bootstrapMaxTimeout;this.cache=new MarketCache.Store({limit:32});this.requests=new Map();this.quoteRequest=null;this.quoteResult=null;this.quoteAt=0;this.timings=[];this.stats={bootstrap:0,full:0,incremental:0,quotes:0};}
     async read(path,{timeout=12000,public:remote=false,json=false,signal}={}){
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
       const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)controller.abort();
       try{const response=await this.fetch(path,{credentials:remote?'omit':'same-origin',cache:remote?'default':'no-store',headers:remote?{}:{'X-Workspace-Candle-Protocol':'2'},signal:controller.signal});if(!response.ok){const error=new Error('行情服务暂未响应');error.status=response.status;throw error;}return json?await response.json():await response.text();}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
     }
     async full(symbol){
-      const query='?symbol='+encodeURIComponent(symbol),started=this.now(),controller=new AbortController();let market,timer;
-      try{this.stats.bootstrap++;const work=(async()=>{const data=await this.read('/api/workspace/market/bootstrap'+query,{json:true,signal:controller.signal});return this.blocks.assemble(data.bootstrap,(path,options)=>{if(controller.signal.aborted)throw new Error('History restore timed out');return this.read(path,{...options,signal:controller.signal});});})();
-        market=await Promise.race([work,new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('History restore timed out'));},this.bootstrapTimeout);})]);}
-      catch(error){controller.abort();clearTimeout(timer);if(error.status===401)throw error;this.stats.full++;market=(await this.read('/api/workspace/market'+query,{json:true})).market;}
-      finally{clearTimeout(timer);}
+      const query='?symbol='+encodeURIComponent(symbol),started=this.now(),controller=new AbortController();let market,timer,hardTimer,finished=false,rejectTimeout;
+      const timeout=new Promise((_,reject)=>{rejectTimeout=reject;});
+      const expire=()=>{if(finished)return;finished=true;controller.abort();rejectTimeout(new Error('History restore timed out'));};
+      // A valid completed block is progress, including disk/memory hits. Keep
+      // useful work instead of discarding 12 finished blocks at a fixed 7s;
+      // a separate hard cap still bounds a slow stream that never finishes.
+      const progress=()=>{if(finished||controller.signal.aborted)return;clearTimeout(timer);timer=setTimeout(expire,this.bootstrapTimeout);};
+      try{this.stats.bootstrap++;progress();hardTimer=setTimeout(expire,this.bootstrapMaxTimeout);const work=(async()=>{const data=await this.read('/api/workspace/market/bootstrap'+query,{json:true,signal:controller.signal});progress();return this.blocks.assemble(data.bootstrap,(path,options)=>{if(controller.signal.aborted)throw new Error('History restore timed out');return this.read(path,{...options,signal:controller.signal});},progress);})();
+        market=await Promise.race([work,timeout]);}
+      catch(error){finished=true;controller.abort();clearTimeout(timer);clearTimeout(hardTimer);if(error.status===401)throw error;this.stats.full++;market=(await this.read('/api/workspace/market'+query,{json:true})).market;}
+      finally{finished=true;clearTimeout(timer);clearTimeout(hardTimer);}
       // A disk/OSS restore never refreshes the server's observation timestamp.
       const age=this.now()-Date.parse(market?.as_of);
       if(market?.fresh===true&&(this.now()-started>15000||!Number.isFinite(age)||age>20000||age < -60000))market={...market,fresh:false,feed_status:'stale',message:'历史已恢复，正在核对最新行情'};
