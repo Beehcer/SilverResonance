@@ -28,7 +28,7 @@ class DualWorkspaceWebTests(unittest.TestCase):
         for route, agent in (("/workspace?view=single", "Desktop"), ("/workspace", "Mozilla iPhone Mobile")):
             response = self.client.get(route, headers={"User-Agent": agent})
             self.assertIn(b"mobile-readonly-label", response.data)
-            self.assertIn(b'/static/workspace.js?', response.data)
+            self.assertIn(b'workspace.js', response.data)
             self.assertNotIn(b"workspace-dual-embed.js", response.data)
 
     def test_panes_use_existing_tools_with_production_adapters(self):
@@ -52,6 +52,29 @@ class DualWorkspaceWebTests(unittest.TestCase):
                 self.assertNotIn(forbidden, response.data)
         response = self.client.get("/static/workspace-dual-runtime.js")
         self.assertIn(b"resonance-workspace-v1:", response.data)
+
+    def test_pages_load_versioned_oss_assets_without_redirecting_api_or_iframe(self):
+        from html.parser import HTMLParser
+        class Assets(HTMLParser):
+            urls = None
+            def handle_starttag(self, tag, attrs):
+                if tag in ('script', 'link'):
+                    self.urls.extend(v for k,v in attrs if k in ('src','href'))
+        for route in ('/', '/workspace?pane=pane-a', '/workspace?view=single'):
+            response = self.client.get(route)
+            parser = Assets(); parser.urls=[]; parser.feed(response.text)
+            self.assertTrue(parser.urls)
+            for url in parser.urls:
+                self.assertRegex(url, r'^https://silver-resonance\.oss-cn-hangzhou\.aliyuncs\.com/workspace/[a-f0-9]{24}/')
+
+    def test_oss_manifest_matches_current_public_payloads(self):
+        import hashlib, json
+        from scripts.publish_workspace_assets import payloads
+        manifest=json.loads((ROOT/'static/workspace-assets.json').read_text())
+        files=payloads()
+        self.assertEqual(set(manifest['sha256']),set(files))
+        for name,raw in files.items():
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),manifest['sha256'][name])
 
     def test_incompatible_source_fails_explicitly(self):
         with patch.object(workspace_web, "adapt_workspace_js", side_effect=ValueError("bad anchor")):

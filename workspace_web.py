@@ -1,11 +1,32 @@
 """Production workspace pages; both panes use the existing live API and session."""
 
 from pathlib import Path
+import json
+import re
+from urllib.parse import urlsplit
 
-from flask import Response, abort, render_template, request
+from flask import Response, abort, current_app, render_template, request
 
 from workspace_api import MOBILE_USER_AGENT
 from workspace_runtime import adapt_workspace_chart_js, adapt_workspace_js
+
+
+def render_asset_page(template, **context):
+    html = render_template(template, **context)
+    manifest = Path(current_app.static_folder) / 'workspace-assets.json'
+    if manifest.is_file():
+        mapping = json.loads(manifest.read_text(encoding='utf-8'))['assets']
+        def replace(match):
+            original = match.group(2)
+            target = mapping.get(urlsplit(original).path)
+            if not target:
+                return match.group(0)
+            parsed = urlsplit(target)
+            if parsed.scheme != 'https' or parsed.netloc != 'silver-resonance.oss-cn-hangzhou.aliyuncs.com' or not re.fullmatch(r'/workspace/[a-f0-9]{24}/[a-z0-9-]+\.(js|css)', parsed.path) or parsed.query or parsed.fragment:
+                raise ValueError('Invalid workspace asset URL')
+            return match.group(1) + target + match.group(3)
+        html = re.sub(r'((?:src|href)=")(/static/[^"<>]+)(")', replace, html)
+    return html
 
 
 def render_workspace_page():
@@ -13,10 +34,10 @@ def render_workspace_page():
     if pane is not None:
         if pane not in ("pane-a", "pane-b"):
             abort(400)
-        return render_template("workspace.html", dual_pane=True)
+        return render_asset_page("workspace.html", dual_pane=True)
     if request.args.get("view") == "single" or MOBILE_USER_AGENT.search(request.headers.get("User-Agent", "")):
-        return render_template("workspace.html", dual_pane=False)
-    return render_template("workspace-dual.html")
+        return render_asset_page("workspace.html", dual_pane=False)
+    return render_asset_page("workspace-dual.html")
 
 
 def register_workspace_assets(app):

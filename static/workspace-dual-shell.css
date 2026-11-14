@@ -12,3 +12,6 @@ body.workspace-maximized #startup{inset:0}
 
 #startup{gap:14px;flex-wrap:wrap;padding:24px;text-align:center}#startup button,#startup a{border:1px solid #4a5d6c;border-radius:3px;padding:7px 12px;background:#1b2a35;color:#d7e8f3;font:inherit;text-decoration:none;cursor:pointer}#startup button:hover,#startup a:hover{border-color:#d0ae56;color:#f0d27c}
 .startup-card{width:min(360px,100%);text-align:left}.startup-card strong{display:block;color:#e4eaf0;font-size:16px}.startup-card progress{display:block;width:100%;height:5px;margin:16px 0 12px;accent-color:#d8b64e;border:0;border-radius:4px;overflow:hidden;background:#26343e}.startup-card progress::-webkit-progress-bar{background:#26343e}.startup-card progress::-webkit-progress-value{background:#d8b64e;transition:width .2s ease}.startup-card p{color:#a7b6c2;line-height:1.7;margin:0 0 7px}.startup-card small{color:#8b9ca9}#startup-actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}@media(prefers-reduced-motion:reduce){.startup-card progress::-webkit-progress-value{transition:none}}
+
+/* The shell contains controls, not text editors. */
+body{caret-color:transparent;user-select:none;-webkit-user-select:none}

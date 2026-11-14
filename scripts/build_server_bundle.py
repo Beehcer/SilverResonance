@@ -55,6 +55,7 @@ RUNTIME_PY_FILES = (
 )
 
 ASSET_FILES = (
+    "static/workspace-assets.json",
     "templates/workspace.html",
     "templates/workspace-dual.html",
     "static/workspace-dual-model.js",
