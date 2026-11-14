@@ -217,7 +217,11 @@ class HistoryPublisher:
             next_snapshot, next_gc = 0, self.clock() + 60
             while not self.stopped.is_set():
                 if self.snapshot_provider and self.clock() >= next_snapshot:
-                    next_snapshot = self.clock() + 60
+                    # Bootstrap requests still archive immediately. Background
+                    # prewarming is coarser so each new 3-minute bar does not
+                    # create another version of both boundary month blocks.
+                    # Live quotes/tail polling never wait for this worker.
+                    next_snapshot = self.clock() + 15 * 60
                     try:
                         for market in self.snapshot_provider():
                             if self.stopped.is_set():
