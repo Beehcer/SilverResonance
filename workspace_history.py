@@ -8,6 +8,7 @@ Publication hooks enqueue work; network I/O does not belong on this request path
 import calendar
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -130,6 +131,8 @@ class WorkspaceHistoryArchive:
         history, tails, counts, publications = {}, {}, {}, []
         basis = market.get("candle_basis", {})
         anchor_id = market.get("anchor_reference_id")
+        # Keep block publication + manifest replacement atomic with respect to
+        # GC. Preview and restoration reads no longer hold this writer lock.
         with self.lock:
             for period in PERIODS:
                 rows = periods[period]
@@ -182,30 +185,39 @@ class WorkspaceHistoryArchive:
             # Publish the manifest only after every referenced local block exists.
             # Partial cold starts must not overwrite the last complete snapshot.
             if all(periods[key] for key in PERIODS):
-                persisted = {"saved_at": self.clock(), "bootstrap": result}
-                manifest_path = self._manifest_path(symbol, source)
-                if manifest_path.exists():
-                    try:
-                        old = json.loads(manifest_path.read_bytes())["bootstrap"]
-                        old_hashes = {item["sha256"] for items in old["history"].values() for item in items}
-                        if any(not isinstance(digest, str) or not HASH.fullmatch(digest) for digest in old_hashes):
-                            raise ValueError("历史清单编号无效")
-                    except (OSError, ValueError, TypeError, KeyError):
-                        # A corrupt cache must heal from the new authoritative
-                        # full snapshot. Conservatively extend every local old
-                        # block's grace since the lost manifest cannot identify
-                        # which in-flight readers may still be using it.
-                        old_hashes = {path.stem for path in (self.root / "blocks").glob("*.json")
-                                      if HASH.fullmatch(path.stem) and not path.is_symlink()}
-                    new_hashes = {item["sha256"] for items in history.values() for item in items}
-                    # Start the grace period when a block loses its reference,
-                    # not when it was originally written weeks ago.
-                    retired_at = self.clock()
-                    for digest in old_hashes - new_hashes:
-                        path = self._block_path(digest)
-                        if path.exists():
-                            os.utime(path, (retired_at, retired_at))
-                self._atomic_write(manifest_path, _bytes(persisted))
+                self._commit_snapshot(symbol, source, result)
+        return self._publish_result(result, publications)
+
+    def _commit_snapshot(self, symbol, source, result):
+        with self.lock:
+            manifest_path = self._manifest_path(symbol, source)
+            old_hashes = set()
+            if manifest_path.exists():
+                try:
+                    old = self._saved(symbol, source, result["market"].get("anchor_reference_id"))["bootstrap"]
+                    old_hashes = {item["sha256"] for items in old["history"].values() for item in items}
+                    if any(not isinstance(digest, str) or not HASH.fullmatch(digest) for digest in old_hashes):
+                        raise ValueError("历史清单编号无效")
+                    # Read clocks, live qualification and process cursors are
+                    # deliberately not durable history. Equal candles need no
+                    # new fsync. Corrections/tail changes change snapshot_id.
+                    if (old.get("snapshot_id") == result["snapshot_id"]
+                            and old["market"].get("anchor_reference") == result["market"].get("anchor_reference")):
+                        return
+                    if _stamp(old["market"]["as_of"]) > _stamp(result["market"]["as_of"]):
+                        return
+                except (OSError, ValueError, TypeError, KeyError):
+                    old_hashes = {path.stem for path in (self.root / "blocks").glob("*.json")
+                                  if HASH.fullmatch(path.stem) and not path.is_symlink()}
+            new_hashes = {item["sha256"] for items in result["history"].values() for item in items}
+            retired_at = self.clock()
+            for digest in old_hashes - new_hashes:
+                path = self._block_path(digest)
+                if path.exists():
+                    os.utime(path, (retired_at, retired_at))
+            self._atomic_write(manifest_path, _bytes({"saved_at": self.clock(), "bootstrap": result}))
+
+    def _publish_result(self, result, publications=()):
         if self.publication_hook and publications:
             try:
                 self.publication_hook(publications)
@@ -213,7 +225,7 @@ class WorkspaceHistoryArchive:
             except Exception as exc:
                 self.last_publication_error = type(exc).__name__
         if self.public_url_provider:
-            for items in history.values():
+            for items in result["history"].values():
                 for item in items:
                     try:
                         url = self.public_url_provider(item["sha256"])
@@ -226,41 +238,143 @@ class WorkspaceHistoryArchive:
     def preview(self, symbol, *, source="live", expected_reference_id=None):
         """Read a persisted picture, never restore a cursor or live qualification."""
         try:
-            with self.lock:
-                persisted = json.loads(self._manifest_path(symbol, source).read_bytes())
-                saved = persisted["bootstrap"]
-                market = saved["market"]
-                if (saved["schema"] != SCHEMA or market["symbol"] != symbol
-                        or market.get("source") != source
-                        or (expected_reference_id is not None
-                            and market.get("anchor_reference_id") != expected_reference_id)):
-                    return None
-                cutoff = six_month_cutoff(self.clock())
-                periods, counts = {}, {}
-                for period in PERIODS:
-                    rows = []
-                    for item in saved["history"][period]:
-                        if _stamp(item["last"]).timestamp() < cutoff:
-                            continue
-                        value = json.loads(self.read_block(item["sha256"]))
-                        if (value["symbol"] != symbol or value["period"] != period
-                                or value["anchor_reference_id"] != market.get("anchor_reference_id")
-                                or value["candle_basis"] != market.get("candle_basis", {}).get(period, "native_v1")):
-                            return None
-                        rows.extend(value["bars"])
-                    rows.extend(market["periods"][period])
-                    rows = [row for row in rows if _stamp(row["dt"]).timestamp() >= cutoff]
-                    counts[period], periods[period] = len(rows), rows[-240:]
-                if not all(periods.values()):
-                    return None
-                return {**market, "periods": periods, "period_counts": counts,
-                        "fresh": False, "connected": False, "partial": True,
-                        "freshness": {key: {**item, "checked_recent": False, "changed_recent": False}
-                                      for key, item in market.get("freshness", {}).items()},
-                        "persisted_cached": True, "preview_saved_at": persisted["saved_at"] * 1000,
-                        "history_token": None, "incremental": False, "feed_status": "preview",
-                        "message": "已缓存历史 · 正在连接实时行情"}
+            persisted = self._saved(symbol, source, expected_reference_id)
+            saved, cutoff = persisted["bootstrap"], six_month_cutoff(self.clock())
+            market, periods = saved["market"], {}
+            for period in PERIODS:
+                rows = [row for row in market["periods"][period] if _stamp(row["dt"]).timestamp() >= cutoff]
+                # Newest blocks first: 240 visible bars must not parse half a
+                # year of data, nor hold the archive's writer/GC lock.
+                for item in reversed(saved["history"][period]):
+                    if len(rows) >= 240 or _stamp(item["last"]).timestamp() < cutoff:
+                        break
+                    older = self._saved_block(item, market, period)["bars"]
+                    rows = [row for row in older if _stamp(row["dt"]).timestamp() >= cutoff] + rows
+                periods[period] = rows[-240:]
+            if not all(periods.values()):
+                return None
+            return {**self._cached_market(market, persisted["saved_at"]), "periods": periods,
+                    "partial": True, "feed_status": "preview"}
         except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def _saved(self, symbol, source, expected_reference_id):
+        path = self._manifest_path(symbol, source)
+        if path.is_symlink() or path.stat().st_size > 2 * 1024 * 1024:
+            raise ValueError("历史清单无效")
+        persisted = json.loads(path.read_bytes())
+        saved, stamp = persisted["bootstrap"], persisted["saved_at"]
+        market = saved["market"]
+        if (not isinstance(market, dict) or saved["schema"] != SCHEMA or market["symbol"] != symbol or market.get("source") != source
+                or not isinstance(stamp, (int, float)) or not math.isfinite(stamp)
+                or stamp > self.clock() + 60
+                or expected_reference_id is not None and market.get("anchor_reference_id") != expected_reference_id
+                or set(saved["history"]) != set(PERIODS)):
+            raise ValueError("历史清单不匹配")
+        freshness = market.get("freshness", {})
+        if (not isinstance(freshness, dict) or any(not isinstance(item, dict) for item in freshness.values())
+                or not isinstance(market.get("candle_basis", {}), dict)):
+            raise ValueError("历史清单行情状态无效")
+        for period, limit in (("day", 180), ("m30", 6000), ("m3", 10000)):
+            chunks, tail = saved["history"][period], market["periods"][period]
+            if not isinstance(chunks, list) or len(chunks) > 128 or not isinstance(tail, list) or len(tail) > 2:
+                raise ValueError("历史清单数量无效")
+            count, previous = 0, None
+            for item in chunks:
+                self._block_path(item["sha256"])
+                first, last = _stamp(item["first"]), _stamp(item["last"])
+                if (type(item["count"]) is not int or not 0 < item["count"] <= limit or first > last
+                        or previous is not None and first <= previous
+                        or item["url"] != "/api/workspace/market/history/" + item["sha256"] + ".json"):
+                    raise ValueError("历史块边界无效")
+                count, previous = count + item["count"], last
+            for row in tail:
+                current = _stamp(row["dt"])
+                if previous is not None and current <= previous:
+                    raise ValueError("历史尾部边界无效")
+                previous = current
+            if (count != saved["history_counts"][period] or count + len(tail) != market["period_counts"][period]
+                    or not 0 < count + len(tail) <= limit):
+                raise ValueError("历史清单数量不一致")
+        identity = {"schema": SCHEMA, "symbol": symbol, "source": source,
+                    "basis": market.get("candle_basis", {}), "anchor_reference_id": market.get("anchor_reference_id"),
+                    "history": {p: [item["sha256"] for item in saved["history"][p]] for p in PERIODS},
+                    "tails": market["periods"]}
+        if saved["snapshot_id"] != _digest(_bytes(identity)):
+            raise ValueError("历史快照身份无效")
+        _stamp(market["as_of"])
+        return persisted
+
+    def _saved_block(self, item, market, period):
+        value = json.loads(self.read_block(item["sha256"]))
+        rows = value["bars"]
+        if (value["schema"] != SCHEMA or value["symbol"] != market["symbol"] or value["period"] != period
+                or value["anchor_reference_id"] != market.get("anchor_reference_id")
+                or value["candle_basis"] != market.get("candle_basis", {}).get(period, "native_v1")
+                or len(rows) != item["count"] or rows[0]["dt"] != item["first"] or rows[-1]["dt"] != item["last"]):
+            raise ValueError("历史块不匹配")
+        return value
+
+    @staticmethod
+    def _cached_market(market, saved_at):
+        return {**market, "fresh": False, "connected": False, "partial": False,
+                "freshness": {key: {**item, "checked_recent": False, "changed_recent": False}
+                              for key, item in market.get("freshness", {}).items()},
+                "persisted_cached": True, "preview_saved_at": saved_at * 1000,
+                "history_token": None, "incremental": False, "feed_status": "cached",
+                "message": "历史已恢复 · 当前行情正在后台核验"}
+
+    def restore(self, symbol, *, source="live", expected_reference_id=None):
+        """Recover a complete chart independently of the current SDK session.
+
+        A restored manifest has no incremental cursor or live qualification.
+        Every referenced block is hash/contract/basis checked. Only the boundary
+        month may be rewritten to enforce today's moving six-month cutoff.
+        """
+        try:
+            persisted = self._saved(symbol, source, expected_reference_id)
+            saved, cutoff = persisted["bootstrap"], six_month_cutoff(self.clock())
+            market = self._cached_market(saved["market"], persisted["saved_at"])
+            history, counts, tails, publications = {}, {}, {}, []
+            for period in PERIODS:
+                history[period] = []
+                for item in saved["history"][period]:
+                    if _stamp(item["last"]).timestamp() < cutoff:
+                        continue
+                    value = self._saved_block(item, market, period)
+                    current = dict(item)
+                    if _stamp(item["first"]).timestamp() < cutoff:
+                        rows = [row for row in value["bars"] if _stamp(row["dt"]).timestamp() >= cutoff]
+                        if not rows:
+                            continue
+                        value["bars"] = rows
+                        content = _bytes(value)
+                        digest = _digest(content)
+                        with self.lock:
+                            path = self._write_block(digest, content)
+                            # This trimmed version is not in the durable source
+                            # manifest. Renew its bounded in-flight grace when
+                            # reused, including an orphan written days earlier.
+                            now = self.clock()
+                            os.utime(path, (now, now))
+                        current = {"sha256": digest, "url": "/api/workspace/market/history/" + digest + ".json",
+                                   "count": len(rows), "first": rows[0]["dt"], "last": rows[-1]["dt"]}
+                        publications.append({"sha256": digest, "path": str(path),
+                                             "relative_key": "history/v1/blocks/" + digest + ".json", "last": current["last"]})
+                    history[period].append(current)
+                counts[period] = sum(item["count"] for item in history[period])
+                tails[period] = [row for row in market["periods"][period] if _stamp(row["dt"]).timestamp() >= cutoff]
+            if not all(counts[p] + len(tails[p]) for p in PERIODS):
+                return None
+            market.update(periods=tails, period_counts={p: counts[p] + len(tails[p]) for p in PERIODS},
+                          history_retention={"months": 6, "cutoff": datetime.fromtimestamp(cutoff, TZ).isoformat(timespec="seconds")})
+            identity = {"schema": SCHEMA, "symbol": symbol, "source": source, "basis": market.get("candle_basis", {}),
+                        "anchor_reference_id": market.get("anchor_reference_id"),
+                        "history": {p: [item["sha256"] for item in history[p]] for p in PERIODS}, "tails": tails}
+            result = {"schema": SCHEMA, "snapshot_id": _digest(_bytes(identity)), "market": market,
+                      "history": history, "history_counts": counts}
+            return self._publish_result(result, publications)
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
             return None
 
     def live_hashes(self):

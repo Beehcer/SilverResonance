@@ -2319,7 +2319,14 @@ def _workspace_market_provider(symbol, history_token=None, preview=False):
 def _workspace_market_bootstrap_provider(symbol):
     # Capture once: the tail, immutable history and opaque incremental cursor
     # must describe the same snapshot even while the producer advances.
-    return _workspace_history.bootstrap(_workspace_market_provider(symbol))
+    market = _workspace_market_provider(symbol)
+    if not all(market["periods"].values()):
+        restored = _workspace_history.restore(symbol, source=market["source"],
+                                              expected_reference_id=market.get("anchor_reference_id"))
+        if restored:
+            restored["market"]["setup_required"] = market.get("setup_required", False)
+            return restored
+    return _workspace_history.bootstrap(market)
 
 
 def _workspace_quotes_provider():

@@ -241,13 +241,20 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
             return view(*args, **kwargs)
         return wrapped
 
-    def session_response(token=None):
+    def session_response(token=None, include_symbols=False):
         token = token if token is not None else g.workspace_token
         user = store.authenticate(token)
         value = store.session(user)
         value["csrf_token"] = csrf_token(token) if user else None
         value["view_only"] = g.workspace_view_only
         value["mobile_device"] = g.workspace_mobile_device
+        if include_symbols and user:
+            try:
+                # Optional, public catalogue only. Keep a valid session/cookie
+                # even if this read fails, so the client can retry /symbols.
+                value["bootstrap"] = {"symbols": symbols_provider()}
+            except Exception:
+                app.logger.warning("Workspace session catalogue unavailable; client may retry /symbols")
         response = jsonify(value)
         if user and token != g.workspace_token:
             response.set_cookie(COOKIE_NAME, token, httponly=True, secure=request.is_secure,
@@ -291,7 +298,7 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         user = store.authenticate(token)
         if not any(item["id"] == user["id"] for item in store.presence()):
             store.update_presence(user, None)
-        return session_response(token)
+        return session_response(token, include_symbols=request.args.get("bootstrap") == "1")
 
     @bp.post("/profile")
     @authenticated

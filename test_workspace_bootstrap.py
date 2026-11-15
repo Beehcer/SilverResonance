@@ -47,6 +47,20 @@ const other=make(original);assert.equal((await other.bootstrap('/session')).user
 assert.deepEqual(other.calls,[],'Each pane may consume its own bootstrap copy');
 """)
 
+    def test_combined_session_catalogue_is_reused_by_each_pane_without_api_calls(self):
+        self.run_scenario(r"""
+const original=seed();original.session.bootstrap={symbols:original.symbols.symbols};
+original.symbols=original.session.bootstrap;
+for(let pane=0;pane<2;pane++){
+  const h=make(original);h.state.session=await h.bootstrap('/session');
+  const catalogue=await h.bootstrap('/symbols');
+  assert.equal(h.state.session.user.id,'owner');assert.equal(catalogue.symbols[0].symbol,'MA');
+  assert.deepEqual(h.calls,[],'Each child must reuse both reads, not authenticate again');
+  catalogue.symbols[0].name='pane-'+pane;
+}
+assert.equal(original.symbols.symbols[0].name,'甲醇');
+""")
+
     def test_expired_future_cross_origin_and_unavailable_parent_use_api(self):
         self.run_scenario(r"""
 for(const offset of [-60000,-60001,1]){
@@ -91,6 +105,11 @@ workspace.hidden=false;assert.equal(snapshot().showable,true);assert.equal(snaps
 delete charts.m3;assert.equal(snapshot().showable,false);charts.m3={};
 state.planReady=true;assert.equal(snapshot().ready,false);
 complete=true;assert.equal(snapshot().ready,true);assert.equal(snapshot().showable,true);
+state.market={persisted_cached:true};assert.equal(snapshot().marketVerified,false);
+assert.equal(snapshot().ready,true,'Complete disk history remains drawable while awaiting verification');
+state.market.persisted_cached=false;assert.equal(snapshot().marketVerified,true);
+state.market.client_cached=true;assert.equal(snapshot().marketVerified,false);
+state.market.client_cached=false;state.market.unavailable=true;assert.equal(snapshot().marketVerified,false);
 workspace.hidden=true;assert.equal(snapshot().showable,false);
 """.replace('EXPRESSION', json.dumps(expression))
         result = subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8', capture_output=True, timeout=15)

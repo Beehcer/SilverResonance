@@ -146,6 +146,9 @@
       const started=this.now(),cache=this.cache,ticket=cache.begin(symbol);
       const task=(async()=>{let token=cache.history(symbol);for(let attempt=0;attempt<2;attempt++){
         let market;if(token){this.stats.incremental++;const response=await this.read('/api/workspace/market?symbol='+encodeURIComponent(symbol)+'&history='+encodeURIComponent(token)+'&history_fallback=bootstrap',{json:true});market=response.status==='bootstrap_required'?await this.full(symbol):response.market;}else market=await this.full(symbol);
+        // A provider's first empty/partial snapshot cannot erase an already
+        // restored complete chart. It also cannot grant live qualification.
+        const baseline=cache.view(symbol);if(baseline?.persisted_cached&&PERIODS.every(period=>baseline.periods?.[period]?.length)&&!PERIODS.every(period=>market?.periods?.[period]?.length))return baseline;
         const accepted=cache.accept(symbol,market,ticket,{readOnly:true});if(accepted.accepted)return accepted.market;if(accepted.ignored)return cache.view(symbol);token=null;
       }throw new Error('行情缓存未能对齐，请稍后重试');})();
       this.requests.set(symbol,task);void task.finally(()=>{if(this.requests.get(symbol)===task)this.requests.delete(symbol);this.timings.push({symbol,duration_ms:this.now()-started,at:this.now()});if(this.timings.length>100)this.timings.shift();}).catch(()=>{});return task;

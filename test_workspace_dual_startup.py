@@ -47,7 +47,7 @@ const startupNodes={startup:status,'startup-actions':{hidden:true},'startup-labe
 const $=id=>startupNodes[id],document={createElement:tag=>({tag,addEventListener(){}})};
 const startupProgress=(_completed,label,detail)=>{startupNodes['startup-label'].textContent=label;startupNodes['startup-detail'].textContent=detail;};
 const history={replaceState:(_state,_name,url)=>urlChanges.push(url)};
-const startupRequest=async path=>{calls.push(path);return path==='/session'?session:response;};
+const startupRequest=async path=>{calls.push(path);return path.split('?')[0]==='/session'?session:response;};
 const readLayout=()=>JSON.parse(localStorage.getItem(layoutKey)),persist=()=>calls.push('persist'),layout=()=>{};
 const makeFrame=pane=>created.push({...pane}),activeFrame=()=>({}),waitVisible=async()=>{if(ready){startupOpened=true;status.hidden=true;}return ready;};
 """.replace('MODEL', repr(model))
@@ -66,14 +66,14 @@ assert.equal(destination.searchParams.get('view'),'single');assert.equal(destina
 
     def test_server_mobile_flag_redirects_without_loading_symbols_or_frames(self):
         self.run_startup(r"""
-session.mobile_device=true;await start();assert.deepEqual(calls,['/session']);assert.equal(created.length,0);assert.match(urlChanges[0],/view=single/);
+session.mobile_device=true;await start();assert.deepEqual(calls,['/session?bootstrap=1']);assert.equal(created.length,0);assert.match(urlChanges[0],/view=single/);
 """)
 
     def test_session_precedes_frames_and_restores_user_specific_layout(self):
         self.run_startup(r"""
 saved.set(KEY+'owner',JSON.stringify({panes:[{id:'pane-a',symbol:'MA'},{id:'pane-b',symbol:'SP'}],activeId:'pane-b'}));
 saved.set(KEY+'other',JSON.stringify({panes:[{id:'pane-a',symbol:'SP'}],activeId:'pane-a'}));
-await start();assert.deepEqual(calls,['/session','/symbols','persist']);assert.equal(layoutKey,KEY+'owner');
+await start();assert.deepEqual(calls,['/session?bootstrap=1','/symbols','persist']);assert.equal(layoutKey,KEY+'owner');
 assert.deepEqual(created.map(p=>p.symbol),['MA','SP']);assert.equal(state.activeId,'pane-b');assert.equal(status.hidden,true);
 """)
 
@@ -113,16 +113,16 @@ const reset=()=>{calls=0;timers.clear();waits=[];status.textContent='';};
     signal.addEventListener('abort',()=>{aborted=true;reject(Object.assign(new Error('timeout'),{name:'AbortError'}));});
     queueMicrotask(()=>[...timers.values()].find(timer=>timer.ms===12000).fn());
   });};
-  assert.equal((await startupRequest('/session')).status,'ok');assert.equal(aborted,true);assert.equal(calls,2);assert.match(status.textContent,/2\/3/);assert.equal(timers.size,0);
+  assert.equal((await startupRequest('/session?bootstrap=1')).status,'ok');assert.equal(aborted,true);assert.equal(calls,2);assert.match(status.textContent,/2\/3/);assert.equal(timers.size,0);
 
   reset();fetch=async()=>{calls++;throw new Error('offline');};
-  await assert.rejects(startupRequest('/session'),/offline/);assert.equal(calls,3);assert.deepEqual(waits,[12000,700,12000,1400,12000]);assert.equal(timers.size,0);
+  await assert.rejects(startupRequest('/session?bootstrap=1'),/offline/);assert.equal(calls,3);assert.deepEqual(waits,[12000,700,12000,1400,12000]);assert.equal(timers.size,0);
 
   reset();fetch=async()=>{calls++;return{ok:false,status:403};};
-  await assert.rejects(startupRequest('/session'));assert.equal(calls,1);assert.equal(timers.size,0);
+  await assert.rejects(startupRequest('/session?bootstrap=1'));assert.equal(calls,1);assert.equal(timers.size,0);
 
   reset();fetch=async()=>{calls++;return calls<3?{ok:false,status:503}:ok();};
-  assert.equal((await startupRequest('/session')).status,'ok');assert.equal(calls,3);assert.equal(timers.size,0);
+  assert.equal((await startupRequest('/session?bootstrap=1')).status,'ok');assert.equal(calls,3);assert.equal(timers.size,0);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result = subprocess.run(['node', '-'], input=script, text=True, encoding='utf-8',

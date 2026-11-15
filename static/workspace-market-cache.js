@@ -59,7 +59,9 @@
     return true;
   }
   function validate(market){
-    if(!record(market)||typeof market.history_token!=='string'||!market.history_token.length||typeof market.incremental!=='boolean')return'history_metadata';
+    const restored=record(market)&&market.persisted_cached===true&&market.history_token===null&&market.incremental===false&&market.partial===false&&market.fresh===false&&market.connected===false&&market.feed_status==='cached';
+    if(record(market)&&market.persisted_cached===true&&!restored)return'history_metadata';
+    if(!record(market)||!restored&&(typeof market.history_token!=='string'||!market.history_token.length)||typeof market.incremental!=='boolean')return'history_metadata';
     if(!record(market.periods)||!record(market.period_counts))return'period_metadata';
     const coordinates=coordinateError(market,{allowReferenceOmission:market.incremental});if(coordinates)return coordinates;
     const append=market.incremental&&appendProtocol(market);
@@ -146,7 +148,7 @@
       // tick. A delta carries its ID only and shares the verified full value.
       const reference=market.incremental?entry.market.anchor_reference:wireReference;
       const next=Object.freeze({...immutable(metadata),...(reference===undefined?{}:{anchor_reference:market.incremental?reference:immutable(reference)}),periods});
-      entry.market=next;entry.historyValid=PERIODS.every(period=>next.periods[period].length>0);entry.accepted=ticket;
+      entry.market=next;entry.historyValid=typeof next.history_token==='string'&&PERIODS.every(period=>next.periods[period].length>0);entry.accepted=ticket;
       const basis=protectedBasis(next);if(Object.keys(basis).length)this.coordinateBases.set(symbol,basis);
       this.touch(symbol);
       return{accepted:true,market:readOnly?next:clone(next),ready:entry.historyValid};

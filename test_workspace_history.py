@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -141,6 +142,163 @@ class HistoryArchiveTests(unittest.TestCase):
         empty = WorkspaceMarketCache(clock=lambda: self.now).snapshot(self.symbol, self.preset, {"connected": True})
         self.archive.bootstrap(empty)
         self.assertTrue(self.archive.preview(self.symbol)["periods"]["m3"])
+
+    def test_complete_archive_restores_without_live_cursor_and_obeys_identity(self):
+        full = self.full()
+        self.archive.bootstrap(full)
+        restarted = WorkspaceHistoryArchive(self.root, clock=lambda: self.now)
+        restored = restarted.restore(self.symbol)
+        self.assertEqual(self.reconstruct(restored)["periods"], full["periods"])
+        self.assertFalse(restored["market"]["fresh"])
+        self.assertFalse(restored["market"]["connected"])
+        self.assertFalse(restored["market"]["partial"])
+        self.assertTrue(restored["market"]["persisted_cached"])
+        self.assertIsNone(restored["market"]["history_token"])
+        self.assertEqual(restored["market"]["feed_status"], "cached")
+        self.assertIsNone(restarted.restore(self.symbol, source="mock"))
+        self.assertIsNone(restarted.restore(self.symbol, expected_reference_id="other"))
+        item = restored["history"]["m3"][0]
+        (self.root / "blocks" / (item["sha256"] + ".json")).write_text("corrupted")
+        self.assertIsNone(restarted.restore(self.symbol))
+
+    def test_restored_complete_history_advances_six_month_boundary(self):
+        full = self.full()
+        self.archive.bootstrap(full)
+        self.now = timestamp("2027-04-25T10:00:00+08:00")
+        restored = self.archive.restore(self.symbol)
+        recovered = self.reconstruct(restored)
+        cutoff = six_month_cutoff(self.now)
+        for period in PERIODS:
+            expected = [row for row in full["periods"][period] if timestamp(row["dt"]) >= cutoff]
+            self.assertEqual(recovered["periods"][period], expected)
+            self.assertLess(len(expected), len(full["periods"][period]))
+        self.assertIsNone(recovered["history_token"])
+
+    def test_preview_reads_only_latest_blocks_needed_for_visible_candles(self):
+        rows = [{"dt": iso(self.now - (1000 - index) * 3600), "open": 100,
+                 "high": 104, "low": 98, "close": 101} for index in range(1001)]
+        for period in PERIODS.values():
+            self.cache.cache(self.symbol, period, rows)
+        full = self.full()
+        saved = self.archive.bootstrap(full)
+        total = sum(len(items) for items in saved["history"].values())
+        with patch.object(self.archive, "read_block", wraps=self.archive.read_block) as read:
+            preview = self.archive.preview(self.symbol)
+        self.assertLess(read.call_count, total)
+        self.assertEqual(read.call_count, 3)
+        self.assertEqual(preview["periods"], {period: rows[-240:] for period, rows in full["periods"].items()})
+
+    def test_unchanged_candles_do_not_rewrite_manifest_but_corrections_do(self):
+        self.archive.bootstrap(self.full())
+        manifest = next((self.root / "snapshots").glob("*.json"))
+        before = manifest.read_bytes()
+        self.now += 5
+        with patch.object(self.archive, "_atomic_write", wraps=self.archive._atomic_write) as write:
+            fresh_read = self.archive.bootstrap(self.full())
+            self.assertEqual(write.call_count, 0)
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual(fresh_read["market"]["as_of"], iso(self.now))
+        corrected = copy.deepcopy(self.rows[180])
+        corrected[7]["high"] += 1
+        self.cache.cache(self.symbol, 180, corrected)
+        with patch.object(self.archive, "_atomic_write", wraps=self.archive._atomic_write) as write:
+            self.archive.bootstrap(self.full())
+            self.assertEqual(sum(args[0][0] == manifest for args in write.call_args_list), 1)
+        self.assertNotEqual(manifest.read_bytes(), before)
+
+    def test_real_app_bootstrap_recovers_archive_while_new_sdk_memory_is_empty(self):
+        import app
+        full = self.full()
+        self.archive.bootstrap(full)
+        cold = WorkspaceMarketCache(clock=lambda: self.now)
+        with patch.object(app, "_workspace_market", cold), patch.object(app, "_workspace_history", self.archive), \
+                patch.object(app, "get_state", return_value={"connected": True, "boot_phase": "ready"}), \
+                patch.object(app.symbols, "find", return_value=self.preset), patch.object(app.config, "MOCK_MODE", False):
+            restored = app._workspace_market_bootstrap_provider(self.symbol)
+            self.assertEqual(cold.data, {}, "Restoration must not fake an SDK subscription or current bars")
+            self.assertEqual(self.reconstruct(restored)["periods"], full["periods"])
+            self.assertIsNone(restored["market"]["history_token"])
+            self.assertFalse(restored["market"]["fresh"])
+            self.assertEqual(cold.requested(), [self.symbol])
+            missing = app._workspace_market_bootstrap_provider("EX.uncached")
+            self.assertFalse(missing["market"].get("persisted_cached"))
+            self.assertTrue(all(not rows for rows in missing["market"]["periods"].values()))
+            for period, rows in self.rows.items():
+                cold.cache(self.symbol, period, rows)
+            verified = app._workspace_market_bootstrap_provider(self.symbol)
+            self.assertFalse(verified["market"].get("persisted_cached"))
+            self.assertIsInstance(verified["market"]["history_token"], str)
+            self.assertEqual(self.reconstruct(verified)["periods"], full["periods"])
+
+    def test_damaged_metadata_with_same_snapshot_id_is_repaired(self):
+        full = self.full()
+        self.archive.bootstrap(full)
+        manifest = next((self.root / "snapshots").glob("*.json"))
+        saved = json.loads(manifest.read_bytes())
+        saved["bootstrap"]["market"]["period_counts"]["m3"] += 1
+        manifest.write_text(json.dumps(saved), encoding="utf-8")
+        self.assertIsNone(self.archive.restore(self.symbol))
+        self.archive.bootstrap(full)
+        repaired = self.archive.restore(self.symbol)
+        self.assertEqual(self.reconstruct(repaired)["periods"], full["periods"])
+
+    def test_malformed_freshness_is_a_cache_miss_and_can_heal(self):
+        full = self.full()
+        self.archive.bootstrap(full)
+        manifest = next((self.root / "snapshots").glob("*.json"))
+        original = json.loads(manifest.read_bytes())
+        for bad in (None, [], {"m3": None}, {"day": "old"}):
+            with self.subTest(bad=bad):
+                damaged = copy.deepcopy(original)
+                damaged["bootstrap"]["market"]["freshness"] = bad
+                manifest.write_text(json.dumps(damaged), encoding="utf-8")
+                self.assertIsNone(self.archive.restore(self.symbol))
+                self.assertIsNone(self.archive.preview(self.symbol))
+                self.archive.bootstrap(full)
+                self.assertIsNotNone(self.archive.restore(self.symbol))
+
+    def test_gc_cannot_remove_reused_blocks_between_write_and_manifest_commit(self):
+        saved = self.archive.bootstrap(self.full())
+        manifest = next((self.root / "snapshots").glob("*.json"))
+        manifest.unlink()
+        for items in saved["history"].values():
+            for item in items:
+                os.utime(self.archive._block_path(item["sha256"]), (self.now - 86401, self.now - 86401))
+        entered, attempting = threading.Event(), threading.Event()
+        original, result = self.archive._write_block, []
+        def write(*args):
+            path = original(*args)
+            if not entered.is_set():
+                entered.set()
+                self.assertTrue(attempting.wait(2))
+            return path
+        def collect():
+            entered.wait(2)
+            attempting.set()
+            result.append(self.archive.collect_garbage())
+        collector = threading.Thread(target=collect)
+        collector.start()
+        with patch.object(self.archive, "_write_block", side_effect=write):
+            complete = self.archive.bootstrap(self.full())
+        collector.join(2)
+        self.assertFalse(collector.is_alive())
+        self.assertEqual(result, [0])
+        self.assertEqual(self.reconstruct(complete)["periods"], self.full()["periods"])
+
+    def test_reused_trimmed_orphan_gets_bounded_inflight_gc_grace(self):
+        self.archive.bootstrap(self.full())
+        self.now = timestamp("2027-04-25T10:00:00+08:00")
+        trimmed = self.archive.restore(self.symbol)
+        hashes = {item["sha256"] for items in trimmed["history"].values() for item in items}
+        orphaned = hashes - self.archive.live_hashes()
+        self.assertTrue(orphaned)
+        for digest in orphaned:
+            os.utime(self.archive._block_path(digest), (self.now - 86401, self.now - 86401))
+        reused = self.archive.restore(self.symbol)
+        self.archive.collect_garbage()
+        self.reconstruct(reused)
+        self.now += 86401
+        self.assertGreaterEqual(self.archive.collect_garbage(), len(orphaned))
 
     def test_publication_is_after_atomic_local_commit_and_failure_is_optional(self):
         seen = []

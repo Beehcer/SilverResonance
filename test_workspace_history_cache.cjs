@@ -98,6 +98,38 @@ test('page reload reuses disk chunks but takes current tails, freshness and toke
   await reloaded.assemble(next,async()=>assert.fail('Memory hit expected'),()=>progress++);assert.equal(reloaded.stats.memoryHits,3);assert.equal(progress,6);
 });
 
+test('a full persisted archive paints without a live cursor, and cannot grant live evidence',async()=>{
+  const f=fixture(),saved=f.bundle.market;
+  Object.assign(saved,{persisted_cached:true,partial:false,fresh:false,connected:false,history_token:null,feed_status:'cached'});
+  const restored=await blocks(memory()).assemble(f.bundle,async path=>f.values.get(path)),cache=new M.Store();
+  assert.equal(cache.accept(restored.symbol,restored).accepted,true);
+  assert.equal(cache.ready(restored.symbol),true);assert.equal(cache.history(restored.symbol),null);
+  for(const patch of [{fresh:true},{connected:true},{partial:true},{incremental:true},{persisted_cached:false},{feed_status:'live'},
+      {history_token:'old-cursor'},{history_token:'old-cursor',fresh:true},{history_token:'old-cursor',incremental:true}]){
+    const unsafe={...restored,...patch},result=new M.Store().accept(restored.symbol,unsafe);
+    assert.equal(result.accepted,false,JSON.stringify(patch));
+  }
+});
+
+test('cached complete history survives unavailable SDK memory, then transitions to new live bootstrap and deltas',async()=>{
+  const f=fixture(),saved=clone(f.bundle),storage=memory(),calls=[];let phase='cached';
+  Object.assign(saved.market,{persisted_cached:true,partial:false,fresh:false,connected:false,history_token:null,feed_status:'cached'});
+  const empty=clone(f.bundle);for(const p of PERIODS){empty.history[p]=[];empty.history_counts[p]=0;empty.market.period_counts[p]=0;empty.market.periods[p]=[];}empty.market.history_token='empty-process-token';empty.market.fresh=false;
+  const hub=new H.Hub({now:()=>NOW,blocks:blocks(storage),fetch:async path=>{
+    calls.push(path);
+    if(f.values.has(path))return{ok:true,text:async()=>f.values.get(path)};
+    if(path.includes('/bootstrap'))return{ok:true,json:async()=>({bootstrap:phase==='cached'?saved:phase==='empty'?empty:f.bundle})};
+    assert.equal(phase,'live');assert.match(path,/history=current-token/);
+    return{ok:true,json:async()=>({market:{...f.bundle.market,incremental:true,base_history_token:'current-token',period_drops:{day:0,m30:0,m3:0}}})};
+  }});
+  const original=await hub.refresh(f.bundle.market.symbol);assert.equal(original.persisted_cached,true);assert.equal(hub.cache.history(original.symbol),null);
+  phase='empty';const retained=await hub.refresh(original.symbol);assert.equal(retained,original);assert.equal(retained.fresh,false);
+  assert.equal(calls.some(path=>path.includes('history=')),false,'Archived identity is never sent as a live cursor');
+  phase='live';const verified=await hub.refresh(original.symbol);assert.equal(verified.persisted_cached,undefined);assert.equal(verified.fresh,true);assert.equal(hub.cache.history(original.symbol),'current-token');
+  assert.equal(hub.blocks.stats.memoryHits,3);await hub.refresh(original.symbol);assert.equal(hub.stats.incremental,1);
+  await settled(hub.blocks);
+});
+
 test('corrupted disk data is replaced and public OSS failures retry the exact same hash at the origin',async()=>{
   const f=fixture(),storage=memory(),desc=f.bundle.history.m3[0];
   storage.items.set(desc.sha256,{sha256:desc.sha256,text:'corrupt',last_time:NOW,saved_at:NOW,bytes:7});

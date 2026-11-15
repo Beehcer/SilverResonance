@@ -134,7 +134,7 @@ function harness({runShell = true, html = template(), href = 'https://example.te
 }
 
 async function connect(h) {
-  assert.equal(h.requests[0]?.url, '/api/workspace/session');
+  assert.equal(h.requests[0]?.url, '/api/workspace/session?bootstrap=1');
   h.requests[0].resolve({user: {id: 'owner'}}); await h.flush();
   assert.equal(h.requests[1]?.url, '/api/workspace/symbols');
   h.requests[1].resolve({symbols: [{symbol: 'MA', name: '甲醇'}, {symbol: 'SP', name: '纸浆'}, {symbol: 'AU', name: '黄金'}]}); await h.flush();
@@ -146,6 +146,29 @@ function startupText(h) {
   return [...h.nodes].filter(([id]) => id === 'startup' || id.startsWith('startup-'))
     .map(([, item]) => item.textContent + ' ' + item.children.map(child => child.textContent || '').join(' ')).join(' ');
 }
+
+test('combined session retries the same query and opens a deep link without a catalogue round trip', async () => {
+  const h = harness({href: 'https://example.test/workspace?symbol=SP&board='});
+  assert.equal(h.requests[0].url, '/api/workspace/session?bootstrap=1');
+  h.requests[0].resolve({status: 'error'}, 503); await h.flush();
+  assert.equal(h.frames.length, 0);
+  assert.match(h.nodes.get('startup-detail').textContent, /共同画板/);
+  await h.advance(700);
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].url, '/api/workspace/session?bootstrap=1');
+  assert.equal(h.requests[1].options.credentials, 'same-origin');
+  assert.equal(h.requests[1].options.cache, 'no-store');
+  h.requests[1].resolve({user: {id: 'owner'}, bootstrap: {symbols: [
+    {symbol: 'MA', name: '甲醇'}, {symbol: 'SP', name: '纸浆'}
+  ]}}); await h.flush();
+  assert.equal(h.requests.length, 2, 'Both requests are session attempts; no /symbols request');
+  assert.equal(h.frames.length, 1);
+  const url = new URL(h.frames[0].src, 'https://example.test');
+  assert.equal(url.searchParams.get('symbol'), 'SP');
+  assert.equal(url.searchParams.get('board'), '');
+  assert.equal(h.window.DualWorkspaceBootstrap.session.user.id, 'owner');
+  assert.equal(h.window.DualWorkspaceBootstrap.symbols.symbols.length, 2);
+});
 
 test('slow startup configuration reports its stage and elapsed wait before any iframe opens', async () => {
   const h = harness();

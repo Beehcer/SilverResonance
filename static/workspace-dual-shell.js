@@ -312,6 +312,7 @@
   window.addEventListener('resize', scheduleLayout);
   async function startupRequest(path) {
     const attempts = 3;
+    const isSession = path.split('?')[0] === '/session';
     for (let attempt = 0; attempt < attempts; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 12000);
@@ -324,7 +325,7 @@
         return await response.json();
       } catch (error) {
         if (error.retryable === false || attempt === attempts - 1) throw error;
-        startupProgress(path === '/session' ? 0 : 1, '连接较慢，正在重试（' + (attempt + 2) + '/' + attempts + '）…', path === '/session' ? '正在连接共同画板。' : '正在读取品种列表。');
+        startupProgress(isSession ? 0 : 1, '连接较慢，正在重试（' + (attempt + 2) + '/' + attempts + '）…', isSession ? '正在连接共同画板。' : '正在读取品种列表。');
         await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
       } finally { clearTimeout(timer); }
     }
@@ -346,6 +347,15 @@
     startupProgress(0, message, '可以刷新重试或打开单窗口；原计划和图层不会被清除。');
     $('startup-actions').hidden = false; $('startup').hidden = false;
   }
+  function bootstrapCatalogue(session) {
+    const catalogue = session?.bootstrap;
+    // An empty catalogue is a valid result. Missing or malformed optional
+    // data means an older server (or a failed read): use the normal endpoint.
+    return Array.isArray(catalogue?.symbols) && catalogue.symbols.every(item => {
+      const symbol = typeof item === 'string' ? item : item?.symbol;
+      return typeof symbol === 'string' && symbol.trim().length > 0;
+    }) ? catalogue : null;
+  }
   async function start() {
     try {
       window.workspaceShellStarted = true;
@@ -354,11 +364,11 @@
       // its scrolling chart UI into constrained desktop iframe slots.
       if (mobileDevice()) { location.replace(singleViewUrl()); return; }
       // Cookies are shared between the two panes; establish one identity first.
-      const session = await startupRequest('/session');
+      const session = await startupRequest('/session?bootstrap=1');
       if (session.mobile_device) { location.replace(singleViewUrl()); return; }
       layoutKey = KEY + (session.user?.id || 'browser');
       startupProgress(1, '正在读取品种列表…', '共同画板已连接。');
-      const response = await startupRequest('/symbols');
+      const response = bootstrapCatalogue(session) || await startupRequest('/symbols');
       symbols = Array.isArray(response.symbols) ? response.symbols : []; ids = symbols.map(item => item.symbol || item);
       if (!ids.length) { startupError('暂无可用品种，请稍后重试。'); return; }
       startupProgress(2, '正在加载图表组件…', '品种列表已就绪，正在恢复上次窗口。');

@@ -45,7 +45,7 @@ test('old event source callbacks and differently scoped packets never overwrite 
 });
 test('late presence response is discarded after switching',async()=>{const h=harness(),work=h.context.refreshPresence();h.state.generation++;answer(h.requests[0],{presence:[{id:'old'}]});await work;assert.equal(h.state.presence,undefined);});
 test('loading state distinguishes partial cache, first subscription, slow request and completed data',()=>{
-  const h=harness();h.state.loadingSince=Date.now()-9000;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,false);assert.match(h.$('market-loading-title').textContent,/近期行情/);assert.equal(h.$('retry-market').hidden,false);
+  const h=harness();h.state.loadingSince=Date.now()-9000;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,false);assert.match(h.$('market-loading-title').textContent,/读取历史K线/);assert.equal(h.$('retry-market').hidden,false);
   h.state.planReady=true;h.state.planVerified=true;h.state.market={name:'鸡蛋',partial:true,periods:{day:[{}],m30:[{}],m3:[{}]}};h.context.renderLoadState();assert.match(h.$('market-loading-title').textContent,/下载完整历史/);
   h.state.marketLoadError='slow';h.context.renderLoadState();assert.match(h.$('market-loading-detail').textContent,/自动重试/);assert.equal(h.$('market-loading').dataset.error,'true');
   h.state.marketLoadError=null;h.state.market.partial=false;h.context.renderLoadState();assert.equal(h.$('market-loading').hidden,true);
