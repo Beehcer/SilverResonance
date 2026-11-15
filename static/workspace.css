@@ -233,6 +233,7 @@ html.mobile-view-only #members-panel .mobile-members-help{margin:12px 0 0;color:
 .symbol-list{overflow-y:auto;scrollbar-width:none}
 .symbol-list::-webkit-scrollbar{display:none;width:0;height:0}
 .quote-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:4px 6px 6px;gap:3px;border-bottom:1px solid #303a43}
+.project-icon{display:block;flex:none;object-fit:contain}.brand-mark .project-icon{display:inline-block;vertical-align:middle}
 .quote-groups button{font-size:12px;padding:5px 3px;line-height:18px;border:1px solid transparent;border-radius:3px;color:#99a8b6}
 .quote-groups .custom-group{background:#1c242c;color:#c9d5df;border-color:#2c3945}
 .quote-groups #all-symbols{grid-column:1/-1;padding:3px;font-size:11px}

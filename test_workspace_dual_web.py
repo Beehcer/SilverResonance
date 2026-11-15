@@ -89,14 +89,21 @@ class DualWorkspaceWebTests(unittest.TestCase):
         class Assets(HTMLParser):
             urls = None
             def handle_starttag(self, tag, attrs):
+                values = dict(attrs)
+                if tag == 'link' and values.get('rel') in ('icon', 'apple-touch-icon'):
+                    self.icons.append(values['href'])
+                    return
                 if tag in ('script', 'link'):
                     self.urls.extend(v for k,v in attrs if k in ('src','href'))
         for route in ('/', '/workspace?pane=pane-a', '/workspace?view=single'):
             response = self.client.get(route)
-            parser = Assets(); parser.urls=[]; parser.feed(response.text)
+            parser = Assets(); parser.urls=[]; parser.icons=[]; parser.feed(response.text)
             self.assertTrue(parser.urls)
             for url in parser.urls:
                 self.assertRegex(url, r'^https://silver-resonance\.oss-cn-hangzhou\.aliyuncs\.com/workspace/[a-f0-9]{24}/')
+            self.assertEqual(len(parser.icons), 3)
+            for url in parser.icons:
+                self.assertRegex(url, r'^https://silver-resonance\.oss-cn-hangzhou\.aliyuncs\.com/images/icons/fu-[a-f0-9]{12}(?:-(?:32|180))?\.(?:png|ico)$')
 
     def test_shell_preloads_only_the_exact_critical_pane_assets(self):
         from html.parser import HTMLParser

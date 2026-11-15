@@ -4,14 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>共振 · 多周期计划工作台</title>
+  <link rel="icon" type="image/x-icon" href="https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/images/icons/fu-2fee201b895e.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/images/icons/fu-2fee201b895e-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/images/icons/fu-2fee201b895e-180.png">
   <link rel="stylesheet" href="/static/workspace.css?v=20261114-caret-1">
   {% if dual_pane %}<link rel="stylesheet" href="/static/workspace-dual-embed.css?v=20261114-feedback-1">{% endif %}
 </head>
 <body>
-<div id="auth-screen" class="connection-screen"><div class="brand-mark">R<span>共振 / RESONANCE</span></div><h1>正在连接共同画板</h1><p id="connection-message">无需注册或密码。打开即加入，同步你和伙伴的计划。</p><button id="retry-connection" hidden>重新连接</button></div>
+<div id="auth-screen" class="connection-screen"><div class="brand-mark"><img class="project-icon" src="https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/images/icons/fu-2fee201b895e-64.png" width="42" height="42" alt=""><span>共振 / RESONANCE</span></div><h1>正在连接共同画板</h1><p id="connection-message">无需注册或密码。打开即加入，同步你和伙伴的计划。</p><button id="retry-connection" hidden>重新连接</button></div>
 <div id="workspace" class="terminal" hidden>
   <header class="terminal-header">
-    <a class="terminal-brand" href="/" title="共振计划工作台"><b>R</b><span>共振</span></a>
+    <a class="terminal-brand" href="/" title="共振计划工作台"><img class="project-icon" src="https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/images/icons/fu-2fee201b895e-64.png" width="24" height="24" alt=""><span>共振</span></a>
     <span class="mobile-only mobile-readonly-label">只读看盘</span>
     <span class="workspace-title">多周期工作台</span>
     <div class="terminal-notice-slot"><div id="notice" class="notice terminal-notice" hidden role="status" aria-live="polite" aria-atomic="true"></div></div>
@@ -37,9 +40,9 @@
     <aside class="quote-sidebar">
       <div class="quote-search"><input id="symbol-search" type="search" placeholder="输入合约代码 / 名称" aria-label="搜索品种"><span>⌕</span></div>
       <div class="quote-tabs quote-groups" role="group" aria-label="品种分组">
-        <button id="default-symbols" class="active custom-group" data-symbol-group="default" aria-pressed="true" title="我的默认分组 · 拖入添加，组内拖动排序">默认</button><button id="favorite-symbols" class="custom-group" data-symbol-group="favorites" aria-pressed="false" title="我的喜爱分组 · 拖入添加，组内拖动排序">☆ 喜爱</button>
+        <button id="all-symbols" class="active" data-symbol-group="all" aria-pressed="true" title="全部可用品种，包括未归类品种">全部</button>
+        <button id="default-symbols" class="custom-group" data-symbol-group="default" aria-pressed="false" title="我的默认分组 · 拖入添加，组内拖动排序">默认</button><button id="favorite-symbols" class="custom-group" data-symbol-group="favorites" aria-pressed="false" title="我的喜爱分组 · 拖入添加，组内拖动排序">☆ 喜爱</button>
         <button data-symbol-group="energy" aria-pressed="false">能源</button><button data-symbol-group="chemical" aria-pressed="false">化工</button><button data-symbol-group="agriculture" aria-pressed="false">农产品</button><button data-symbol-group="precious" aria-pressed="false">贵金属</button>
-        <button id="all-symbols" data-symbol-group="all" aria-pressed="false" title="全部可用品种，包括未归类品种">全部</button>
       </div>
       <div class="quote-columns"><span>品种</span><span>最新</span><span title="星标加入喜爱；加减号加入或移出默认">分组</span></div>
       <div id="symbol-list" class="symbol-list"><div class="quote-loading">正在读取品种…</div></div>
@@ -48,7 +51,7 @@
     <main class="market-workspace">
       <section class="market-strip">
         <label class="mobile-only mobile-symbol-control" for="symbol"><span>品种</span><select id="symbol" aria-label="选择品种"></select></label>
-        <div class="active-symbol"><strong id="active-symbol-name">—</strong><span id="market-stamp">等待行情</span><button id="favorite-current" title="收藏当前合约">☆</button></div>
+        <div class="active-symbol"><strong id="active-symbol-name">—</strong><span id="market-stamp">等待行情</span><button id="favorite-current" hidden aria-hidden="true" tabindex="-1">☆</button></div>
         <section class="decision" id="decision" data-status="WAIT"><button id="decision-toggle" class="decision-title" aria-expanded="false"><span id="decision-code" class="status-code">等待</span><h1 id="decision-title">等待数据</h1><span id="decision-reason">正在读取行情与计划。</span><i>⌄</i></button><div id="decision-detail" class="decision-bottom" hidden><div class="checklist" id="checklist" aria-label="三步条件检查"></div><div id="check-details" class="check-details"></div><div class="next-step"><strong id="next-action">等待连接</strong><span id="evaluation-time" class="small"></span><button id="ack-alert" hidden>已看到</button></div></div></section>
         <div class="market-strip-actions"><div class="board-view-tools"><details id="layout-picker" class="layout-picker"><summary aria-label="切换多周期布局" title="切换多周期布局"><span class="layout-glyph">▦</span><span id="layout-name">30 分主图</span><span>⌄</span></summary><div id="layout-menu" class="layout-menu" role="group" aria-label="多周期布局"></div></details></div><button id="quick-plan-toggle">计划模式</button><button id="objects-toggle"><span id="layers-toggle-label">收起图层</span><span id="object-count" hidden>0</span></button></div>
       </section>

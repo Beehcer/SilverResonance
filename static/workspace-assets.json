@@ -1,5 +1,5 @@
 {
-  "version": "7412e11694e30c2a09de6c06",
+  "version": "9b3e93632bbd7108b57682d6",
   "assets": {
     "/static/plan-board-model.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/plan-board-model.js",
     "/static/workspace-cases-data.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-cases-data.js",
@@ -28,7 +28,7 @@
     "/static/workspace-shortcuts.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-shortcuts.js",
     "/static/workspace-symbols.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-symbols.js",
     "/static/workspace-ticket.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/0a87071b7942056927f19094/workspace-ticket.js",
-    "/static/workspace.css": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/dd88f83e254dd9a7d902b6f2/workspace.css",
+    "/static/workspace.css": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/62e1263b0d322761d858f46a/workspace.css",
     "/static/workspace.js": "https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/workspace/6adf318be4483a9d154795b5/workspace.js"
   },
   "sha256": {
@@ -59,7 +59,7 @@
     "workspace-shortcuts.js": "e236cdc27c9fc3d8f5bea5787c07ef2084fdeb69f8d50f9335ffc4fbebe04ca8",
     "workspace-symbols.js": "2e23ac0807942fecf1c081cd8b7a706ca0a296863a8febe362c2d11a107de948",
     "workspace-ticket.js": "bab8320f92d44928c347729e0179b9dc2b3c2c5dc30869684b344cc7e6d6e16a",
-    "workspace.css": "dd88f83e254dd9a7d902b6f288db6d56a59dcefa6b7c0ef10205c9b852437cfd",
+    "workspace.css": "62e1263b0d322761d858f46a9da27506be98f2f46a71aee4e39924bf6d46692e",
     "workspace.js": "6adf318be4483a9d154795b518020f2b24349d1c30468a5cb6ab621ff2b31ef2"
   }
 }
