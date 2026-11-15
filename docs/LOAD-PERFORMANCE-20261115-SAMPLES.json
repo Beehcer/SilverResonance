@@ -1,0 +1,72 @@
+{
+  "method": "Same online backend, isolated foreground Edge, frozen client scripts delivered locally; all 20 previews primed before sequential switches. One run per version, no network throttling. Excludes real asset-download cold-start comparison.",
+  "old": {
+    "preview_count": 20,
+    "errors": 0,
+    "visibility": "visible",
+    "first_plot": {
+      "count": 20,
+      "median_ms": 57.5,
+      "p95_ms": 92,
+      "max_ms": 104
+    },
+    "verified": {
+      "count": 20,
+      "median_ms": 4686.5,
+      "p95_ms": 5775,
+      "max_ms": 5813
+    },
+    "dual_ms": {
+      "dual_open": 5237,
+      "dual_reopen": 4266
+    },
+    "hedges": 0,
+    "block_downloads": 237
+  },
+  "new": {
+    "preview_count": 20,
+    "errors": 0,
+    "visibility": "visible",
+    "first_plot": {
+      "count": 20,
+      "median_ms": 61.0,
+      "p95_ms": 84,
+      "max_ms": 123
+    },
+    "verified": {
+      "count": 20,
+      "median_ms": 4510.5,
+      "p95_ms": 6107,
+      "max_ms": 9695
+    },
+    "dual_ms": {
+      "dual_open": 3104,
+      "dual_reopen": 2846
+    },
+    "hedges": 0,
+    "block_downloads": 237
+  },
+  "hedged": {
+    "preview_count": 20,
+    "errors": 0,
+    "visibility": "visible",
+    "first_plot": {
+      "count": 20,
+      "median_ms": 57.0,
+      "p95_ms": 78,
+      "max_ms": 100
+    },
+    "verified": {
+      "count": 20,
+      "median_ms": 3953.0,
+      "p95_ms": 5394,
+      "max_ms": 5884
+    },
+    "dual_ms": {
+      "dual_open": 2694,
+      "dual_reopen": 3293
+    },
+    "hedges": 92,
+    "block_downloads": 237
+  }
+}
