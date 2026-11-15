@@ -29,6 +29,18 @@ test('repeated identical partials keep original saved age and changed current ca
  h.store.putPreview(market('A',NOW,99));assert.equal(h.store.peek('A').price,102);
 });
 
+test('unchanged content checks reuse cached candles without renewing their age or permission',async()=>{
+ const h=harness();h.store.putPreview(market());h.now(NOW+61000);
+ const first=h.hub.refresh('A');h.requests[0].resolve({ok:true,json:async()=>({market:{...market('A',NOW+61000),preview_revision:'v1'}})});
+ await first;assert.equal(h.store.peek('A').preview_saved_at,NOW);
+ h.now(NOW+120000);const second=h.hub.refresh('A');assert.match(h.requests[1].url,/preview_revision=v1/);
+ h.requests[1].resolve({ok:true,json:async()=>({status:'preview_unchanged',symbol:'A',preview_revision:'v1'})});
+ const result=await second;assert.equal(result.preview_saved_at,NOW);assert.equal(result.fresh,false);assert.equal(result.history_token,null);
+ assert.equal(h.hub.checked.get('A'),NOW+120000);
+ const third=h.hub.refresh('A');h.requests[2].resolve({ok:true,json:async()=>({status:'preview_unchanged',symbol:'B',preview_revision:'v1'})});
+ await assert.rejects(third,/mismatch/);
+});
+
 test('partial write rejects foreign shape, stale/future timestamps and unavailable data',()=>{
  for(const patch of [{partial:false},{incremental:true},{client_cached:true},{unavailable:true},{source:'unknown'},{as_of:'invalid'},{as_of:new Date(NOW+1).toISOString()},{preview_saved_at:NOW+1},{preview_saved_at:NOW-190*86400000}]){
   const h=harness();assert.equal(h.store.putPreview({...market(),...patch}),null);assert.equal(h.store.peek('A'),null);

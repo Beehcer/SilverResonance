@@ -142,6 +142,23 @@ async function connect(h) {
   return h.frames[0];
 }
 
+test('expired parent bootstrap renews once for two simultaneous panes and shares the combined catalogue',async()=>{
+  const h=harness();await connect(h);h.context.Date.now=()=>70000;
+  const first=h.window.renewWorkspaceBootstrap(),second=h.window.renewWorkspaceBootstrap();
+  assert.equal(first,second);assert.equal(h.requests.length,3);
+  h.requests[2].resolve({user:{id:'owner'},csrf_token:'fresh-token',bootstrap:{symbols:[{symbol:'MA'}]}});
+  const seed=await first;assert.equal(seed.session.csrf_token,'fresh-token');assert.equal(seed.createdAt,70000);
+  assert.equal(await h.window.renewWorkspaceBootstrap(),seed);assert.equal(h.requests.length,3);
+});
+
+test('failed bootstrap renewal clears its flight and never accepts a changed identity',async()=>{
+  const h=harness();await connect(h);h.context.Date.now=()=>70000;
+  const first=h.window.renewWorkspaceBootstrap();h.requests[2].resolve({},503);await assert.rejects(first);await h.flush();
+  const retry=h.window.renewWorkspaceBootstrap();assert.equal(h.requests.length,4);
+  h.requests[3].resolve({user:{id:'another'},csrf_token:'other',bootstrap:{symbols:[]}});
+  await assert.rejects(retry,/身份已变化/);assert.equal(h.window.DualWorkspaceBootstrap,null);
+});
+
 function startupText(h) {
   return [...h.nodes].filter(([id]) => id === 'startup' || id.startsWith('startup-'))
     .map(([, item]) => item.textContent + ' ' + item.children.map(child => child.textContent || '').join(' ')).join(' ');

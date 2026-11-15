@@ -104,31 +104,15 @@ test('invalid full retry is bounded and does not corrupt the previously rendered
   await assert.rejects(h.context.refreshMarket(A),/未能对齐/);assert.equal(h.calls.network.length,2);assert.equal(h.context.marketRequests.size,0);assert.deepEqual(h.context.marketCache.get(A),base);
 });
 
-test('hidden-page background work only refreshes visited contracts using one sequential worker',async()=>{
-  const h=harness();h.context.document.hidden=true;h.state.visitedSymbols=new Set([A,B,D,'CZCE.AP701']);
-  const pending=[],requested=[];let active=0,max=0;h.respond(request=>{const url=new URL(request.url,'https://example.test'),symbol=url.searchParams.get('symbol');requested.push(symbol);active++;max=Math.max(max,active);const wait=deferred();pending.push({wait,symbol});return wait.promise.finally(()=>active--);});
-  const background=h.context.refreshBackground();await tick();assert.equal(h.calls.network.length,1);assert.equal(h.state.backgroundRefreshing,true);
-  await h.context.refreshBackground();assert.equal(h.calls.network.length,1);
-  pending[0].wait.resolve({market:market(pending[0].symbol)});await tick();assert.equal(h.calls.network.length,2);
-  pending[1].wait.resolve({market:market(pending[1].symbol)});await tick();assert.equal(h.calls.network.length,3);pending[2].wait.resolve({market:market(pending[2].symbol)});await background;
-  assert.equal(max,1);assert.deepEqual(new Set(requested),new Set([B,D,'CZCE.AP701']));assert.equal(h.state.backgroundRefreshing,false);assert.equal(h.calls.paints.length,0);
-});
-
-test('inactive plans use their own explicit board scope while same-contract charts stay shared',async()=>{
-  const h=harness();h.state.board='active';h.context.cacheDocument(A,'active',plan(A,'active',1));h.context.cacheDocument(A,'other',plan(A,'other',2));h.context.cacheDocument(B,'',plan(B,'',3));h.state.visitedSymbols=new Set([A]);
-  h.respond(request=>{const url=new URL(request.url,'https://example.test'),symbol=decodeURIComponent(url.pathname.split('/').at(-1)),board=url.searchParams.get('board')||'';return{plan:plan(symbol,board,9)};});
-  await h.context.refreshBackground();assert.equal(h.calls.network.length,2);
-  const urls=h.calls.network.map(call=>new URL(call.url,'https://example.test'));
-  assert.equal(urls.find(url=>url.pathname.endsWith(A)).searchParams.get('board'),'other');assert.equal(urls.find(url=>url.pathname.endsWith(B)).searchParams.has('board'),false);
-  assert.equal(h.context.documentCache.get(A+':other').plan.revision,9);assert.equal(h.context.documentCache.get(B+':').plan.revision,9);assert.equal(h.context.documentCache.get(A+':active').plan.revision,1);assert.equal(h.state.plan.symbol,A);assert.equal(h.calls.paints.length,0);
-});
-
-test('changing session epoch stops queued background work and prevents an old plan from repopulating the new document cache',async()=>{
-  const h=harness();h.state.visitedSymbols=new Set([A]);for(const symbol of [B,D,'CZCE.AP701'])h.context.cacheDocument(symbol,'night',plan(symbol,'night'));
-  const pending=[];h.respond(()=>{const wait=deferred();pending.push(wait);return wait.promise;});const background=h.context.refreshBackground();await tick();assert.equal(pending.length,1);
-  h.state.cacheEpoch++;h.state.session={user:{id:'other'}};h.context.documentCache.clear();h.state.backgroundRefreshing=false;
-  pending[0].resolve({plan:plan(B,'night',7)});await background;
-  assert.equal(h.calls.network.length,1);assert.equal(h.context.documentCache.size,0);assert.equal(h.state.backgroundRefreshing,false);
+test('previously visited markets and inactive plans do not become permanent background subscriptions',async()=>{
+  const h=harness();h.state.visitedSymbols=new Set([A,B,D,'CZCE.AP701']);
+  h.context.cacheDocument(B,'night',plan(B,'night',7));
+  const cached=h.context.documentCache.get(B+':night');
+  for(const hidden of [false,true]){h.context.document.hidden=hidden;await h.context.refreshBackground();}
+  assert.equal(h.calls.network.length,0);assert.equal(h.context.documentCache.get(B+':night'),cached);
+  await h.context.poll();
+  assert.ok(h.calls.network.some(call=>call.url.includes('/market')));
+  assert.ok(h.calls.network.every(call=>!call.url.includes(encodeURIComponent(B))));
 });
 
 test('switch intent waits for an outstanding commit instead of clearing dirty data or starting target requests',async()=>{
@@ -176,13 +160,6 @@ test('an obsolete switch or poll cannot repopulate shared documents after a sess
     waiting.resolve({plan:plan(operation==='switch'?B:A,'night',9),market:market(operation==='switch'?B:A),evaluation:{status:'ready',source:'live'},quotes:[]});await task;
     assert.equal(h.context.documentCache.size,0);assert.equal(h.calls.paints.length,paints);
   }
-});
-
-test('queued background jobs skip contracts dropped from the visited set or newly made active',async()=>{
-  const h=harness(),pending=[];h.state.visitedSymbols=new Set([A,B,D,'CZCE.AP701','CZCE.TA701']);
-  h.respond(request=>{const symbol=new URL(request.url,'https://example.test').searchParams.get('symbol'),wait=deferred();pending.push({symbol,wait});return wait.promise;});
-  const task=h.context.refreshBackground();await tick();assert.equal(pending.length,1);h.state.visitedSymbols.delete('CZCE.AP701');h.state.symbol='CZCE.TA701';
-  pending[0].wait.resolve({market:market(pending[0].symbol)});await tick();assert.equal(pending.length,2);assert.equal(pending[1].symbol,D);pending[1].wait.resolve({market:market(D)});await task;assert.equal(h.calls.network.length,2);
 });
 
 test('opening a contract pins it and bounds visited contracts to the full cache capacity',async()=>{

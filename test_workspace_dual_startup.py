@@ -94,7 +94,7 @@ assert.match(startupNodes['startup-label'].textContent,/暂无可用品种/);ass
     def test_success_timeout_recovery_retry_bound_and_terminal_http_failure(self):
         source = (Path(__file__).parent / 'static/workspace-dual-shell.js').read_text(encoding='utf-8')
         start = source.index('  async function startupRequest(path)')
-        end = source.index('  async function start()', start)
+        end = source.index('  function mobileDevice()', start)
         script = r"""
 const assert=require('node:assert/strict');
 const status={textContent:''},$=()=>status,startupProgress=(_completed,label)=>{status.textContent=label;};

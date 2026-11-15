@@ -63,9 +63,10 @@ def adapt_workspace_js(source: str) -> str:
     replace_once("function renderLoadState(){", "function renderLoadState(){window.FullWorkspace?.queueState();")
     bootstrap = r"""
   const dualBootstrapUsed=new Set();
-  function dualBootstrap(path){
+  async function dualBootstrap(path){
     try{
-      const parent=window.parent,seed=parent!==window&&parent.location.origin===location.origin?parent.DualWorkspaceBootstrap:null;
+      const parent=window.parent,sameOrigin=parent!==window&&parent.location.origin===location.origin;
+      const seed=sameOrigin?(parent.renewWorkspaceBootstrap?await parent.renewWorkspaceBootstrap():parent.DualWorkspaceBootstrap):null;
       const age=seed?Date.now()-seed.createdAt:Infinity;
       if(!dualBootstrapUsed.has(path)&&age>=0&&age<60000&&seed?.session?.user?.id){
         const value=path==='/session'?seed.session:path==='/symbols'&&state.session?.user?.id===seed.session.user.id&&Array.isArray(seed.symbols?.symbols)?seed.symbols:null;

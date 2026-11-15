@@ -11,6 +11,9 @@ import hashlib
 import json
 import math
 import os
+import copy
+import threading
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -288,6 +291,39 @@ def _bars(raw, as_of):
     return output, True
 
 
+_bar_prefixes = OrderedDict()
+_bar_prefix_lock = threading.RLock()
+
+
+def _cached_bars(raw, as_of, key):
+    """Reuse structural validation only; time, tails and all eligibility stay live.
+
+    Compare complete prefix values, never trust a cursor that survives changes.
+    Keep at most 24 period prefixes, bounding memory even for a large catalogue.
+    """
+    if not key or not isinstance(raw, list) or len(raw) < 3:
+        return _bars(raw, as_of)
+    prefix = raw[:-2]
+    with _bar_prefix_lock:
+        cached = _bar_prefixes.get(key)
+        if cached is None or cached[0] != prefix:
+            output, valid = _bars(prefix, None)
+            cached = (copy.deepcopy(prefix), output, valid)
+            _bar_prefixes[key] = cached
+        _bar_prefixes.move_to_end(key)
+        while len(_bar_prefixes) > 24:
+            _bar_prefixes.popitem(last=False)
+    output, valid = cached[1:]
+    tail, tail_ok = _bars(raw[-2:], as_of)
+    if not valid or not tail_ok or (output and as_of is not None and output[-1]["_time"] > as_of):
+        return [], False
+    # Sorting and duplicate handling stay equivalent for untrusted/out-of-order
+    # inputs too; normal chronological data takes the inexpensive append path.
+    if not output or not tail or output[-1]["_time"] < tail[0]["_time"]:
+        return output + tail, True
+    return _bars(raw, as_of)
+
+
 def estimate_planned_risk(plan, market, risk):
     """A price-line estimate, independent of quote timing and entry permission."""
     entry, stop = plan.get("planned_entry_price"), plan.get("stop_price")
@@ -420,9 +456,10 @@ def evaluate_plan(plan, market, risk, rule_version):
     else:
         check("context", "人工方向与模式前提", "unknown", "须明确方向、模式及人工核对说明；未填写不等于不成立", severity="insufficient")
     periods = market.get("periods") if isinstance(market.get("periods"), dict) else {}
-    day, day_ok = _bars(periods.get("day"), as_of)
-    main_bars, main_ok = _bars(periods.get("m30"), as_of)
-    execution, execution_ok = _bars(periods.get("m3"), as_of)
+    scope = (market.get("symbol"), market.get("source"))
+    day, day_ok = _cached_bars(periods.get("day"), as_of, (*scope, "day"))
+    main_bars, main_ok = _cached_bars(periods.get("m30"), as_of, (*scope, "m30"))
+    execution, execution_ok = _cached_bars(periods.get("m3"), as_of, (*scope, "m3"))
     past_day = [bar for bar in day if after and bar["_time"] <= after]
     if day_ok and past_day:
         check("daily", "已完成日线证据", "pass", "存在计划参考确定前已完成日线；方向判断仍为人工前提", past_day[-1]["_time"])

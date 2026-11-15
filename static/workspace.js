@@ -11,7 +11,7 @@
   const pageZoomGuard=installPageZoomGuard(document);
   const marketHub=(()=>{try{if(window.parent!==window&&window.parent.location.origin===location.origin&&window.parent.WorkspaceMarketHub)return window.parent.WorkspaceMarketHub;}catch{/* Standalone view uses its own read-only data service. */}return new WorkspaceHistoryCache.Hub();})();
   const marketCache=marketHub.cache;
-  const previewHub=(()=>{try{if(window.parent!==window&&window.parent.location.origin===location.origin&&window.parent.WorkspacePreviewHub)return window.parent.WorkspacePreviewHub;}catch{/* Cross-origin frames use a separate bounded preview store. */}return new WorkspaceMarketPreview.Hub({isBusy:()=>marketHub.requests.size>0||document.hidden});})();
+  const previewHub=(()=>{try{if(window.parent!==window&&window.parent.location.origin===location.origin&&window.parent.WorkspacePreviewHub)return window.parent.WorkspacePreviewHub;}catch{/* Cross-origin frames use a separate bounded preview store. */}return new WorkspaceMarketPreview.Hub({references:marketHub.references,isBusy:()=>marketHub.requests.size>0||document.hidden});})();
   const marketPreview=previewHub.store,previewOwner=new URLSearchParams(location.search).get('pane')||'single';
   const documentCache=new Map(),readRequests=new Set();
   function mobileDevice(){return Boolean(navigator.userAgentData?.mobile||/Android|iPhone|iPad|iPod|Windows Phone|IEMobile|BlackBerry|BB10|Opera Mini|Mobi|Tablet|Kindle|Silk|webOS/i.test(navigator.userAgent||'')||navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1||navigator.maxTouchPoints>0&&window.matchMedia?.('(pointer: coarse)').matches||window.innerWidth<=900);}
@@ -84,12 +84,10 @@
     const market=await marketHub.refresh(symbol);if(market)marketPreview.put(market);return market;
   }
   async function refreshBackground(){
-    if(!state.session?.user||state.loading||state.saving||state.pulling||hasPending()||state.backgroundRefreshing||navigator.onLine===false)return;
-    const session=state.session,epoch=state.cacheEpoch;state.backgroundRefreshing=true;
-    const symbols=[...(state.visitedSymbols||[])].filter(symbol=>symbol!==state.symbol),jobs=symbols.map(symbol=>async()=>{if(state.visitedSymbols?.has(symbol)&&symbol!==state.symbol)await refreshMarket(symbol);});
-    for(const item of documentCache.values())if(item.symbol!==state.symbol||item.board!==(state.board||''))jobs.push(async()=>{const response=await api('/plans/'+encodeURIComponent(item.symbol),'GET',undefined,item.board);if(epoch===state.cacheEpoch)cacheDocument(item.symbol,item.board,response.plan);});
-    let index=0;const worker=async()=>{while(index<jobs.length&&!state.loading&&state.session===session&&epoch===state.cacheEpoch){if(state.saving||state.pulling||hasPending())break;const job=jobs[index++];try{await job();}catch{/* Keep the last complete snapshot; never promote its freshness. */}}};
-    try{await worker();}finally{if(epoch===state.cacheEpoch)state.backgroundRefreshing=false;}
+    // Each visible pane polls its own market and plan. The shared preview hub
+    // warms the catalogue separately; revisiting always validates the plan and
+    // catches up history. Do not turn every previously visited symbol into a
+    // permanent live subscription (or renew its cached freshness).
   }
   const numFields=['plan_opacity','planned_entry_price','main_level','entry_low','entry_high','trigger_price','trigger_buffer_ticks','stop_price','obstacle_price'];
   const stringFields=['title','direction','mode','session_label','context_note','notes'];

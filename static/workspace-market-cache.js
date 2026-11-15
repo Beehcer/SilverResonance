@@ -154,5 +154,19 @@
       return{accepted:true,market:readOnly?next:clone(next),ready:entry.historyValid};
     }
   }
-  return{Store,PERIODS,LIMITS,coordinateError,copyCoordinates,sameCandleBasis,basisDowngrade,protectedBasis,referenceId};
+  class References{
+    constructor(){this.entries=new Map();}
+    get(symbol){return this.entries.get(symbol)||null;}
+    restore(market,known=null){
+      if(!market)return market;
+      const old=known||this.get(market.symbol);
+      if(market.anchor_reference===undefined&&referenceId(market)&&old?.anchor_reference_id===referenceId(market)&&sameCandleBasis(old,market))market={...market,anchor_reference:old.anchor_reference};
+      if(market.anchor_reference&&!coordinateError(market)){
+        this.entries.delete(market.symbol);this.entries.set(market.symbol,immutable({candle_basis:market.candle_basis,anchor_reference_id:market.anchor_reference_id,anchor_reference:market.anchor_reference}));
+        while(this.entries.size>32)this.entries.delete(this.entries.keys().next().value);
+      }
+      return market;
+    }
+  }
+  return{Store,References,PERIODS,LIMITS,coordinateError,copyCoordinates,sameCandleBasis,basisDowngrade,protectedBasis,referenceId};
 }));

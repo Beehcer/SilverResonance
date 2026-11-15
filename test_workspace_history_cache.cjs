@@ -18,6 +18,17 @@ function fixture(symbol='CZCE.MA701'){
   return{bundle:{schema:1,snapshot_id:sha('snapshot'),market,history,history_counts},values};
 }
 function memory(){const items=new Map();return{items,get:async key=>items.has(key)?clone(items.get(key)):undefined,put:async value=>items.set(value.sha256,clone(value)),prune:async()=>{}};}
+
+test('shared fixed references hydrate only the exact symbol basis and reference ID',()=>{
+ const R=require('./static/workspace-market-cache.js').References,refs=new R(),f=fixture(),market=f.bundle.market;
+ refs.restore(market);const omitted={...market};delete omitted.anchor_reference;
+ assert.deepEqual(refs.restore(omitted).anchor_reference,market.anchor_reference);
+ assert.equal(refs.restore({...omitted,anchor_reference_id:'different'}).anchor_reference,undefined);
+ assert.equal(refs.restore({...omitted,symbol:'OTHER'}).anchor_reference,undefined);
+ assert.equal(refs.restore({...omitted,candle_basis:{m30:'native_v1'}}).anchor_reference,undefined);
+ market.anchor_reference.m30.source_times[0]=0;
+ assert.notEqual(refs.restore(omitted).anchor_reference.m30.source_times[0],0);
+});
 function blocks(storage){return new H.Blocks({storage,crypto:webcrypto,indexedDB:null,now:()=>NOW});}
 async function settled(store){await Promise.all([...store.writes]);await tick();}
 const nextTask=()=>new Promise(resolve=>setTimeout(resolve,0));

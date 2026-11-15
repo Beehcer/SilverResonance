@@ -11,7 +11,7 @@
       for(const row of rows){const stamp=Date.parse(row?.dt),prices=['open','high','low','close'].map(k=>row?.[k]);if(!Number.isFinite(stamp)||stamp<=previous||prices.some(v=>!Number.isFinite(v)||v<=0)||row.low>Math.min(row.open,row.close)||row.high<Math.max(row.open,row.close))return null;previous=stamp;}
       periods[p]=rows.map(row=>({...row}));
     }
-    return{symbol:market.symbol,saved_at:now,market:{symbol:market.symbol,name:market.name,price:market.price,tick:market.tick,source:market.source,as_of:market.as_of,quote_at:market.quote_at,period_counts:{...(market.period_counts||{})},...Coordinates.copyCoordinates(market),periods,fresh:false,partial:true,client_cached:true,feed_status:'preview',history_token:null,incremental:false,preview_saved_at:now}};
+    return{symbol:market.symbol,saved_at:now,market:{symbol:market.symbol,name:market.name,price:market.price,tick:market.tick,source:market.source,as_of:market.as_of,quote_at:market.quote_at,period_counts:{...(market.period_counts||{})},...Coordinates.copyCoordinates(market),periods,fresh:false,partial:true,client_cached:true,feed_status:'preview',history_token:null,incremental:false,preview_revision:market.preview_revision,preview_saved_at:now}};
   }
   function valid(item,symbol,now){return item?.symbol===symbol&&item.market?.symbol===symbol&&Number.isFinite(item.saved_at)&&now-item.saved_at>=0&&now-item.saved_at<TTL&&item.saved_at>=cutoff(now)&&prepare(item.market,now);}
   function disk(indexedDB){
@@ -28,7 +28,7 @@
   }
   class Store{
     constructor({storage,now=()=>Date.now(),indexedDB=globalThis.indexedDB}={}){this.storage=storage||(indexedDB?disk(indexedDB):null);this.now=now;this.memory=new Map();this.writes=new Map();this.coordinateBases=new Map();}
-    remember(item){this.memory.delete(item.symbol);this.memory.set(item.symbol,item);const basis=Coordinates.protectedBasis(item.market);if(Object.keys(basis).length)this.coordinateBases.set(item.symbol,basis);while(this.memory.size>MAX_ITEMS)this.memory.delete(this.memory.keys().next().value);}
+    remember(item){this.references?.restore(item.market);this.memory.delete(item.symbol);this.memory.set(item.symbol,item);const basis=Coordinates.protectedBasis(item.market);if(Object.keys(basis).length)this.coordinateBases.set(item.symbol,basis);while(this.memory.size>MAX_ITEMS)this.memory.delete(this.memory.keys().next().value);}
     peek(symbol){const item=this.memory.get(symbol);if(!valid(item,symbol,this.now()))return null;const prepared=prepare(item.market,this.now());prepared.market.preview_saved_at=item.saved_at;return prepared.market;}
     async get(symbol){
       const restore=item=>{const prepared=prepare(item.market,this.now());prepared.market.preview_saved_at=item.saved_at;return prepared.market;};
@@ -60,7 +60,13 @@
       if(previous&&Coordinates.sameCandleBasis(previous.market,market)&&Coordinates.referenceId(previous.market)===Coordinates.referenceId(market)){
         if(PERIODS.some(period=>Date.parse(item.market.periods[period].at(-1).dt)<Date.parse(previous.market.periods[period].at(-1).dt)))return this.peek(item.symbol);
         // Re-fetching identical partial data must not make an old cache young.
-        if(JSON.stringify(previous.market.periods)===JSON.stringify(item.market.periods))return this.peek(item.symbol);
+        if(JSON.stringify(previous.market.periods)===JSON.stringify(item.market.periods)){
+          if(item.market.preview_revision&&item.market.preview_revision!==previous.market.preview_revision){
+            const retained={...item,saved_at:previous.saved_at,market:{...item.market,as_of:previous.market.as_of,quote_at:previous.market.quote_at,preview_saved_at:previous.saved_at}};
+            this.remember(retained);this.save(retained);
+          }
+          return this.peek(item.symbol);
+        }
       }
       this.remember(item);this.save(item);return this.peek(item.symbol);
     }
@@ -70,8 +76,8 @@
     }
   }
   class Hub{
-    constructor({store=new Store(),fetch=globalThis.fetch?.bind(globalThis),now=()=>Date.now(),isBusy=()=>false,setTimer=(callback,ms)=>globalThis.setTimeout(callback,ms),clearTimer=timer=>globalThis.clearTimeout(timer),refreshAfter=60000,random=Math.random}={}){
-      this.store=store;this.fetch=fetch;this.now=now;this.isBusy=isBusy;this.setTimer=setTimer;this.clearTimer=clearTimer;this.refreshAfter=refreshAfter;this.random=random;this.catalogue=[];this.requests=new Map();this.checked=new Map();this.retryAt=new Map();this.warmed=false;this.timer=null;this.background=null;this.active=new Map();this.stats={requests:0,background:0,aborted:0,restored:0};
+    constructor({store=new Store(),references=new Coordinates.References(),fetch=globalThis.fetch?.bind(globalThis),now=()=>Date.now(),isBusy=()=>false,setTimer=(callback,ms)=>globalThis.setTimeout(callback,ms),clearTimer=timer=>globalThis.clearTimeout(timer),refreshAfter=60000,random=Math.random}={}){
+      this.store=store;this.references=references;store.references=references;this.fetch=fetch;this.now=now;this.isBusy=isBusy;this.setTimer=setTimer;this.clearTimer=clearTimer;this.refreshAfter=refreshAfter;this.random=random;this.catalogue=[];this.requests=new Map();this.checked=new Map();this.retryAt=new Map();this.warmed=false;this.timer=null;this.background=null;this.active=new Map();this.stats={requests:0,background:0,aborted:0,restored:0};
     }
     focus(owner,symbol){
       this.active.set(owner,symbol);
@@ -97,11 +103,14 @@
         entry.timer=this.setTimer(()=>controller.abort(),background?2500:5000);
         try{
           this.stats.requests++;if(background)this.stats.background++;
-          const response=await this.fetch('/api/workspace/market?symbol='+encodeURIComponent(symbol)+'&preview=240',{credentials:'same-origin',cache:'no-store',headers:{'X-Workspace-Candle-Protocol':'2'},signal:controller.signal});
+          const cached=this.store.peek(symbol),reference=this.references.get(symbol);
+          const query='&preview=240'+(cached?.preview_revision?'&preview_revision='+encodeURIComponent(cached.preview_revision):'')+(reference?'&anchor_reference='+encodeURIComponent(reference.anchor_reference_id):'');
+          const response=await this.fetch('/api/workspace/market?symbol='+encodeURIComponent(symbol)+query,{credentials:'same-origin',cache:'no-store',headers:{'X-Workspace-Candle-Protocol':'2'},signal:controller.signal});
           if(!response.ok){if(response.status===401)this.stop();throw new Error('近期行情暂未响应');}const value=await response.json();
           if(controller.signal.aborted)throw new Error('Preview superseded');
+          if(value.status==='preview_unchanged'&&cached?.preview_revision&&value.symbol===symbol&&value.preview_revision===cached.preview_revision){this.checked.set(symbol,this.now());this.retryAt.delete(symbol);return cached;}
           if(value.market?.symbol!==symbol)throw new Error('Preview symbol mismatch');
-          const market=this.store.putPreview(value.market);if(!market)throw new Error('Preview unavailable');
+          const market=this.store.putPreview(this.references.restore(value.market,reference));if(!market)throw new Error('Preview unavailable');
           this.checked.set(symbol,this.now());this.retryAt.delete(symbol);return market;
         }catch(error){this.retryAt.set(symbol,this.now()+1500+this.random()*1500);throw error;}
         finally{this.clearTimer(entry.timer);}

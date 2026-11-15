@@ -1,5 +1,6 @@
 """Anonymous browser collaboration routes, isolated from legacy app state."""
 import functools
+import hashlib
 import hmac
 import json
 import math
@@ -43,6 +44,7 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
 
     @bp.before_request
     def protect_candle_transition():
+        g.workspace_started = time.perf_counter()
         # An already-open older tab cannot interpret the new coordinate basis.
         # Keep its last known picture; require reload before returning a changed
         # timeline or accepting edits. Never reinterpret old data in that tab.
@@ -58,6 +60,9 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
 
     @bp.after_request
     def protect_transition_during_request(response):
+        started = getattr(g, "workspace_started", None)
+        if started is not None:
+            response.headers["Server-Timing"] = "workspace;dur=%.2f" % ((time.perf_counter() - started) * 1000)
         # The feed may publish its very first transition while a legacy GET is
         # already running. Recheck immediately before returning any new data.
         symbol = getattr(g, "candle_symbol", None)
@@ -373,6 +378,16 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
         history = request.args.get("history", "")
         if request.args.get("preview") == "240" and market_preview_provider is not None:
             result = market_preview_provider(symbol)
+            # This revision describes the picture, not its permission/freshness.
+            # Rechecking an identical preview must never renew its original age.
+            content = {key: result.get(key) for key in (
+                "symbol", "source", "name", "tick", "price", "periods", "period_counts",
+                "candle_basis", "anchor_reference_id", "anchor_reference", "unavailable")}
+            revision = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":"),
+                                                ensure_ascii=False).encode()).hexdigest()
+            if request.args.get("preview_revision") == revision:
+                return jsonify(status="preview_unchanged", symbol=symbol, preview_revision=revision)
+            result = {**result, "preview_revision": revision}
         elif history and len(history) <= 128 and market_incremental_provider is not None:
             result = market_incremental_provider(symbol, history)
             if request.args.get("history_fallback") == "bootstrap" and result.get("incremental") is False:
@@ -382,7 +397,14 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
                 return jsonify(status="bootstrap_required")
         else:
             result = market_provider(symbol)
-        return jsonify(status="ok", market=result)
+        return jsonify(status="ok", market=omit_known_reference(result))
+
+    def omit_known_reference(result):
+        # Only omit the exact immutable reference the caller already possesses.
+        known = request.args.get("anchor_reference")
+        if known and known == result.get("anchor_reference_id"):
+            return {key: value for key, value in result.items() if key != "anchor_reference"}
+        return result
 
     @bp.get("/market/bootstrap")
     @authenticated
@@ -394,6 +416,8 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
             result = market_bootstrap_provider(symbol)
         except (OSError, ValueError):
             return fail("历史缓存暂不可用，请使用完整行情", 503)
+        if isinstance(result.get("market"), dict):
+            result = {**result, "market": omit_known_reference(result["market"])}
         response = jsonify(status="ok", bootstrap=result)
         response.headers["Cache-Control"] = "no-store"
         return response

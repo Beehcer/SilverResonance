@@ -6,6 +6,8 @@ The final two candles remain in the response, including the recently closed one.
 Publication hooks enqueue work; network I/O does not belong on this request path.
 """
 import calendar
+import copy
+from collections import OrderedDict
 import hashlib
 import json
 import math
@@ -65,6 +67,8 @@ class WorkspaceHistoryArchive:
         self.public_url_provider = public_url_provider
         self.lock = threading.RLock()
         self._verified = {}
+        self._prefixes = OrderedDict()
+        self._prefix_bytes = 0
         self.last_publication_error = None
 
     def _atomic_write(self, path, content):
@@ -138,14 +142,27 @@ class WorkspaceHistoryArchive:
                 rows = periods[period]
                 if not isinstance(rows, list) or market.get("period_counts", {}).get(period) != len(rows):
                     raise ValueError("历史行情数量不一致")
-                prior = None
-                for row in rows:
+                prefix, tails[period] = rows[:-2], rows[-2:]
+                cache_key = (symbol, source, period, basis.get(period, "native_v1"), anchor_id)
+                cached = self._prefixes.get(cache_key)
+                reused = cached is not None and cached[0] == prefix
+                prior = _stamp(prefix[-1]["dt"]) if reused and prefix else None
+                for row in tails[period] if reused else rows:
                     stamp = _stamp(row["dt"])
                     if prior is not None and stamp <= prior:
                         raise ValueError("历史行情时间不连续")
                     prior = stamp
-                prefix, tails[period] = rows[:-2], rows[-2:]
                 counts[period] = len(prefix)
+                if reused:
+                    self._prefixes.move_to_end(cache_key)
+                    history[period] = []
+                    for item, content, publication in cached[1]:
+                        # Still verify file identity: missing or damaged blocks
+                        # must be repaired even when their candles are unchanged.
+                        self._write_block(item["sha256"], content)
+                        history[period].append(dict(item))
+                        publications.append(dict(publication))
+                    continue
                 groups = {}
                 for row in prefix:
                     # Monthly minute blocks plus one small daily block keep cold
@@ -157,6 +174,7 @@ class WorkspaceHistoryArchive:
                     bucket = "all" if period == "day" else day.strftime("%Y-%m")
                     groups.setdefault(bucket, []).append(row)
                 history[period] = []
+                prepared = []
                 for group in groups.values():
                     value = {"schema": SCHEMA, "symbol": symbol, "period": period,
                              "candle_basis": basis.get(period, "native_v1"),
@@ -170,9 +188,20 @@ class WorkspaceHistoryArchive:
                             "url": "/api/workspace/market/history/" + digest + ".json",
                             "count": len(group), "first": group[0]["dt"], "last": group[-1]["dt"]}
                     history[period].append(item)
-                    publications.append({"sha256": digest, "path": str(path),
+                    publication = {"sha256": digest, "path": str(path),
                                          "relative_key": "history/v1/blocks/" + digest + ".json",
-                                         "last": item["last"]})
+                                         "last": item["last"]}
+                    publications.append(publication)
+                    prepared.append((dict(item), content, dict(publication)))
+                size = sum(len(item[1]) for item in prepared)
+                old = self._prefixes.pop(cache_key, None)
+                self._prefix_bytes -= old[2] if old else 0
+                if size <= 8 * 1024 * 1024:
+                    self._prefixes[cache_key] = (copy.deepcopy(prefix), prepared, size)
+                    self._prefix_bytes += size
+                while self._prefix_bytes > 8 * 1024 * 1024 or len(self._prefixes) > 64:
+                    _, retired = self._prefixes.popitem(last=False)
+                    self._prefix_bytes -= retired[2]
             # Exclude transport URLs and current read/connection/token metadata.
             # This identity is repeatable across process restarts for equal data.
             identity = {"schema": SCHEMA, "symbol": symbol, "source": source,

@@ -6,7 +6,7 @@
   const frames = new Map();
   // Public market data outlives individual panes; drafts and shared plans do not.
   window.WorkspaceMarketHub = new WorkspaceHistoryCache.Hub();
-  window.WorkspacePreviewHub = typeof WorkspaceMarketPreview === 'object' ? new WorkspaceMarketPreview.Hub({isBusy: () => window.WorkspaceMarketHub.requests.size > 0 || document.hidden}) : null;
+  window.WorkspacePreviewHub = typeof WorkspaceMarketPreview === 'object' ? new WorkspaceMarketPreview.Hub({references: window.WorkspaceMarketHub.references, isBusy: () => window.WorkspaceMarketHub.requests.size > 0 || document.hidden}) : null;
   let startupOpened = false;
   let symbols = [], ids = [], state, busy = false, drag = null, animation = 0, toastTimer;
   // A temporary view of this browser page, never part of the saved/shared plan.
@@ -361,6 +361,35 @@
       return typeof symbol === 'string' && symbol.trim().length > 0;
     }) ? catalogue : null;
   }
+  let bootstrapRenewal = null;
+  window.renewWorkspaceBootstrap = function () {
+    const seed = window.DualWorkspaceBootstrap, age = seed ? Date.now() - seed.createdAt : Infinity;
+    if (age >= 0 && age < 60000 && seed?.session?.user?.id) return Promise.resolve(seed);
+    if (bootstrapRenewal) return bootstrapRenewal;
+    bootstrapRenewal = (async () => {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8000);
+      const read = async path => {
+        const response = await fetch('/api/workspace' + path, {credentials: 'same-origin', cache: 'no-store', signal: controller.signal});
+        if (!response.ok) throw new Error('初始化连接暂不可用');
+        return response.json();
+      };
+      try {
+        const session = await read('/session?bootstrap=1');
+        if (!session?.user?.id || !session.csrf_token) throw new Error('初始化身份无效');
+        const catalogue = bootstrapCatalogue(session) || bootstrapCatalogue({bootstrap: await read('/symbols')});
+        if (!catalogue) throw new Error('品种列表无效');
+        // Never mix an existing shared workspace with a newly issued identity.
+        if (seed?.session?.user?.id && session.user.id !== seed.session.user.id) {
+          window.DualWorkspaceBootstrap = null;
+          throw new Error('浏览器身份已变化，请重新打开工作台');
+        }
+        return (window.DualWorkspaceBootstrap = {session, symbols: catalogue, createdAt: Date.now()});
+      } finally { clearTimeout(timer); }
+    })();
+    const pending = bootstrapRenewal;
+    void pending.finally(() => { if (bootstrapRenewal === pending) bootstrapRenewal = null; }).catch(() => {});
+    return pending;
+  };
   async function start() {
     try {
       window.workspaceShellStarted = true;
