@@ -235,6 +235,21 @@ class WorkspaceHistoryArchive:
                         pass
         return result
 
+    def metadata(self, symbol, *, source="live", expected_reference_id=None):
+        """Read durable manifest metadata, without loading blocks or renewing age.
+
+        This is inventory, not proof that block contents or current quotes are
+        valid. Restoration still checks each block before using its prices.
+        """
+        try:
+            persisted = self._saved(symbol, source, expected_reference_id)
+            saved = persisted["bootstrap"]
+            return {"symbol": symbol, "saved_at": persisted["saved_at"],
+                    "snapshot_id": saved["snapshot_id"],
+                    "period_counts": dict(saved["market"]["period_counts"])}
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
     def preview(self, symbol, *, source="live", expected_reference_id=None):
         """Read a persisted picture, never restore a cursor or live qualification."""
         try:

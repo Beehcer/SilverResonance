@@ -18,7 +18,7 @@ function helper(name){
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 function market(symbol,token='token-'+symbol,price=101){
   const periods=Object.fromEntries(Object.entries(C.INTERVAL).map(([period,step])=>[period,Array.from({length:4},(_,i)=>({dt:new Date(BASE+i*step).toISOString(),open:100,high:110,low:90,close:price,volume:0,oi:0}))]));
-  return{symbol,name:symbol,history_token:token,incremental:false,period_counts:{day:4,m30:4,m3:4},periods,price,fresh:true,connected:true,source:'live',feed_status:'live'};
+  return{symbol,name:symbol,history_token:token,incremental:false,period_counts:{day:4,m30:4,m3:4},periods,price,fresh:true,connected:true,source:'live',feed_status:'live',as_of:new Date().toISOString()};
 }
 function plan(symbol,board='',revision=1){return{symbol,board_id:board,revision,title:'Plan '+board,objects:[],notes:'',enabled:true,rule_version:'r1'};}
 function harness(){
@@ -38,7 +38,7 @@ function harness(){
     state,M,E,T,C,clone:copy,WorkspaceMarketPreview:MarketPreview,marketPreview:new MarketPreview.Store({indexedDB:null}),WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),readRequests:new Set(),
     $,charts,PREFIX:'test:',PERIODS:{day:'日线',m30:'30分钟',m3:'3分钟'},Date,Promise,Map,Set,URL,URLSearchParams,AbortController,
     navigator:{onLine:true},document:{hidden:false,activeElement:null},location:{href:'https://example.test/workspace',hostname:'example.test'},history:{replaceState(){}},
-    fetch:async(url,options)=>{const request={url,...options};calls.network.push(request);const data=await responder(request);return{ok:true,status:200,json:async()=>data};},
+    fetch:async(url,options)=>{const request={url,...options};calls.network.push(request);let data=await responder(request);if(url.includes('preview=240')&&data.market&&data.market.partial===undefined)data={...data,market:{...data.market,partial:true,fresh:false,history_token:null,as_of:new Date().toISOString(),feed_status:'preview'}};return{ok:true,status:200,json:async()=>data};},
     setTimeout:callback=>1,clearTimeout:()=>{},
     localStorage:{removeItem:key=>storage.delete(key)},
     storageSet:(key,value)=>{storage.set(key,copy(value));return true;},storageGet:(key,fallback=null)=>storage.has(key)?copy(storage.get(key)):fallback,
@@ -51,6 +51,7 @@ function harness(){
   const hub=new HistoryCache.Hub({fetch:context.fetch,blocks:new HistoryCache.Blocks({indexedDB:null})});
   hub.cache=context.marketCache;hub.full=async symbol=>(await hub.read('/api/workspace/market?symbol='+encodeURIComponent(symbol),{json:true})).market;
   context.marketHub=hub;context.marketRequests=hub.requests;
+  context.previewHub=new MarketPreview.Hub({store:context.marketPreview,fetch:context.fetch,setTimer:context.setTimeout,clearTimer:context.clearTimeout});context.previewOwner='test';
   const names=['sharedDocumentKey','cacheDocument','rememberCurrentDocument','restoreOpeningDraft','restoreDraft','batchCharts','preloadSavedMarket','paintOpeningPreview','loadOpeningMarket','applyActiveMarket','api','readConfiguration','refreshMarket','refreshBackground','documentKey','currentPlan','marketComplete','cancelObsoleteReads','renderLoadState','closeObjectContext','draftKey','persistDraft','drawingCharts','finishDrawings','emptyPending','hasPending','defaultPlan','shownPlan','clean','acceptPlan','receivePlan','setUnavailable','renderEvaluation','ensureSaved','switchSymbol','poll'];
   for(const name of names)vm.runInContext(helper(name),context);
   return{context,state,calls,elements,storage,charts,$,respond:fn=>{responder=fn;},seed:value=>context.marketCache.accept(value.symbol,value,context.marketCache.begin(value.symbol))};

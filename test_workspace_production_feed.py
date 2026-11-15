@@ -100,7 +100,8 @@ class ProductionFeedTests(unittest.TestCase):
             patch.object(app, "_state", {**copy.copy(app._state), "connected": True}),
             patch.object(app.time, "time", side_effect=lambda: self.now),
             patch.object(app.time, "monotonic", side_effect=lambda: self.monotonic),
-            patch.dict(app.app.config, {"WORKSPACE_PRODUCTION": True, "WORKSPACE_TRADING_MINUTES": False}),
+            patch.dict(app.app.config, {"WORKSPACE_PRODUCTION": True, "WORKSPACE_TRADING_MINUTES": False,
+                                      "WORKSPACE_PREWARM": False}),
         ):
             replacement.start()
             self.addCleanup(replacement.stop)

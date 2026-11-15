@@ -98,6 +98,46 @@ class DualWorkspaceWebTests(unittest.TestCase):
             for url in parser.urls:
                 self.assertRegex(url, r'^https://silver-resonance\.oss-cn-hangzhou\.aliyuncs\.com/workspace/[a-f0-9]{24}/')
 
+    def test_shell_preloads_only_the_exact_critical_pane_assets(self):
+        from html.parser import HTMLParser
+
+        class Resources(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.active = []
+                self.preloads = []
+                self.in_template = 0
+
+            def handle_starttag(self, tag, attributes):
+                attrs = dict(attributes)
+                if tag == "template":
+                    self.in_template += 1
+                if self.in_template:
+                    return
+                if tag == "link" and attrs.get("rel") == "preload":
+                    self.preloads.append(attrs)
+                elif tag == "script" and attrs.get("src"):
+                    self.active.append(attrs["src"])
+                elif tag == "link" and attrs.get("rel") == "stylesheet":
+                    self.active.append(attrs["href"])
+
+            def handle_endtag(self, tag):
+                if tag == "template":
+                    self.in_template -= 1
+
+        for local in (False, True):
+            with self.subTest(local=local), patch.dict(self.client.application.config, WORKSPACE_LOCAL_ASSETS=local):
+                shell, pane = Resources(), Resources()
+                shell.feed(self.client.get("/").text)
+                pane.feed(self.client.get("/workspace?pane=pane-a").text)
+                self.assertEqual(len(shell.preloads), 6)
+                high = [p for p in shell.preloads if p.get("fetchpriority") == "high"]
+                low = [p for p in shell.preloads if p.get("fetchpriority") == "low"]
+                self.assertEqual(len(high), 1)
+                self.assertIn(high[0]["href"], shell.active)
+                self.assertEqual({p["href"] for p in low}, set(pane.active))
+                self.assertFalse(any("cases" in p["href"] or "/api/" in p["href"] for p in shell.preloads))
+
     def test_oss_manifest_matches_current_public_payloads(self):
         import hashlib, json
         from scripts.publish_workspace_assets import payloads

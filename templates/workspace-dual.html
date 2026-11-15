@@ -4,7 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>共振 · 多周期计划工作台</title>
+  <link rel="preload" as="script" href="/static/workspace-shell-runtime.js" fetchpriority="high">
   <link rel="stylesheet" href="/static/workspace-dual-shell.css?v=20261114-feedback-1">
+  <!-- Start pane downloads while the anonymous session/catalogue is loading.
+       URLs are rewritten to the exact immutable assets used by the iframe. -->
+  <link rel="preload" as="style" href="/static/workspace.css?v=20261114-caret-1" fetchpriority="low">
+  <link rel="preload" as="style" href="/static/workspace-dual-embed.css?v=20261114-feedback-1" fetchpriority="low">
+  <link rel="preload" as="script" href="/static/workspace-core.js" fetchpriority="low">
+  <link rel="preload" as="script" href="/static/workspace-dual-chart.js?v=20261114-feedback-1" fetchpriority="low">
+  <link rel="preload" as="script" href="/static/workspace-dual-runtime.js?v=20261114-feedback-1" fetchpriority="low">
 </head>
 <body>
   <main id="stage" aria-label="完整双品种工作台"></main>

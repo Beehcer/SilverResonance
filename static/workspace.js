@@ -7,11 +7,12 @@
   const charts={};
   window.WorkspaceLoadMetrics=[];
   window.WorkspaceLoadMark=stage=>{const entries=window.WorkspaceLoadMetrics,symbol=state.symbol||null,generation=state.generation;if(entries.some(item=>item.stage===stage&&item.generation===generation&&item.symbol===symbol))return;const detail={stage,symbol,generation,at:performance.now()};entries.push(detail);if(entries.length>100)entries.shift();try{performance.mark('workspace:'+stage,{detail});}catch{/* Timing diagnostics never block the workspace. */}};
-  window.WorkspaceLoadPaint=market=>{if(!['day','m30','m3'].every(period=>market?.periods?.[period]?.length))return;const generation=state.generation,symbol=state.symbol;requestAnimationFrame(()=>requestAnimationFrame(()=>{if(generation===state.generation&&symbol===state.symbol)window.WorkspaceLoadMark('first_plot');}));};
+  window.WorkspaceLoadPaint=market=>{if(!['day','m30','m3'].every(period=>market?.periods?.[period]?.length))return;const generation=state.generation,symbol=state.symbol;requestAnimationFrame(()=>requestAnimationFrame(()=>{if(generation===state.generation&&symbol===state.symbol){window.WorkspaceLoadMark('first_plot');previewHub.warm();}}));};
   const pageZoomGuard=installPageZoomGuard(document);
   const marketHub=(()=>{try{if(window.parent!==window&&window.parent.location.origin===location.origin&&window.parent.WorkspaceMarketHub)return window.parent.WorkspaceMarketHub;}catch{/* Standalone view uses its own read-only data service. */}return new WorkspaceHistoryCache.Hub();})();
   const marketCache=marketHub.cache;
-  const marketPreview=new WorkspaceMarketPreview.Store();
+  const previewHub=(()=>{try{if(window.parent!==window&&window.parent.location.origin===location.origin&&window.parent.WorkspacePreviewHub)return window.parent.WorkspacePreviewHub;}catch{/* Cross-origin frames use a separate bounded preview store. */}return new WorkspaceMarketPreview.Hub({isBusy:()=>marketHub.requests.size>0||document.hidden});})();
+  const marketPreview=previewHub.store,previewOwner=new URLSearchParams(location.search).get('pane')||'single';
   const documentCache=new Map(),readRequests=new Set();
   function mobileDevice(){return Boolean(navigator.userAgentData?.mobile||/Android|iPhone|iPad|iPod|Windows Phone|IEMobile|BlackBerry|BB10|Opera Mini|Mobi|Tablet|Kindle|Silk|webOS/i.test(navigator.userAgent||'')||navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1||navigator.maxTouchPoints>0&&window.matchMedia?.('(pointer: coarse)').matches||window.innerWidth<=900);}
   function installPageZoomGuard(doc){
@@ -65,7 +66,7 @@
     // should delay a warm server snapshot or an already established feed.
     let full=refreshMarket(symbol);
     void marketPreview.get(symbol).then(market=>{if(market)paintOpeningPreview(market,generation,true);});
-    void api('/market?symbol='+encodeURIComponent(symbol)+'&preview=240','GET',undefined,'').then(response=>paintOpeningPreview(response.market,generation)).catch(()=>{});
+    void previewHub.refresh(symbol).then(market=>{if(market)paintOpeningPreview(market,generation);}).catch(()=>{});
     const deadline=Date.now()+10000;
     while(generation===state.generation){
       const market=await full;if(generation!==state.generation)return null;
@@ -104,9 +105,10 @@
   function renderLoadState(){
     const node=$('market-loading');if(!node)return;const configuring=Boolean(state.bootstrapping||state.bootstrapError),error=state.bootstrapError||state.marketLoadError||state.planLoadError;
     const preview=Boolean(['day','m30','m3'].every(p=>state.market?.periods?.[p]?.length)),history=marketComplete()&&!state.market?.unavailable,plan=Boolean(state.planVerified&&!state.planLoadError),completed=Number(preview)+Number(history)+Number(plan),waiting=configuring||Boolean(state.symbol&&(!history||!plan));
+    node.dataset.preview=String(preview);
     node.hidden=!waiting&&!error;node.dataset.error=String(Boolean(error));if(node.hidden){globalThis.WorkspaceLoadMark?.(state.market?.persisted_cached?'history_restored':'verified');return;}
     const name=state.market?.name||state.symbol||'工作台',seconds=Math.max(0,Math.floor((Date.now()-(state.loadingSince??Date.now()))/1000));
-    const stage=configuring?(state.configurationRetry?'配置读取较慢，正在重试':'正在读取规则与风控'):!history?(preview?'正在下载完整历史':'正在读取历史K线'):'正在核对共享计划';
+    const stage=configuring?(state.configurationRetry?'配置读取较慢，正在重试':'正在读取规则与风控'):!history?(preview?'后台补齐历史 · 暂不可编辑':'正在读取历史K线'):'正在核对共享计划';
     $('market-loading-title').textContent=`${name} · ${error?(state.bootstrapError?'启动暂未完成':state.planLoadError?'计划核对失败':'行情加载较慢'):stage}`;
     const details=configuring?(state.bootstrapError?'配置读取失败，点击刷新重试；已有图层和草稿会保留。':'图表与配置正在并行加载，核对完成后开放操作。'):`近期画面 ${preview?'✓':'等待'}　完整历史 ${history?'✓':'等待'}　共享计划 ${plan?'✓':'等待'}`;
     $('market-loading-detail').textContent=details+`\n已完成 ${completed}/3 阶段 · 已等待 ${seconds} 秒`+(error&&!state.bootstrapError?' · 正在自动重试':'');
@@ -328,7 +330,7 @@
     const configuration=Promise.all([readConfiguration('/rules'),readConfiguration('/risk')]).then(values=>({values}),error=>({error}));
     try{
       const result=await api('/symbols');if(bootEpoch!==state.cacheEpoch)return;globalThis.WorkspaceLoadMark?.('catalogue');
-      state.symbols=result.symbols||[];$('symbol').replaceChildren();
+      state.symbols=result.symbols||[];previewHub.prime(state.symbols);$('symbol').replaceChildren();
       for(const item of state.symbols){const value=typeof item==='string'?item:item.symbol,option=el('option',typeof item==='string'?item:`${item.name||item.symbol} · ${item.symbol}`);option.value=value;$('symbol').append(option);}
       if(!state.symbols.length)throw new Error('暂无可用合约，请检查行情配置。');
       state.layout=storageGet('layout','main');setLayout(state.layout);
@@ -350,7 +352,7 @@
     if(!await ensureSaved()){if(intent===state.switchIntent)$('symbol').value=state.symbol;return;}if(intent!==state.switchIntent)return;
     if(!options.skipSaveViews)saveViews();state.spaceTool=null;closeObjectContext();cancelObsoleteReads();clearTimeout(state.reviewTimer);sendPresence({cursor:null,preview_object:null,object_id:null},true);presenceSender.reset();persistDraft();rememberCurrentDocument();
     state.board=board===null?(storageGet('board:'+state.session.user.id+':'+symbol,'')||''):board;state.planFormDirty=false;state.recordBefore=null;state.symbol=symbol;state.loadingSince=Date.now();state.marketLoadError=null;state.planLoadError=null;state.remoteRevision=0;setPlanLoading(true);$('symbol').value=symbol;storageSet('symbol:'+state.session.user.id,symbol);storageSet('last-market-symbol',symbol);
-    marketCache.pin(symbol);const cachedMarket=marketCache.view(symbol)||(state.market?.symbol===symbol&&state.market.partial?state.market:null),cachedDocument=documentCache.get(sharedDocumentKey(symbol,state.board));state.planLoadFailed=false;state.planVerified=false;state.planReady=Boolean(cachedDocument);
+    previewHub.focus(previewOwner,symbol);marketCache.pin(symbol);const cachedMarket=marketCache.view(symbol)||marketPreview.peek(symbol)||(state.market?.symbol===symbol&&state.market.partial?state.market:null),cachedDocument=documentCache.get(sharedDocumentKey(symbol,state.board));state.planLoadFailed=false;state.planVerified=false;state.planReady=Boolean(cachedDocument);
     state.market=cachedMarket?{...cachedMarket,fresh:false,client_cached:true}:null;state.evaluation=null;state.lastSignal=null;state.lastSuccess=0;state.dirty=false;state.conflict=false;state.selected=null;state.polling=false;state.pulling=false;state.pending=emptyPending();state.outbox=null;state.queuedRemote=null;stopFollowing();state.localPresence=null;state.presence=[];state.previewDirty=false;state.objectDraft=false;state.nodeDraft=false;state.quickTool=null;state.quickSequence=false;state.levelPreview=null;state.ticketError='';state.levelDrag=null;state.viewRestored=false;
     state.eventSource?.close();state.plan=defaultPlan();state.saved=null;state.revision=0;const generation=++state.generation,targetBoard=state.board,epoch=state.cacheEpoch;state.visitedSymbols ||= new Set();state.visitedSymbols.delete(symbol);state.visitedSymbols.add(symbol);while(state.visitedSymbols.size>marketCache.limit)state.visitedSymbols.delete(state.visitedSymbols.values().next().value);
     notice('');$('plan-error').textContent='';setSaveDisabled(true);$('draft-recovery').hidden=true;
@@ -669,7 +671,7 @@
   window.addEventListener('blur',()=>{if(!state.viewOnly&&state.spaceTool){for(const[p,saved]of Object.entries(state.spaceTool)){Object.assign(charts[p],saved);charts[p].render();}state.spaceTool=null;}});
   window.addEventListener('beforeunload',event=>{finishDrawings();saveViews();if(state.planFormDirty)savePlanForm();if(state.dirty||state.outbox){persistDraft();event.preventDefault();event.returnValue='';}});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){poll();refreshBackground();sendPresence({cursor:null,preview_object:null},true);}else sendPresence({cursor:null,preview_object:null,object_id:null},true);});
-  window.addEventListener('pagehide',()=>sendPresence({cursor:null,preview_object:null,object_id:null},true));
+  window.addEventListener('pagehide',()=>{previewHub.release(previewOwner);sendPresence({cursor:null,preview_object:null,object_id:null},true);});
   setInterval(()=>{poll();refreshBackground();if(state.symbol&&!state.loading&&!document.hidden&&(state.boardsRefreshNeeded||!state.boardsCheckedAt||Date.now()-state.boardsCheckedAt>30000)){state.boardsRefreshNeeded=false;state.boardsCheckedAt=Date.now();loadBoards();}if(state.planLoadFailed&&!state.saving)switchSymbol(state.symbol,state.board||'');if(state.retryAt&&Date.now()>=state.retryAt){state.retryAt=0;flush();}},5000);
   setInterval(()=>{renderLoadState();if(state.lastSuccess&&Date.now()-state.lastSuccess>15000&&state.session?.user)setUnavailable('超过 15 秒未得到完整检查结果，之前的许可已撤销。');},1000);
   setInterval(()=>{if(state.session?.user&&!document.hidden){sendPresence({},true);}},3000);

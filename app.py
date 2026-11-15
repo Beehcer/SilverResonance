@@ -49,6 +49,9 @@ _workspace_quote_lock = threading.Lock()
 _workspace_live_quotes = {}
 _workspace_history = WorkspaceHistoryArchive(os.path.join(user_settings.app_dir(), "state", "market-history"))
 _workspace_history_publisher = None
+_workspace_warmup = None
+_workspace_archive_warmer = None
+_workspace_reader = None
 
 
 def _resource_dir():
@@ -1422,10 +1425,10 @@ class _KlineSubscriptions:
         self.api = api
         self.serials = {}
 
-    def get(self, sym, period):
+    def get(self, sym, period, data_length=None):
         key = (sym, period)
         if key not in self.serials:
-            self.serials[key] = self.api.get_kline_serial(sym, period, data_length_for_period(period))
+            self.serials[key] = self.api.get_kline_serial(sym, period, data_length or data_length_for_period(period))
         return self.serials[key]
 
     def market_changed(self):
@@ -1458,7 +1461,7 @@ class _WorkspaceSerialReader:
     """Accumulate SDK changes; materialize only changed tails when history agrees."""
     fields = ("datetime", "open", "high", "low", "close", "volume", "open_oi", "close_oi")
 
-    def __init__(self, api, cache, *, quotes=None, trading_minutes=False):
+    def __init__(self, api, cache, *, quotes=None, trading_minutes=False, warmup=None, on_ready=None):
         import numpy as np
         self.np, self.api, self.cache = np, api, cache
         self.subscriptions = _KlineSubscriptions(api)
@@ -1470,6 +1473,28 @@ class _WorkspaceSerialReader:
         self.periods = (86400, 1800, 180, 900) if trading_minutes else (86400, 1800, 180)
         self.aggregators = {}
         self.cycle_filters = {}
+        self.warmup = warmup
+        self.serial_errors = {}
+        self.references_checked = set()
+        self.background_cursor = 0
+        self.on_ready = on_ready
+        self.resource_stats = {}
+
+    def required_periods(self, symbol):
+        if self.warmup and self.trading_minutes:
+            if symbol not in self.references_checked:
+                self.cache.restore_reference(symbol)
+                self.references_checked.add(symbol)
+            with self.cache.lock:
+                if symbol in self.cache.references:
+                    return (86400, 180, 900)
+        return self.periods
+
+    def subscription_length(self, symbol, period):
+        if self.warmup and period == 900:
+            from workspace_warmup import source_history_length
+            return source_history_length(getattr(self.quotes.get(symbol), "trading_time", None), self.cache.clock())
+        return data_length_for_period(period)
 
     def schedule_requested(self):
         """Create serials inside the same SDK event loop, without blocking it.
@@ -1488,11 +1513,16 @@ class _WorkspaceSerialReader:
             # A cancelled task may retry only subscriptions still missing.
             if not completed.cancelled():
                 completed.result()
-        if not any((symbol, period) not in self.subscriptions.serials
-                   for symbol in self.cache.requested() for period in self.periods):
+        missing = lambda symbol: any((symbol, period) not in self.subscriptions.serials for period in self.required_periods(symbol))
+        targets = (self.warmup.select(self.cache.prioritized_requests(), missing)
+                   if self.warmup else self.cache.requested())
+        if not any(missing(symbol) for symbol in targets):
             return
         async def subscribe():
-            self.subscribe_requested()
+            if self.warmup:
+                self.subscribe_requested(targets)
+            else:
+                self.subscribe_requested()
         coroutine = subscribe()
         try:
             self.subscription_task = self.api.create_task(coroutine)
@@ -1500,18 +1530,28 @@ class _WorkspaceSerialReader:
             coroutine.close()
             raise
 
-    def subscribe_requested(self):
-        for symbol in self.cache.requested():
+    def subscribe_requested(self, targets=None):
+        for symbol in self.cache.requested() if targets is None else targets:
             if self.trading_minutes:
                 self.cache.enable_trading_minutes(symbol)
-            for period in self.periods:
+            if self.warmup and symbol not in self.quotes:
+                try:
+                    # Also handles a contract added to the catalogue after
+                    # startup, inside the same running SDK event loop.
+                    self.quotes[symbol] = self.api.get_quote(symbol)
+                except Exception as error:
+                    self.warmup.subscription_failed(symbol, error)
+                    continue
+            for period in self.required_periods(symbol):
                 key = (symbol, period)
                 if key in self.subscriptions.serials:
                     continue
                 try:
-                    self.subscriptions.get(symbol, period)
-                except Exception:
+                    self.subscriptions.get(symbol, period, self.subscription_length(symbol, period))
+                except Exception as error:
                     self.cache.mark_failed(symbol, period)
+                    if self.warmup:
+                        self.warmup.subscription_failed(symbol, error)
                 finally:
                     # get_kline_serial may pump updates internally. Conservatively
                     # recheck existing frames rather than lose those changes.
@@ -1570,15 +1610,41 @@ class _WorkspaceSerialReader:
         if not connected:
             return
         np = self.np
-        for key, serial in self.subscriptions.serials.items():
+        priorities = self.cache.prioritized_requests() if self.warmup else []
+        rank = {symbol: index for index, symbol in enumerate(priorities)}
+        allowed = set(self.warmup.symbols()) if self.warmup else None
+        background_symbols = list(dict.fromkeys(key[0] for key in self.subscriptions.serials
+                                                if key[0] not in rank and (allowed is None or key[0] in allowed)))
+        if background_symbols:
+            cursor = self.background_cursor % len(background_symbols)
+            background_symbols = background_symbols[cursor:] + background_symbols[:cursor]
+            self.background_cursor = (cursor + 1) % len(background_symbols)
+        background_rank = {symbol: len(rank) + index for index, symbol in enumerate(background_symbols)}
+        items = sorted(self.subscriptions.serials.items(), key=lambda item: rank.get(item[0][0], background_rank.get(item[0][0], len(rank))))
+        # Materialize at most one previously unseen background history per
+        # pump. Ready symbols' tails still update each cycle, foreground first.
+        background_cold = None
+        for key, serial in items:
+            if allowed is not None and key[0] not in allowed:
+                continue
+            if self.warmup and key[1] not in self.required_periods(key[0]):
+                self.matrices.pop(key, None)
+                self.serial_errors.pop(key, None)
+                self.cache.release_native_reference_rows(key[0])
+                continue
             try:
                 # A non-blocking subscription may have partial rows before the
                 # SDK completes initialization. Never qualify that as fresh.
                 if not self.api.is_serial_ready(serial):
                     raise ValueError("当前周期历史行情尚未就绪")
+                if self.warmup and key not in self.matrices and key[0] not in rank:
+                    if background_cold is not None and background_cold != key[0]:
+                        continue
+                    background_cold = key[0]
                 if key not in self.dirty and key in self.matrices and self.cache.mark_checked(*key):
                     if key[1] == 900:
                         self._publish_trading(key[0])
+                    self.serial_errors.pop(key, None)
                     continue
                 columns = {field: np.asarray(serial[field]) for field in self.fields if field in serial}
                 count = len(columns["close"])
@@ -1618,11 +1684,23 @@ class _WorkspaceSerialReader:
                 if key[1] == 900:
                     self._publish_trading(key[0], tail, appended, full)
                 self.matrices[key] = matrix
+                self.serial_errors.pop(key, None)
                 self.dirty.discard(key)
-            except Exception:
+            except Exception as error:
                 # Neither a failed conversion nor disconnect can renew evidence.
                 self.cache.mark_failed(*key)
+                self.serial_errors[key] = type(error).__name__
                 self.dirty.add(key)
+        if self.warmup:
+            for symbol in {key[0] for key in self.subscriptions.serials if key[0] in allowed}:
+                errors = [error for key, error in self.serial_errors.items() if key[0] == symbol]
+                ready = self.warmup.observe(symbol, self.cache.coverage_status(symbol),
+                                           error=("历史核对中: " + errors[0]) if errors else None)
+                if ready and self.on_ready:
+                    self.on_ready(symbol)
+            self.resource_stats = {"serials": len(self.subscriptions.serials),
+                                   "matrix_bytes": sum(value.nbytes for value in self.matrices.values()),
+                                   "retained_sdk_rows": sum(len(serial["close"]) for serial in self.subscriptions.serials.values())}
 
 
 def _cache_workspace_quotes(quotes):
@@ -1648,17 +1726,23 @@ def _workspace_tqsdk_session(api, notifications):
     Pump provider notifications on every update; retain visited symbols and
     update their changed tails at most once a second.
     """
+    global _workspace_warmup, _workspace_reader
+    from workspace_warmup import CatalogueWarmup
     codes = [preset["symbol"] for preset in symbols.PRESETS]
     quotes = dict(zip(codes, api.get_quote_list(codes)))
-    reader = _WorkspaceSerialReader(api, _workspace_market, quotes=quotes,
+    _workspace_warmup = (CatalogueWarmup(lambda: [preset["symbol"] for preset in symbols.PRESETS], clock=time.time)
+                         if app.config.get("WORKSPACE_PREWARM", True) else None)
+    reader = _WorkspaceSerialReader(api, _workspace_market, quotes=quotes, warmup=_workspace_warmup,
+                                   on_ready=lambda symbol: _workspace_archive_warmer.notify_ready(symbol) if _workspace_archive_warmer else None,
                                    trading_minutes=app.config.get("WORKSPACE_TRADING_MINUTES", True))
+    _workspace_reader = reader
     _cache_workspace_quotes(quotes)
     _set_state(connected=True, connection_status="unknown", error=None)
-    _set_boot("ready", 100, "真实报价已连接，图表按查看品种加载")
+    _set_boot("ready", 100, "真实报价已连接，全部品种正在自动预热")
     next_charts = 0.0
     while True:
-        # get() reuses each (contract, period); adding a viewer never opens a
-        # second SDK session or subscribes large histories for all other codes.
+        # The same SDK session warms the catalogue in bounded background turns;
+        # newly viewed contracts take priority without delaying the quote pump.
         reader.schedule_requested()
         try:
             received = api.wait_update(deadline=time.time() + 1)
@@ -1886,7 +1970,7 @@ def apply_user_settings():
 
 def start_data_thread():
     """启动行情线程 + 基本面后台线程（各只启动一次）。"""
-    global _data_thread, _workspace_history_publisher
+    global _data_thread, _workspace_history_publisher, _workspace_archive_warmer
     with _thread_lock:
         if _data_thread and _data_thread.is_alive():
             return
@@ -1896,9 +1980,14 @@ def start_data_thread():
         if not config.MOCK_MODE and _workspace_history_publisher is None:
             from workspace_history_oss import configure_history_publication
             _workspace_history_publisher = configure_history_publication(
-                _workspace_history, os.path.join(user_settings.app_dir(), "history-oss.json"),
-                snapshot_provider=lambda: (_workspace_market_provider(symbol)
-                                           for symbol in _workspace_market.requested()))
+                _workspace_history, os.path.join(user_settings.app_dir(), "history-oss.json"))
+        if not config.MOCK_MODE and app.config.get("WORKSPACE_PRODUCTION") and _workspace_archive_warmer is None:
+            from workspace_warmup import ArchiveWarmer
+            _workspace_archive_warmer = ArchiveWarmer(
+                lambda: [preset["symbol"] for preset in symbols.PRESETS],
+                lambda symbol: _workspace_market_provider(symbol, request_data=False),
+                _workspace_history, priorities=_workspace_market.prioritized_requests)
+            _workspace_archive_warmer.start()
     fundamentals.start()
 
 
@@ -2297,13 +2386,15 @@ def _workspace_symbols_provider():
             for preset in symbols.PRESETS]
 
 
-def _workspace_market_provider(symbol, history_token=None, preview=False):
+def _workspace_market_provider(symbol, history_token=None, preview=False, request_data=True):
     preset = symbols.find(symbol)
     if not preset:
         raise ValueError("未知实际合约")
     state = get_state()
+    priority_read = request_data and not (preview and app.config.get("WORKSPACE_PRODUCTION")
+                                          and app.config.get("WORKSPACE_PREWARM", True) and not config.MOCK_MODE)
     market = _workspace_market.snapshot(symbol, preset, state, simulated=config.MOCK_MODE,
-                                        history_token=history_token, preview=preview)
+                                        history_token=history_token, preview=preview, request_data=priority_read)
     market["setup_required"] = state.get("boot_phase") == "need_config"
     if market["setup_required"]:
         market["message"] = "主机尚未配置行情来源 · 主机可打开 /setup 完成配置，协作成员无需行情账号"
@@ -2327,6 +2418,20 @@ def _workspace_market_bootstrap_provider(symbol):
             restored["market"]["setup_required"] = market.get("setup_required", False)
             return restored
     return _workspace_history.bootstrap(market)
+
+
+def _workspace_cache_status_provider():
+    warmup = _workspace_warmup.status() if _workspace_warmup else {"symbols": [], "ready": 0, "total": len(symbols.PRESETS)}
+    archive = _workspace_archive_warmer.status() if _workspace_archive_warmer else {"running": False, "symbols": []}
+    resources = dict(_workspace_reader.resource_stats) if _workspace_reader else {}
+    try:
+        with open("/proc/self/statm", encoding="ascii") as stream:
+            resources["rss_bytes"] = int(stream.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+        resources["memory_warning"] = resources["rss_bytes"] > 1280 * 1024 * 1024
+    except (OSError, ValueError, IndexError, AttributeError):
+        pass
+    return {"checked_at": time.time(), "retention_months": 6, "warmup": warmup, "archive": archive,
+            "resources": resources}
 
 
 def _workspace_quotes_provider():
@@ -2362,7 +2467,8 @@ workspace_api.register_workspace(app, _workspace_store, _workspace_market_provid
                                  market_incremental_provider=_workspace_market_provider,
                                  market_preview_provider=lambda symbol: _workspace_market_provider(symbol, preview=True),
                                  market_bootstrap_provider=_workspace_market_bootstrap_provider,
-                                 market_history_provider=_workspace_history.read_block)
+                                 market_history_provider=_workspace_history.read_block,
+                                 cache_status_provider=_workspace_cache_status_provider)
 
 
 def _open_browser_later():

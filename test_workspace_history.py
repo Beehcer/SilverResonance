@@ -69,6 +69,27 @@ class HistoryArchiveTests(unittest.TestCase):
         merged = self.reconstruct(result)["periods"]["m3"][:-2] + delta["periods"]["m3"]
         self.assertEqual(merged, self.full()["periods"]["m3"])
 
+    def test_inventory_reads_no_price_blocks_and_preserves_actual_save_time(self):
+        original = self.archive.bootstrap(self.full())
+        saved_at = self.now
+        self.now += 30
+        self.archive.bootstrap(self.full())
+        with patch.object(self.archive, "read_block", side_effect=AssertionError("inventory loaded prices")):
+            metadata = self.archive.metadata(self.symbol)
+        self.assertEqual(metadata, {"symbol": self.symbol, "saved_at": saved_at,
+                                   "snapshot_id": original["snapshot_id"],
+                                   "period_counts": original["market"]["period_counts"]})
+        metadata["period_counts"]["m3"] = 0
+        self.assertGreater(self.archive.metadata(self.symbol)["period_counts"]["m3"], 0)
+
+    def test_inventory_missing_mismatched_and_corrupt_manifests_are_misses(self):
+        self.assertIsNone(self.archive.metadata(self.symbol))
+        self.archive.bootstrap(self.full())
+        self.assertIsNone(self.archive.metadata(self.symbol, source="mock"))
+        self.assertIsNone(self.archive.metadata(self.symbol, expected_reference_id="wrong"))
+        self.archive._manifest_path(self.symbol, "live").write_text("{}", encoding="utf-8")
+        self.assertIsNone(self.archive.metadata(self.symbol))
+
     def test_content_identity_survives_process_restart_and_read_clocks(self):
         before = self.archive.bootstrap(self.full())
         self.cache = WorkspaceMarketCache(clock=lambda: self.now)

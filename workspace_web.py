@@ -19,7 +19,7 @@ CORE_SCRIPTS = (
     'workspace-history-cache.js', 'workspace-symbols.js', 'workspace-shortcuts.js',
 )
 SHELL_SCRIPTS = ('workspace-dual-model.js', 'workspace-market-cache.js',
-                 'workspace-history-cache.js', 'workspace-dual-shell.js')
+                 'workspace-market-preview.js', 'workspace-history-cache.js', 'workspace-dual-shell.js')
 
 
 def compiled_workspace_assets(directory):

@@ -17,7 +17,7 @@ test('reconnecting clears old readiness before an early disk preview while boots
   const preview={symbol,partial:true,client_cached:true,fresh:false,periods:{day:[],m30:[],m3:[]}};
   const context=vm.createContext({
     state,WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map([[symbol,pending]]),documentCache:new Map(),readRequests:new Set([oldRead]),
-    marketPreview:{get:async()=>preview},presenceSender:{reset:noop},URLSearchParams,Set,Map,Promise,
+    previewHub:{prime(){}},marketPreview:{get:async()=>preview},presenceSender:{reset:noop},URLSearchParams,Set,Map,Promise,
     location:{search:'?symbol='+symbol},
     $:id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);},
     persistDraft:()=>savedDrafts.push(structuredClone(state.plan)),emptyPending:M.empty,
@@ -42,7 +42,7 @@ function modeHarness(overrides={}){
   const nodes=new Map(),storage=new Map(),noop=()=>{},state={generation:5,viewOnly:false,bootstrapping:false,session:{user:{id:'test-user'}},symbol:'SHFE.rb2701',board:'',pending:M.empty(),layout:'main',loading:false,...overrides},calls={navigations:[],writes:[],readOnly:[]};
   const range={start:10,end:30,min:90,max:110},charts={m30:{period:'m30',view:range,autoPrice:true,followLatest:false,viewCustomized:true,render:noop,setReadOnly:value=>calls.readOnly.push(value)}};
   const node=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,value:'',options:[],classList:{toggle:noop},close:noop,replaceChildren(){this.options=[];},append(option){this.options.push(option);if(!this.value)this.value=option.value;}});return nodes.get(id);};
-  const context=vm.createContext({state,charts,M,E:{equal:(a,b)=>JSON.stringify(a)===JSON.stringify(b)},PREFIX:'test:',WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),readRequests:new Set(),presenceSender:{reset:noop},marketPreview:{get:async()=>null},location:{search:'?symbol=SHFE.rb2701'},URLSearchParams,Set,Map,Promise,clearTimeout,
+  const context=vm.createContext({state,charts,M,E:{equal:(a,b)=>JSON.stringify(a)===JSON.stringify(b)},PREFIX:'test:',WorkspaceMarketCache:MarketCache,marketCache:new MarketCache.Store(),marketRequests:new Map(),documentCache:new Map(),readRequests:new Set(),presenceSender:{reset:noop},previewHub:{prime(){}},marketPreview:{get:async()=>null},location:{search:'?symbol=SHFE.rb2701'},URLSearchParams,Set,Map,Promise,clearTimeout,
     pageZoomGuard:{setReadOnly:noop},openPanel:noop,renderLoadState:noop,width:1200,mobileDevice(){return context.width<=900;},clone:structuredClone,$:node,document:{documentElement:{classList:{toggle:noop}}},
     storageGet:(key,fallback=null)=>storage.has(key)?structuredClone(storage.get(key)):fallback,storageSet:(key,value)=>{calls.writes.push(key);storage.set(key,structuredClone(value));return true;},localStorage:{removeItem:key=>storage.delete(key.slice(5))},
     emptyPending:M.empty,hasPending:pending=>M.hasPending(pending??state.pending),persistDraft:noop,readPlan:()=>state.plan,computePending:()=>M.diff(state.saved||{},state.plan||{}),

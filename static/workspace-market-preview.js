@@ -29,6 +29,7 @@
   class Store{
     constructor({storage,now=()=>Date.now(),indexedDB=globalThis.indexedDB}={}){this.storage=storage||(indexedDB?disk(indexedDB):null);this.now=now;this.memory=new Map();this.writes=new Map();this.coordinateBases=new Map();}
     remember(item){this.memory.delete(item.symbol);this.memory.set(item.symbol,item);const basis=Coordinates.protectedBasis(item.market);if(Object.keys(basis).length)this.coordinateBases.set(item.symbol,basis);while(this.memory.size>MAX_ITEMS)this.memory.delete(this.memory.keys().next().value);}
+    peek(symbol){const item=this.memory.get(symbol);if(!valid(item,symbol,this.now()))return null;const prepared=prepare(item.market,this.now());prepared.market.preview_saved_at=item.saved_at;return prepared.market;}
     async get(symbol){
       const restore=item=>{const prepared=prepare(item.market,this.now());prepared.market.preview_saved_at=item.saved_at;return prepared.market;};
       const cached=this.memory.get(symbol);if(valid(cached,symbol,this.now()))return restore(cached);
@@ -44,9 +45,82 @@
       const sameCoordinates=previous&&Coordinates.sameCandleBasis(previous.market,market)&&Coordinates.referenceId(previous.market)===Coordinates.referenceId(market);
       if(sameCoordinates&&now-previous.saved_at<30000)return;
       const item=prepare(market,now);if(!item)return;this.remember(item);
+      this.save(item);
+    }
+    putPreview(market){
+      // Only the HTTP preview reader calls this. Stored/prepared previews are
+      // never promoted to a checked market or used as a delta-history cursor.
+      if(!market||market.partial!==true||market.incremental===true||!['live','mock'].includes(market.source)||market.unavailable||market.client_cached||Coordinates.basisDowngrade({candle_basis:this.coordinateBases.get(market.symbol)},market))return null;
+      const now=this.now(),saved=market.preview_saved_at??Date.parse(market.as_of);
+      if(!Number.isFinite(saved)||saved>now||saved<cutoff(now))return null;
+      const item=prepare(market,saved);if(!item)return null;
+      const previous=this.memory.get(item.symbol);
+      const priorAt=Date.parse(previous?.market.as_of),nextAt=Date.parse(market.as_of);
+      if(previous&&Number.isFinite(priorAt)&&Number.isFinite(nextAt)&&nextAt<priorAt)return this.peek(item.symbol);
+      if(previous&&Coordinates.sameCandleBasis(previous.market,market)&&Coordinates.referenceId(previous.market)===Coordinates.referenceId(market)){
+        if(PERIODS.some(period=>Date.parse(item.market.periods[period].at(-1).dt)<Date.parse(previous.market.periods[period].at(-1).dt)))return this.peek(item.symbol);
+        // Re-fetching identical partial data must not make an old cache young.
+        if(JSON.stringify(previous.market.periods)===JSON.stringify(item.market.periods))return this.peek(item.symbol);
+      }
+      this.remember(item);this.save(item);return this.peek(item.symbol);
+    }
+    save(item){
       if(!this.storage)return;
       const earlier=this.writes.get(item.symbol)||Promise.resolve(),write=earlier.catch(()=>{}).then(()=>this.storage.put(item)).catch(()=>{});this.writes.set(item.symbol,write);void write.finally(()=>{if(this.writes.get(item.symbol)===write)this.writes.delete(item.symbol);});
     }
   }
-  return{Store,prepare,TTL,MAX_BARS,MAX_ITEMS,cutoff};
+  class Hub{
+    constructor({store=new Store(),fetch=globalThis.fetch?.bind(globalThis),now=()=>Date.now(),isBusy=()=>false,setTimer=(callback,ms)=>globalThis.setTimeout(callback,ms),clearTimer=timer=>globalThis.clearTimeout(timer),refreshAfter=60000,random=Math.random}={}){
+      this.store=store;this.fetch=fetch;this.now=now;this.isBusy=isBusy;this.setTimer=setTimer;this.clearTimer=clearTimer;this.refreshAfter=refreshAfter;this.random=random;this.catalogue=[];this.requests=new Map();this.checked=new Map();this.retryAt=new Map();this.warmed=false;this.timer=null;this.background=null;this.active=new Map();this.stats={requests:0,background:0,aborted:0,restored:0};
+    }
+    focus(owner,symbol){
+      this.active.set(owner,symbol);
+      this.promote(this.requests.get(symbol));
+      // The one background preview yields its connection immediately when the
+      // user selects a contract. Never abort either pane's foreground request.
+      if(this.background&&this.background.symbol!==symbol){this.background.controller.abort();this.stats.aborted++;}
+    }
+    release(owner){this.active.delete(owner);if(!this.active.size)this.stop();}
+    promote(entry){if(!entry?.background)return;entry.background=false;if(this.background===entry)this.background=null;this.clearTimer(entry.timer);entry.timer=this.setTimer(()=>entry.controller.abort(),5000);}
+    prime(symbols){
+      const list=[...new Set((symbols||[]).map(item=>typeof item==='string'?item:item?.symbol).filter(item=>typeof item==='string'&&item))].slice(0,MAX_ITEMS);
+      if(JSON.stringify(list)===JSON.stringify(this.catalogue))return;
+      this.catalogue=list;
+      // Only local reads here; network warming starts after the focused plot.
+      let at=0;void Promise.all(Array.from({length:Math.min(2,list.length)},async()=>{while(at<list.length){const symbol=list[at++];if(await this.store.get(symbol))this.stats.restored++;}}));
+    }
+    refresh(symbol,{background=false}={}){
+      if(this.requests.has(symbol)){const entry=this.requests.get(symbol);if(!entry.controller.signal.aborted){if(!background)this.promote(entry);return entry.task;}this.requests.delete(symbol);}
+      const controller=new AbortController(),entry={symbol,controller,background,task:null,timer:null};
+      if(background)this.background=entry;
+      const task=(async()=>{
+        entry.timer=this.setTimer(()=>controller.abort(),background?2500:5000);
+        try{
+          this.stats.requests++;if(background)this.stats.background++;
+          const response=await this.fetch('/api/workspace/market?symbol='+encodeURIComponent(symbol)+'&preview=240',{credentials:'same-origin',cache:'no-store',headers:{'X-Workspace-Candle-Protocol':'2'},signal:controller.signal});
+          if(!response.ok){if(response.status===401)this.stop();throw new Error('近期行情暂未响应');}const value=await response.json();
+          if(controller.signal.aborted)throw new Error('Preview superseded');
+          if(value.market?.symbol!==symbol)throw new Error('Preview symbol mismatch');
+          const market=this.store.putPreview(value.market);if(!market)throw new Error('Preview unavailable');
+          this.checked.set(symbol,this.now());this.retryAt.delete(symbol);return market;
+        }catch(error){this.retryAt.set(symbol,this.now()+1500+this.random()*1500);throw error;}
+        finally{this.clearTimer(entry.timer);}
+      })();
+      entry.task=task;this.requests.set(symbol,entry);
+      void task.finally(()=>{if(this.requests.get(symbol)===entry)this.requests.delete(symbol);if(this.background===entry)this.background=null;this.schedule();}).catch(()=>{});
+      return task;
+    }
+    warm(){this.warmed=true;this.schedule();}
+    schedule(){if(!this.warmed||this.timer!==null)return;this.timer=this.setTimer(()=>{this.timer=null;void this.tick();},250);}
+    async tick(){
+      if(!this.warmed)return;
+      if(this.isBusy()||this.requests.size){this.schedule();return;}
+      const active=new Set(this.active.values()),now=this.now();
+      const symbol=this.catalogue.find(symbol=>!active.has(symbol)&&now>=(this.retryAt.get(symbol)||0)&&now-(this.checked.get(symbol)??-Infinity)>=this.refreshAfter);
+      if(!symbol){this.timer=this.setTimer(()=>{this.timer=null;void this.tick();},5000);return;}
+      try{await this.refresh(symbol,{background:true});}catch{/* A failed warm read never changes the active pane. */}
+    }
+    stop(){this.warmed=false;if(this.timer!==null)this.clearTimer(this.timer);this.timer=null;this.background?.controller.abort();}
+  }
+  return{Store,Hub,prepare,TTL,MAX_BARS,MAX_ITEMS,cutoff};
 }));

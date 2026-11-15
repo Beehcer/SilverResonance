@@ -146,6 +146,47 @@ class WorkspaceMarketCache:
             # Once viewed, keep its existing SDK subscriptions warm for this process.
             return list(self.requests)
 
+    def prioritized_requests(self, max_age=60):
+        """Most recently viewed contracts first; background reads do not promote."""
+        with self.lock:
+            allowed = self._allowed()
+            now = self.clock()
+            return [symbol for symbol, checked in sorted(self.requests.items(), key=lambda pair: pair[1], reverse=True)
+                    if (allowed is None or symbol in allowed) and 0 <= now - checked <= max_age]
+
+    def restore_reference(self, symbol):
+        """Load the immutable saved mapping before choosing SDK subscriptions."""
+        with self.lock:
+            if symbol in self.references:
+                return True
+        restored = self.reference_loader(symbol) if self.reference_loader else None
+        if restored is None:
+            return False
+        validate_candle_reference(restored)
+        with self.lock:
+            self.references.setdefault(symbol, restored)
+            self.reference_ids.setdefault(symbol, reference_id(restored))
+            self.trading_symbols.add(symbol)
+        return True
+
+    def release_native_reference_rows(self, symbol):
+        """Keep the fixed source_times mapping, release its redundant OHLC copy."""
+        with self.lock:
+            if symbol in self.references:
+                self.data.pop((symbol, 1800), None)
+
+    def coverage_status(self, symbol):
+        """Small observational metadata; never copies histories or marks fresh."""
+        with self.lock:
+            result = {}
+            for key, duration in PERIODS.items():
+                cache_key = (symbol, "trade_m30") if key == "m30" and symbol in self.trading_symbols else (symbol, duration)
+                entry = self.data.get(cache_key, {})
+                rows = entry.get("bars", [])
+                result[key] = {"count": len(rows), "last_bar": rows[-1]["dt"] if rows else None,
+                               "checked_at": entry.get("checked_at"), "error": entry.get("error")}
+            return result
+
     def _prepare_rows(self, period, bars, simulated=False):
         rows = []
         stamps = []
@@ -314,8 +355,9 @@ class WorkspaceMarketCache:
                     # Do not renew old evidence when a subscription fails.
                     self.mark_failed(symbol, period)
 
-    def snapshot(self, symbol, preset, state, simulated=False, history_token=None, preview=False):
-        self.request(symbol)
+    def snapshot(self, symbol, preset, state, simulated=False, history_token=None, preview=False, request_data=True):
+        if request_data:
+            self.request(symbol)
         if not simulated and self.reference_loader and symbol not in self.references:
             restored = self.reference_loader(symbol)
             if restored is not None:

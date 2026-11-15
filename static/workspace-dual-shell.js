@@ -6,6 +6,7 @@
   const frames = new Map();
   // Public market data outlives individual panes; drafts and shared plans do not.
   window.WorkspaceMarketHub = new WorkspaceHistoryCache.Hub();
+  window.WorkspacePreviewHub = typeof WorkspaceMarketPreview === 'object' ? new WorkspaceMarketPreview.Hub({isBusy: () => window.WorkspaceMarketHub.requests.size > 0 || document.hidden}) : null;
   let startupOpened = false;
   let symbols = [], ids = [], state, busy = false, drag = null, animation = 0, toastTimer;
   // A temporary view of this browser page, never part of the saved/shared plan.
@@ -93,7 +94,7 @@
   }
   function maximizeWorkspace(id) {
     if (busy || drag || !state || workspaceMaximized) return;
-    if (!frames.get(id)?.ready || !activeFrame()?.ready) { announce('工作区仍在加载，请稍后再全屏。'); return; }
+    if (!(frames.get(id)?.ready || frames.get(id)?.visualReady) || !(activeFrame()?.ready || activeFrame()?.visualReady)) { announce('工作区仍在加载，请稍后再全屏。'); return; }
     if (!bridge(activeFrame())?.canHideSidebar('right', {notify: true})) { announce('右侧有未完成的编辑，请先完成或取消，再进入全屏。'); return; }
     const ui = bridge(activeFrame()).snapshot().ui;
     normalDockUI = {dockOpen: ui.dockOpen, dockWidth: ui.dockWidth};
@@ -134,7 +135,7 @@
     // incorrectly restore this visitor's previously selected named plan.
     if (typeof pane.board === 'string') url.searchParams.set('board', pane.board);
     frame.src = url.pathname + url.search;
-    const record = {frame, symbol: pane.symbol, ready: false, showable: false};
+    const record = {frame, symbol: pane.symbol, ready: false, visualReady: false, showable: false};
     record.loaded = new Promise(resolve => { record.resolve = resolve; });
     record.visible = new Promise(resolve => { record.resolveVisible = resolve; });
     frame.addEventListener?.('load', () => {
@@ -144,7 +145,7 @@
     frames.set(pane.id, record); $('stage').append(frame); return record;
   }
   async function waitReady(record) {
-    if (record.ready) return true;
+    if (record.ready || record.visualReady) return true;
     let timer; try { return await Promise.race([record.loaded.then(() => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 20000); })]); } finally { clearTimeout(timer); }
   }
   async function waitVisible(record) {
@@ -264,6 +265,10 @@
         const current = bridge(record)?.snapshot();
         if (snapshot.symbol && current?.symbol && snapshot.symbol !== current.symbol) break;
         if (snapshot.showable) markShowable(record);
+        // A checked configuration plus three real preview series is enough to
+        // show a pane; its own editor still waits for full history/plan checks.
+        record.visualReady = Boolean(snapshot.visualReady);
+        if (record.visualReady) record.resolve();
         if (record.modalOpen !== snapshot.modalOpen) { record.modalOpen = snapshot.modalOpen; scheduleLayout(); }
         if (record.pageDialogOpen !== snapshot.pageDialogOpen) { record.pageDialogOpen = snapshot.pageDialogOpen; scheduleLayout(); }
         const membersPopup = JSON.stringify(snapshot.membersPopup || null);

@@ -192,6 +192,20 @@ test('a usable runtime reveals the initial workspace before full market readines
   assert.equal(frame.hidden, false);
 });
 
+test('three visible preview series may reveal a second pane while full readiness remains false', async () => {
+  const h = harness(), original = await connect(h);
+  h.runtime(original, {showable: true, ready: true}); h.message(original, 'ready'); await h.advance(50);
+  const shell = h.window.__shellTest;
+  const transition = shell.transition(Model.dropSymbol(shell.getState(), 'SP', 'pane-a', ['MA', 'SP']));
+  await h.flush(); const second = h.frames[1];
+  const preview = h.runtime(second, {showable: true, visualReady: true, ready: false, loading: true});
+  h.message(second); await h.advance(30); await transition;
+  assert.equal(shell.getState().panes.length, 2);
+  assert.equal(original.hidden, false); assert.equal(second.hidden, false);
+  assert.equal(preview.ready, false); assert.equal(preview.loading, true);
+  assert.equal(shell.frames.get('pane-b').ready, false, 'Visual preview is not verified full history');
+});
+
 test('showable alone cannot commit a staged second pane or remove the original pane', async () => {
   const h = harness(), original = await connect(h);
   h.runtime(original, {showable: true, ready: true}); h.message(original, 'ready'); await h.advance(50);

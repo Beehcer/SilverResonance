@@ -27,7 +27,8 @@ VIEW_ONLY_MESSAGE = "移动端仅供查看，请在桌面端编辑计划、图�
 
 def register_workspace(app, store, market_provider, symbols_provider, rule_provider, evaluator, quotes_provider=None,
                        market_incremental_provider=None, market_preview_provider=None,
-                       market_bootstrap_provider=None, market_history_provider=None):
+                       market_bootstrap_provider=None, market_history_provider=None,
+                       cache_status_provider=None):
     """Providers: market(symbol), optional incremental(symbol, token), symbols(),
     rules(), evaluate(plan, market, risk, version). Reviews always read full data.
     """
@@ -314,6 +315,22 @@ def register_workspace(app, store, market_provider, symbols_provider, rule_provi
     @authenticated
     def symbols():
         return jsonify(status="ok", symbols=symbols_provider())
+
+    @bp.get("/cache-status")
+    @authenticated
+    def cache_status():
+        # A read-only inventory: observing coverage must not subscribe a symbol,
+        # fetch history, or make cached prices qualify as current market data.
+        if cache_status_provider is None:
+            return fail("自动缓存状态暂不可用", 503)
+        try:
+            status = cache_status_provider()
+            if not isinstance(status, dict):
+                raise ValueError("Invalid cache status")
+        except Exception as error:
+            app.logger.warning("Workspace cache status unavailable (%s)", type(error).__name__)
+            return fail("自动缓存状态暂不可用，请稍后重试", 503)
+        return jsonify(status="ok", cache=status)
 
     @bp.get("/quotes")
     @authenticated
