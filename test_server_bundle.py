@@ -22,6 +22,17 @@ from scripts.build_server_bundle import (
 
 
 class ServerBundleTests(unittest.TestCase):
+    def test_every_packaged_runtime_and_browser_asset_enters_the_docker_image(self):
+        # A valid ZIP is insufficient if Docker's deny-all context omits a new
+        # runtime dependency. Check the two independently maintained boundaries.
+        root = Path(__file__).resolve().parent
+        rules = [line.strip() for line in (root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+                 if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(rules[0], "**")
+        required = set(RUNTIME_PY_FILES) | set(ASSET_FILES) | {"requirements.txt", "requirements-server.txt"}
+        missing = sorted(path for path in required if "!/" + path not in rules)
+        self.assertEqual(missing, [], "Packaged files omitted by Docker context")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
