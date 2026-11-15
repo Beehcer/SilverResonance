@@ -45,7 +45,7 @@
     return value.bars;
   }
   class Blocks{
-    constructor({storage,indexedDB=globalThis.indexedDB,crypto=globalThis.crypto,now=()=>Date.now(),memoryBytes=MAX_MEMORY_BYTES}={}){this.storage=storage||(indexedDB?disk(indexedDB):null);this.crypto=crypto;this.now=now;this.memory=new Map();this.memoryBytes=memoryBytes;this.bytes=0;this.requests=new Map();this.writes=new Set();this.writeBatch=null;this.writeTimer=null;this.writing=false;this.activeAssemblies=0;this.prunePending=false;this.lastPrune=0;this.stats={memoryHits:0,diskHits:0,downloads:0,fallbacks:0};}
+    constructor({storage,indexedDB=globalThis.indexedDB,crypto=globalThis.crypto,now=()=>Date.now(),memoryBytes=MAX_MEMORY_BYTES,hedgeDelay=800}={}){this.storage=storage||(indexedDB?disk(indexedDB):null);this.crypto=crypto;this.now=now;this.memory=new Map();this.memoryBytes=memoryBytes;this.hedgeDelay=Math.max(50,Math.min(2000,Number(hedgeDelay)||800));this.bytes=0;this.requests=new Map();this.writes=new Set();this.writeBatch=null;this.writeTimer=null;this.writing=false;this.activeAssemblies=0;this.prunePending=false;this.lastPrune=0;this.stats={memoryHits:0,diskHits:0,downloads:0,fallbacks:0,hedges:0};}
     remember(item){const old=this.memory.get(item.sha256);if(old)this.bytes-=old.bytes;this.memory.delete(item.sha256);this.memory.set(item.sha256,item);this.bytes+=item.bytes;while(this.bytes>this.memoryBytes&&this.memory.size){const [key,first]=this.memory.entries().next().value;this.memory.delete(key);this.bytes-=first.bytes;}}
     async save(item){
       if(!this.storage)return;
@@ -71,6 +71,22 @@
       }catch{/* Optional persistence cannot block a validated chart. */}
       finally{batch?.resolve();this.writing=false;this.scheduleWrites();}
     }
+    async download(desc,remote,parse,read){
+      const load=async(path,options)=>{const text=await read(path,options);return{text,value:await parse(text)};};
+      if(!remote)return load(desc.url,{timeout:8000,public:false});
+      const primary=new AbortController(),backup=new AbortController();let timer,started=false,done=false;
+      const fast=load(remote,{timeout:2500,public:true,cancelSignal:primary.signal});
+      const alternate=new Promise((resolve,reject)=>{
+        const start=hedged=>{
+          if(started||done)return;started=true;clearTimeout(timer);this.stats.fallbacks++;if(hedged)this.stats.hedges++;
+          load(desc.url,{timeout:8000,public:false,cancelSignal:backup.signal}).then(resolve,reject);
+        };
+        timer=setTimeout(()=>start(true),this.hedgeDelay);
+        void fast.catch(()=>start(false));
+      });
+      try{return await Promise.any([fast,alternate]);}
+      finally{done=true;clearTimeout(timer);primary.abort();backup.abort();}
+    }
     async block(desc,market,period,read){
       descriptor(desc);const key=desc.sha256;
       const parse=async text=>{if(typeof text!=='string'||await digest(text,this.crypto)!==key)throw new Error('History checksum mismatch');const value=JSON.parse(text);validateBlock(value,desc,market,period);return value;};
@@ -80,9 +96,8 @@
       if(!task){
         task=(async()=>{
           try{const saved=await this.storage?.get(key);if(saved&&saved.sha256===key&&saved.last_time>=sixMonthsAgo(this.now())){const value=await parse(saved.text);item={...saved,value};this.remember(item);this.stats.diskHits++;return item;}}catch{/* Missing, corrupt or evicted local data is replaced from the authoritative block. */}
-          let text,value;const remote=publicUrl(desc.oss_url,key);
-          if(remote){try{text=await read(remote,{timeout:2500,public:true});value=await parse(text);}catch{this.stats.fallbacks++;}}
-          if(!value){text=await read(desc.url,{timeout:8000,public:false});value=await parse(text);}
+          const remote=publicUrl(desc.oss_url,key);
+          const {text,value}=await this.download(desc,remote,parse,read);
           this.stats.downloads++;const saved={sha256:key,text,bytes:new TextEncoder().encode(text).byteLength,saved_at:this.now(),last_time:Date.parse(desc.last)};item={...saved,value};this.remember(item);await this.save(saved);return item;
         })();
         this.requests.set(key,task);void task.finally(()=>{if(this.requests.get(key)===task)this.requests.delete(key);}).catch(()=>{});
@@ -119,10 +134,10 @@
   }
   class Hub{
     constructor({fetch=globalThis.fetch?.bind(globalThis),blocks=new Blocks(),references=new MarketCache.References(),now=()=>Date.now(),bootstrapTimeout=7000,bootstrapMaxTimeout=20000}={}){this.fetch=fetch;this.blocks=blocks;this.references=references;this.now=now;this.bootstrapTimeout=bootstrapTimeout;this.bootstrapMaxTimeout=bootstrapMaxTimeout;this.cache=new MarketCache.Store({limit:32});this.requests=new Map();this.quoteRequest=null;this.quoteResult=null;this.quoteAt=0;this.timings=[];this.loads=[];this.stats={bootstrap:0,full:0,incremental:0,quotes:0};}
-    async read(path,{timeout=12000,public:remote=false,json=false,signal}={}){
+    async read(path,{timeout=12000,public:remote=false,json=false,signal,cancelSignal}={}){
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
-      const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)controller.abort();
-      try{const response=await this.fetch(path,{credentials:remote?'omit':'same-origin',cache:remote?'default':'no-store',headers:remote?{}:{'X-Workspace-Candle-Protocol':'2'},signal:controller.signal});if(!response.ok){const error=new Error('行情服务暂未响应');error.status=response.status;throw error;}return json?await response.json():await response.text();}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+      const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});cancelSignal?.addEventListener('abort',abort,{once:true});if(signal?.aborted||cancelSignal?.aborted)controller.abort();
+      try{const response=await this.fetch(path,{credentials:remote?'omit':'same-origin',cache:remote?'default':'no-store',headers:remote?{}:{'X-Workspace-Candle-Protocol':'2'},signal:controller.signal});if(!response.ok){const error=new Error('行情服务暂未响应');error.status=response.status;throw error;}return json?await response.json():await response.text();}finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);cancelSignal?.removeEventListener('abort',abort);}
     }
     async full(symbol){
       const reference=this.references.get(symbol),query='?symbol='+encodeURIComponent(symbol)+(reference?'&anchor_reference='+encodeURIComponent(reference.anchor_reference_id):''),started=this.now(),controller=new AbortController();let market,timer,hardTimer,finished=false,rejectTimeout,bootstrapAt=null,fallback=false;

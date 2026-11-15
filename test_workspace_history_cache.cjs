@@ -30,6 +30,51 @@ test('shared fixed references hydrate only the exact symbol basis and reference 
  assert.notEqual(refs.restore(omitted).anchor_reference.m30.source_times[0],0);
 });
 function blocks(storage){return new H.Blocks({storage,crypto:webcrypto,indexedDB:null,now:()=>NOW});}
+
+test('a slow OSS block starts a verified origin backup and cancels the slower transfer',async()=>{
+  const f=fixture(),desc=f.bundle.history.m3[0];desc.oss_url='https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/history/v1/blocks/'+desc.sha256+'.json';
+  const store=new H.Blocks({indexedDB:null,crypto:webcrypto,now:()=>NOW,hedgeDelay:50});let aborted=0,origin=0;
+  const hub=new H.Hub({blocks:store,fetch:async(path,{signal})=>{
+    if(path.startsWith('https:'))return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{aborted++;reject(new Error('cancelled'));},{once:true}));
+    origin++;return{ok:true,text:async()=>f.values.get(desc.url)};
+  }});
+  const rows=await store.block(desc,f.bundle.market,'m3',(path,options)=>hub.read(path,options));await tick();
+  assert.equal(rows.length,2);assert.equal(origin,1);assert.equal(aborted,1);assert.equal(store.stats.hedges,1);assert.equal(store.requests.size,0);
+});
+
+test('a corrupt fast backup cannot beat a valid OSS block or poison the cache',async()=>{
+  const f=fixture(),desc=f.bundle.history.day[0];desc.oss_url='https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/history/v1/blocks/'+desc.sha256+'.json';
+  const store=new H.Blocks({indexedDB:null,crypto:webcrypto,now:()=>NOW,hedgeDelay:50});let release,backupStarted;
+  const remote=new Promise(resolve=>release=resolve),started=new Promise(resolve=>backupStarted=resolve);let done=false;
+  const work=store.block(desc,f.bundle.market,'day',async(path,options)=>{
+    if(options.public)return remote;backupStarted();return 'corrupt';
+  }).then(rows=>{done=true;return rows;});
+  await started;await tick();assert.equal(done,false);assert.equal(store.memory.size,0);
+  release(f.values.get(desc.url));assert.equal((await work).length,2);assert.equal(store.stats.downloads,1);
+});
+
+test('healthy OSS completes without starting an unnecessary backup',async()=>{
+  const f=fixture(),desc=f.bundle.history.day[0];desc.oss_url='https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/history/v1/blocks/'+desc.sha256+'.json';
+  const store=blocks(null),calls=[];await store.block(desc,f.bundle.market,'day',async(path,options)=>{calls.push(options.public);return f.values.get(desc.url);});
+  assert.deepEqual(calls,[true]);assert.equal(store.stats.hedges,0);assert.equal(store.stats.fallbacks,0);
+});
+test('two failed sources leave no cached block and allow a clean retry',async()=>{
+  const f=fixture(),desc=f.bundle.history.day[0];desc.oss_url='https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/history/v1/blocks/'+desc.sha256+'.json';
+  const store=blocks(null);
+  await assert.rejects(store.block(desc,f.bundle.market,'day',async()=>{throw new Error('offline');}),AggregateError);
+  await tick();assert.equal(store.memory.size,0);assert.equal(store.requests.size,0);
+  assert.equal((await store.block(desc,f.bundle.market,'day',async()=>f.values.get(desc.url))).length,2);
+});
+test('cancelling a block read cancels both active transfers and keeps the cache empty',async()=>{
+  const f=fixture(),desc=f.bundle.history.day[0];desc.oss_url='https://silver-resonance.oss-cn-hangzhou.aliyuncs.com/history/v1/blocks/'+desc.sha256+'.json';
+  const store=new H.Blocks({indexedDB:null,crypto:webcrypto,now:()=>NOW,hedgeDelay:50}),outer=new AbortController();let calls=0,aborts=0,started;
+  const both=new Promise(resolve=>started=resolve),hub=new H.Hub({blocks:store,fetch:async(path,{signal})=>new Promise((resolve,reject)=>{
+    signal.addEventListener('abort',()=>{aborts++;reject(new Error('cancelled'));},{once:true});if(++calls===2)started();
+  })});
+  const task=store.block(desc,f.bundle.market,'day',(path,options)=>hub.read(path,{...options,signal:outer.signal}));
+  const rejected=assert.rejects(task,AggregateError);await both;outer.abort();await rejected;await tick();
+  assert.equal(aborts,2);assert.equal(store.memory.size,0);assert.equal(store.requests.size,0);
+});
 async function settled(store){await Promise.all([...store.writes]);await tick();}
 const nextTask=()=>new Promise(resolve=>setTimeout(resolve,0));
 function manyChunks(){
