@@ -1461,7 +1461,7 @@ class _WorkspaceSerialReader:
     """Accumulate SDK changes; materialize only changed tails when history agrees."""
     fields = ("datetime", "open", "high", "low", "close", "volume", "open_oi", "close_oi")
 
-    def __init__(self, api, cache, *, quotes=None, trading_minutes=False, warmup=None, on_ready=None):
+    def __init__(self, api, cache, *, quotes=None, trading_minutes=False, warmup=None, on_ready=None, sdk_source=None):
         import numpy as np
         self.np, self.api, self.cache = np, api, cache
         self.subscriptions = _KlineSubscriptions(api)
@@ -1479,6 +1479,11 @@ class _WorkspaceSerialReader:
         self.background_cursor = 0
         self.on_ready = on_ready
         self.resource_stats = {}
+        # A verified snapshot of the same SDK session's received K-line records.
+        # Some SDK versions refresh only the final DataFrame rows, even when
+        # an older closed candle was corrected in the received source tree.
+        self.sdk_source = sdk_source
+        self.source_reports = {}
 
     def required_periods(self, symbol):
         if self.warmup and self.trading_minutes:
@@ -1559,6 +1564,14 @@ class _WorkspaceSerialReader:
 
     def observe(self, received):
         changed = False
+        if received and self.sdk_source is not None:
+            # Accumulate source revisions on EVERY received pump, before the
+            # one-second throttle. Timeouts can retain the prior SDK diff list.
+            # is_changing(DataFrame) alone can miss old rows.
+            revised = self.sdk_source.observe()
+            relevant = set(revised) & set(self.subscriptions.serials)
+            self.dirty.update(relevant)
+            changed = bool(relevant)
         if received:
             for key, serial in self.subscriptions.serials.items():
                 if self.api.is_changing(serial):
@@ -1606,6 +1619,41 @@ class _WorkspaceSerialReader:
             raise ValueError("30分钟转换基准尚未就绪")
         self.aggregators[symbol] = aggregator
 
+    def _capture_source_report(self, key):
+        """Observe published data without making diagnostics a feed dependency."""
+        try:
+            report = self.sdk_source.diagnostics(*key, limit=3)
+            # This runs only on the feed thread. HTTP reads the completed report,
+            # never the mutable SDK tree or a new market subscription.
+            with self.cache.lock:
+                cached = self.cache.data.get(key, {}).get("bars", [])
+                report["published_tail"] = [dict(row) for row in cached[-3:]]
+            # Include old repaired candles outside the tail without copying history.
+            for sample in report.get("rows", []):
+                raw = sample["snapshot"]
+                stamp = datetime.fromtimestamp(raw["datetime"] / 1e9, timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+                lo, hi = 0, len(cached)
+                while lo < hi:
+                    middle = (lo + hi) // 2
+                    if cached[middle]["dt"] < stamp:
+                        lo = middle + 1
+                    else:
+                        hi = middle
+                published = cached[lo] if lo < len(cached) and cached[lo]["dt"] == stamp else None
+                sample["published"] = dict(published) if published else None
+                sample["published_matches_source"] = bool(published and all(
+                    published.get(field) == raw[field] for field in ("open", "high", "low", "close", "volume"))
+                    and published.get("oi") == raw["close_oi"] - raw["open_oi"])
+            report["error"] = None
+        except Exception as error:
+            # The source snapshot and cache publication already succeeded. A
+            # diagnostic failure must not mark their prices stale or block warmup.
+            # Discard previous samples rather than presenting them as current.
+            report = {"symbol": key[0], "seconds": key[1], "error": None,
+                      "diagnostic_error": type(error).__name__}
+        report["checked_at"] = self.cache.clock()
+        self.source_reports = {**self.source_reports, key: report}
+
     def refresh(self, connected):
         if not connected:
             return
@@ -1630,6 +1678,7 @@ class _WorkspaceSerialReader:
             if self.warmup and key[1] not in self.required_periods(key[0]):
                 self.matrices.pop(key, None)
                 self.serial_errors.pop(key, None)
+                self.source_reports = {k: v for k, v in self.source_reports.items() if k != key}
                 self.cache.release_native_reference_rows(key[0])
                 continue
             try:
@@ -1646,7 +1695,8 @@ class _WorkspaceSerialReader:
                         self._publish_trading(key[0])
                     self.serial_errors.pop(key, None)
                     continue
-                columns = {field: np.asarray(serial[field]) for field in self.fields if field in serial}
+                source = (self.sdk_source.snapshot(*key, serial) if self.sdk_source is not None else serial)
+                columns = {field: np.asarray(source[field]) for field in self.fields if field in source}
                 count = len(columns["close"])
                 if not count or not np.isfinite(columns["close"][-1]):
                     raise ValueError("当前K线行情尚未可用")
@@ -1675,7 +1725,9 @@ class _WorkspaceSerialReader:
                             tail = _serial_rows({field: column[-appended-2:] for field, column in columns.items()})
                             updated = self.cache.update_window(*key, tail, appended=appended)
                 if not updated:
-                    updated = self.cache.cache(*key, _serial_rows(serial))
+                    # Full reload and incremental tails must use the SAME
+                    # verified source, never fall back to the stale DataFrame.
+                    updated = self.cache.cache(*key, _serial_rows(source))
                     full = True
                 else:
                     full = False
@@ -1686,11 +1738,17 @@ class _WorkspaceSerialReader:
                 self.matrices[key] = matrix
                 self.serial_errors.pop(key, None)
                 self.dirty.discard(key)
+                if self.sdk_source is not None:
+                    self._capture_source_report(key)
             except Exception as error:
                 # Neither a failed conversion nor disconnect can renew evidence.
                 self.cache.mark_failed(*key)
                 self.serial_errors[key] = type(error).__name__
                 self.dirty.add(key)
+                if self.sdk_source is not None:
+                    self.source_reports = {**self.source_reports, key: {
+                        **self.source_reports.get(key, {}), "symbol": key[0], "period": key[1],
+                        "error": type(error).__name__, "checked_at": self.cache.clock()}}
         if self.warmup:
             for symbol in {key[0] for key in self.subscriptions.serials if key[0] in allowed}:
                 errors = [error for key, error in self.serial_errors.items() if key[0] == symbol]
@@ -1719,7 +1777,7 @@ def _cache_workspace_quotes(quotes):
         _workspace_live_quotes.update(snapshot)
 
 
-def _workspace_tqsdk_session(api, notifications):
+def _workspace_tqsdk_session(api, notifications, *, sdk_source=None):
     """Production uses the same SDK session, quotes plus requested chart periods.
 
     Desktop radar/scoring and its state dumps are not workspace dependencies.
@@ -1733,6 +1791,7 @@ def _workspace_tqsdk_session(api, notifications):
     _workspace_warmup = (CatalogueWarmup(lambda: [preset["symbol"] for preset in symbols.PRESETS], clock=time.time)
                          if app.config.get("WORKSPACE_PREWARM", True) else None)
     reader = _WorkspaceSerialReader(api, _workspace_market, quotes=quotes, warmup=_workspace_warmup,
+                                   sdk_source=sdk_source,
                                    on_ready=lambda symbol: _workspace_archive_warmer.notify_ready(symbol) if _workspace_archive_warmer else None,
                                    trading_minutes=app.config.get("WORKSPACE_TRADING_MINUTES", True))
     _workspace_reader = reader
@@ -1834,7 +1893,8 @@ def _tqsdk_loop():
             )
 
         if app.config.get("WORKSPACE_PRODUCTION"):
-            _workspace_tqsdk_session(api, notifications)
+            from workspace_sdk_klines import WorkspaceSDKKlines
+            _workspace_tqsdk_session(api, notifications, sdk_source=WorkspaceSDKKlines(api))
             return
 
         _set_boot("loading", 60, "正在拉取K线…")
@@ -2430,8 +2490,11 @@ def _workspace_cache_status_provider():
         resources["memory_warning"] = resources["rss_bytes"] > 1280 * 1024 * 1024
     except (OSError, ValueError, IndexError, AttributeError):
         pass
+    source_reports = list(_workspace_reader.source_reports.values()) if _workspace_reader else []
     return {"checked_at": time.time(), "retention_months": 6, "warmup": warmup, "archive": archive,
-            "resources": resources}
+            "resources": resources,
+            "source_integrity": {"enabled": bool(_workspace_reader and _workspace_reader.sdk_source is not None),
+                                 "periods": source_reports}}
 
 
 def _workspace_quotes_provider():

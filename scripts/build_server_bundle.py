@@ -52,6 +52,7 @@ RUNTIME_PY_FILES = (
     "workspace_market.py",
     "workspace_rules.py",
     "workspace_runtime.py",
+    "workspace_sdk_klines.py",
     "workspace_store.py",
     "workspace_warmup.py",
     "workspace_web.py",

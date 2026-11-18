@@ -179,6 +179,7 @@ class ProductionFeedTests(unittest.TestCase):
         api = FakeAPI(self, [{"received": True}, {"received": True}])
         fake_module = types.SimpleNamespace(TqApi=Mock(return_value=api), TqAuth=Mock(), TqNotify=Mock(return_value=api))
         with patch.dict(sys.modules, {"tqsdk": fake_module}), \
+                patch("workspace_sdk_klines.WorkspaceSDKKlines", return_value=None) as sdk_source, \
                 patch.object(app.config, "TQ_USER", ""), \
                 patch.object(app.config, "SYMBOL", self.presets[0]["symbol"]), \
                 patch.object(app.symbols, "refresh_from_api"), \
@@ -190,6 +191,7 @@ class ProductionFeedTests(unittest.TestCase):
             with self.assertRaises(Finished):
                 app._tqsdk_loop()
         fake_module.TqApi.assert_called_once()
+        sdk_source.assert_called_once_with(api)
         radar.assert_not_called()
         dump.assert_not_called()
         self.assertTrue(api.closed)
