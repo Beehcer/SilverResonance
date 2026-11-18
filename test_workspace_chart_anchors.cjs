@@ -45,7 +45,7 @@ test('future daily anchors survive the weekend without mutating saved Saturday t
 });
 
 test('cross-period mapping resolves source candles before mapping into smaller-period slots',()=>{
-  const wave=futureWave(),m30=[...history,bar(night),bar(night+step)],m3=Array.from({length:21},(_,i)=>bar(night+i*C.INTERVAL.m3));
+  const wave=futureWave(),m30=[...history,bar(night),bar(night+step),bar(night+2*step)],m3=Array.from({length:21},(_,i)=>bar(night+i*C.INTERVAL.m3));
   const chart=chartAt('m3',market(m30,m3),{objects:[wave]});
   const point=wave.points[1];
   assert.equal(chart.pointTime(point),night+2.25*step);
@@ -229,9 +229,12 @@ test('cross-period reload uses source anchors after morning, lunch and night ope
   for(const count of [1,6,9,13]){
     const source=[...lateHistory,...reopenTimes.slice(0,count).map(bar)],m3=source.flatMap(row=>Array.from({length:10},(_,index)=>bar(row.time+index*C.INTERVAL.m3))),data=market(source,m3);
     const sourceChart=fixedLateChart(data,{objects:[wave]}),peer=chartAt('m3',JSON.parse(JSON.stringify(data)),{objects:[JSON.parse(JSON.stringify(wave))]});
-    const resolved=wave.points.map(point=>sourceChart.pointTime(point));
-    assert.deepEqual(peer.plan.objects[0].points.map(point=>peer.pointTime(point)),resolved);
-    peer.objectPoints(peer.plan.objects[0]).forEach((point,index)=>close(point.x,peer.tx.x(resolved[index])));
+    const targetScale=C.timeScale(m3,'m3'),basePosition=targetScale.position(lateHistory.at(-1).time);
+    // Each source fixture candle has ten target candles; fractions must stay
+    // proportional on that trading axis, including a fractional lunch interval.
+    const expected=wave.points.map(point=>targetScale.time(basePosition+point.chart_anchor.offset*10));
+    peer.plan.objects[0].points.forEach((point,index)=>close(peer.pointTime(point),expected[index]));
+    peer.objectPoints(peer.plan.objects[0]).forEach((point,index)=>close(point.x,peer.tx.x(expected[index])));
   }
 });
 
@@ -295,7 +298,7 @@ test('legacy path midpoint coinciding with an existing bare node is still a newl
 });
 
 test('mapped wave horizontal edits in a smaller chart explicitly distinguish its history from its future',()=>{
-  const wave=lateWave(),m3=[...lateHistory,...Array.from({length:20},(_,index)=>bar(reopenTimes[0]+index*C.INTERVAL.m3))],data=market([...lateHistory,bar(reopenTimes[0])],m3);
+  const wave=lateWave(),m3=[...lateHistory,...Array.from({length:20},(_,index)=>bar(reopenTimes[0]+index*C.INTERVAL.m3))],data=market([...lateHistory,bar(reopenTimes[0]),bar(reopenTimes[0]+step)],m3);
   const chart=chartAt('m3',data,{objects:[wave]});chart.autoPrice=false;chart.followLatest=false;chart.render();
   const start=chart.objectPoints(wave)[0];
   for(const time of [m3.at(-5).time,m3.at(-1).time+C.INTERVAL.m3*2.5]){

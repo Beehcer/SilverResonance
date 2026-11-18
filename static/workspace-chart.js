@@ -67,6 +67,28 @@
     }
     return scale.time(position);
   }
+  // Resolve anchored bar slots on the receiving chart's trading axis. Passing
+  // an interpolated wall-clock time through two compressed axes bends forecasts
+  // across lunch/night gaps. Missing source evidence must never become geometry.
+  function projectPoint(point,market,targetPeriod,scales=null){
+    const anchor=point?.chart_anchor,period=anchor?.period,original=()=>({ready:true,time:resolvePointTime(point,market,scales)});
+    if(!anchor||!INTERVAL[period]||period===targetPeriod||!INTERVAL[targetPeriod])return original();
+    const waiting=reason=>({ready:false,time:null,reason,sourcePeriod:period}),cached=(key,rows,p)=>scales?(scales[key]??=timeScale(rows,p)):timeScale(rows,p);
+    const source=anchorSource(anchor,market),sourceScale=cached(source.key,source.bars,period);
+    if(!sourceScale.indices.has(anchor.base_time))return waiting('missing_anchor_history');
+    const rows=market?.periods?.[period]||[],display=cached(period+':'+source.displayBasis,rows,period),target=cached('projection:'+targetPeriod,market?.periods?.[targetPeriod]||[],targetPeriod);
+    if(!display.times.length||!target.times.length)return waiting('missing_period_history');
+    if(source.reference&&sourceScale.indices.get(anchor.base_time)+anchor.offset>sourceScale.times.length-1&&!display.indices.has(source.reference.target_base_time))return waiting('missing_reference_history');
+    const resolved=resolvePointTime(point,market,scales),position=display.position(resolved),last=display.times.at(-1),targetLast=target.times.at(-1),lastRow=rows.at(-1),coverageEnd=timestamp(lastRow?.end_time??lastRow?.closed_at)??last+INTERVAL[period];
+    if(position>display.times.length-1&&targetLast>=coverageEnd)return waiting('source_period_behind');
+    const sourceStart=period==='day'?(timestamp(lastRow?.session_boundary)??last):last;
+    if(resolved>targetLast&&sourceStart>targetLast+INTERVAL[targetPeriod])return waiting('target_period_behind');
+    const lower=Math.floor(position),fraction=position-lower,a=display.time(lower),b=display.time(lower+1);
+    // At historical fractional slots use the two actual source boundaries;
+    // for a future slot both boundaries remain future until source evidence arrives.
+    const projected=target.position(a)+(target.position(b)-target.position(a))*fraction;
+    return{ready:true,time:target.time(projected)};
+  }
   function anchorPoint(point,bars,period,preparedScale=null,basis=null){
     const result={...point,chart_anchor:null};
     const scale=preparedScale||timeScale(bars,period),last=scale.times.at(-1);
@@ -174,7 +196,7 @@
     setData(market,plan,reset=false){
       if(reset||market?.symbol&&this.market?.symbol&&market.symbol!==this.market.symbol){this.clearTouchGesture({applyMarket:false});this.pendingMarket=null;}
       if(reset){this.linkedRange=null;this.hoverDayKey=null;this.crosshair=null;this.pendingMarket=null;}
-      if(!reset&&(this.drag||this.path.length||this.pinch)){this.pendingMarket=market;this.plan=plan||{objects:[]};this.render();return;}
+      if(!reset&&(this.drag||this.path.length||this.pinch)){this.pendingMarket=market;this.plan=plan||{objects:[]};this.render();this.callbacks.dataDisplayed?.(this);return;}
       const previousBars=this.bars,previousScale=this.timelineBars===previousBars?this.timelineScale:null,previousBasis=this.market?.candle_basis?.[this.period]||'native_v1',planChanged=this.plan!==plan&&JSON.stringify(this.plan)!==JSON.stringify(plan||{objects:[]});
       this.market=market;this.plan=plan||{objects:[]};this.tick=market?.tick||1;this.anchorScales={};this.syncTitleEditor();
       const source=market?.periods?.[this.period]||[],rowKey=bar=>bar?['dt','time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':'):'',sourceSignature=[market?.symbol,market?.history_token,source.length,rowKey(source[0]),rowKey(source.at(-2)),rowKey(source.at(-1))].join('|');
@@ -186,7 +208,7 @@
       this.sourceBars=source;this.sourceSignature=sourceSignature;
       // Mapped forecasts also depend on their source timeframe. Its opening may
       // arrive before this chart's next candle, so invalidate that projection too.
-      const timelineKey=rows=>[rows.length,...[rows[0],rows.at(-2),rows.at(-1)].map(row=>timestamp(row?.time??row?.dt))].join(':');
+      const timelineKey=rows=>[rows.length,...[rows[0],rows.at(-2),rows.at(-1)].map(row=>[timestamp(row?.time??row?.dt),row?.end_time,row?.closed_at,row?.session_boundary].join(','))].join(':');
       const anchorTimelineSignature=Object.keys(INTERVAL).map(period=>{const reference=market?.anchor_reference?.[period];return[period,market?.candle_basis?.[period]||'native_v1',period===this.period?'':timelineKey(market?.periods?.[period]||[]),timelineKey(market?.anchor_periods?.[period]||[]),reference?JSON.stringify([reference.basis,reference.target_basis,reference.target_base_time,reference.source_times?.length,reference.source_times?.[0],reference.source_times?.at(-1)]):''].join(':');}).join('|');
       const first=this.bars[0],last=this.bars.at(-1),previousLastTime=this.lastBarTime,signature=first&&last?`${first.time}:${first.open}:${last.time}:${this.bars.length}`:'',tailSignature=this.bars.slice(-2).map(bar=>['time','open','high','low','close','volume','oi'].map(key=>bar[key]).join(':')).join('|'),contentSignature=signature+`:${tailSignature}:${anchorTimelineSignature}:${market?.history_token}:${market?.fresh}:${market?.feed_status}:${market?.unavailable}`,unchanged=contentSignature===this.contentSignature;
       this.contentSignature=contentSignature;this.dataSignature=signature;
@@ -208,7 +230,7 @@
         else if(last.close<this.view.min){const delta=last.close-this.view.min-padding;this.view={...this.view,min:this.view.min+delta,max:this.view.max+delta};changed=true;}
         if(changed||!unchanged||planChanged)this.render();
       }else if(!unchanged||planChanged)this.render();
-      this.lastBarTime=last?.time??null;
+      this.lastBarTime=last?.time??null;this.callbacks.dataDisplayed?.(this);
     }
     visibleBars(margin=4){if(!this.view)return this.bars;const view=this.view,range=view.end-view.start,start=view.start-range*.03-INTERVAL[this.period]*margin,end=view.end+INTERVAL[this.period]*margin;return barsBetween(this.bars,start,end);}
     setLinkedRange(range){if(JSON.stringify(this.linkedRange)===JSON.stringify(range))return;this.linkedRange=range;this.render();}
@@ -277,7 +299,7 @@
     clearTouchGesture({applyMarket=true}={}){this.finishPinch({notify:false,applyMarket});this.touchIds?.clear();this.touchBlocked=false;}
     beginUpdate(){this.updateDepth=(this.updateDepth||0)+1;}
     endUpdate(){this.updateDepth=Math.max(0,(this.updateDepth||0)-1);if(!this.updateDepth&&this.renderDeferred){this.renderDeferred=false;this.render();}}
-    setPlan(plan){this.plan=plan||{objects:[]};this.syncTitleEditor();this.render();}
+    setPlan(plan){this.plan=plan||{objects:[]};this.syncTitleEditor();this.render();this.callbacks.dataDisplayed?.(this);}
     setTool(tool,options={}){this.clearTouchGesture({applyMarket:false});if(this.readOnly)tool='select';this.snapPreview=null;this.lastPathClick=null;if(this.period==='day'&&this.hoverDayKey){this.hoverDayKey=null;this.callbacks.hoverDay?.(null);}if(this.drag)this.cancelGesture();this.closeTextEditor();this.closeTitleEditor();this.cancelPath({render:false});this.placementPreview=null;this.tool=tool;this.toolDirection=['long','short'].includes(options.direction)?options.direction:null;this.toolName=options.name||null;this.setDrawingStyle({color:options.color,width:options.width,line_style:options.line_style,opacity:options.opacity},{render:false});this.hoverPath=null;this.pathControl=null;this.insertWave=null;this.draft=null;this.host.style.cursor=tool==='pan'?'grab':tool==='select'?'default':'crosshair';this.render();}
     setDrawingStyle(options={}, {render=true}={}){
       if(Object.hasOwn(options,'color'))this.toolColor=options.color||null;
@@ -290,7 +312,7 @@
     drawingStyle(kind=this.tool){return{color:this.toolColor||'#f1c40f',width:this.toolWidth||2,line_style:this.toolLineStyle||(kind==='reference'?'dashed':'solid'),opacity:drawingOpacity(this.toolOpacity)};}
     fit(includeDrawings=false){
       this.followLatest=true;this.viewCustomized=false;this.autoPrice=!includeDrawings;
-      const drawings=(this.plan.objects||[]).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period)),levels=includeDrawings?[this.plan.entry_low,this.plan.entry_high,this.plan.stop_price,this.plan.planned_entry_price,this.plan.main_level,this.plan.trigger_price,this.plan.obstacle_price,...drawings.flatMap(object=>object.points.map(point=>point.price))]:[];
+      const drawings=this.objects(),levels=includeDrawings?[this.plan.entry_low,this.plan.entry_high,this.plan.stop_price,this.plan.planned_entry_price,this.plan.main_level,this.plan.trigger_price,this.plan.obstacle_price,...drawings.flatMap(object=>object.points.map(point=>point.price))]:[];
       this.view=fitView(this.bars,this.period,levels);
       if(includeDrawings&&this.view){const points=drawings.flatMap(object=>object.points);if(points.length){const start=Math.min(this.view.start,...points.map(point=>this.pointTime(point))),end=Math.max(this.view.end,...points.map(point=>this.pointTime(point))),padding=Math.max(INTERVAL[this.period],(end-start)*.03);this.view={...this.view,start:start-padding,end:end+padding};}}
       this.render();this.callbacks.viewChanged?.(this);
@@ -305,19 +327,26 @@
         if(!this.anchorScales[source.key])this.anchorScales[source.key]=period===this.period&&source.basis===source.displayBasis&&!source.reference?this.getTimeScale():timeScale(source.bars,period);
         if(source.reference&&!this.anchorScales[targetKey])this.anchorScales[targetKey]=period===this.period?this.getTimeScale():timeScale(this.market?.periods?.[period]||[],period);
       }
-      return resolvePointTime(point,this.market,this.anchorScales);
+      return projectPoint(point,this.market,this.period,this.anchorScales).time;
+    }
+    projectionStatus(object=null){
+      this.anchorScales??={};const blocked=[],candidates=object?[object]:(this.plan?.objects||[]).filter(item=>item.visible!==false&&visibleOnPeriod(item,this.period));
+      for(const item of candidates){if(!isForecast(item))continue;const failures=(item.points||[]).map(point=>projectPoint(point,this.market,this.period,this.anchorScales)).filter(point=>!point.ready);if(failures.length)blocked.push(...failures.map(failure=>({...failure,id:item.id})));}
+      const sourcePeriods=[...new Set(blocked.map(item=>item.sourcePeriod))],reasons=[...new Set(blocked.map(item=>item.reason))],blockedCount=new Set(blocked.map(item=>item.id)).size;
+      return{ready:blocked.length===0,blockedCount,sourcePeriods,reasons,text:blocked.length?sourcePeriods.map(period=>({day:'日线',m30:'30分钟',m3:'3分钟'}[period]||period)).join('、')+'预测线待对齐':''};
     }
     zoomLimit(){const scale=this.getTimeScale();let left=0,right=this.bars.length;for(const object of this.objects())for(const point of object.points||[]){const position=scale.position(this.pointTime(point));if(finite(position)){left=Math.min(left,position);right=Math.max(right,position);}}return Math.max(10000,(right-left)*1.4+30);}
     forecastPoint(point){return anchorPoint(point,this.bars,this.period,this.getTimeScale(),this.market?.candle_basis?.[this.period]||null);}
     applyPendingMarket(){if(this.pendingMarket&&!this.drag&&!this.path.length&&!this.pinch){const market=this.pendingMarket;this.pendingMarket=null;this.setData(market,this.plan);}}
     editForecastPoints(object,segment,direction){
+      if(!this.projectionStatus(object).ready)return object.points;
       // Preserve original coordinates by provenance, not geometric equality: an inserted
       // midpoint may coincide with another legacy node that has no stable ID.
       const rendered=object.points.map((point,index)=>({...point,time:this.pointTime(point),sourceIndex:index})),edited=editPathPoints(rendered,segment,direction,this.tick,INTERVAL[this.period]);
       return edited.map(({sourceIndex,...point})=>Number.isInteger(sourceIndex)?{...object.points[sourceIndex]}:this.forecastPoint(point));
     }
     priceFit(view){return fitVisiblePrice(this.bars,view,this.tick,this.period,this.objects(),point=>this.pointTime(point),this.getTimeScale());}
-    locateObject(object){const points=object?.points||[];if(!points.length||!this.view)return;const times=points.map(point=>this.pointTime(point)),prices=points.map(point=>point.price),scale=this.getTimeScale(),positions=times.map(time=>scale.position(time)),left=Math.min(...positions),right=Math.max(...positions),span=Math.max(8,(right-left)*1.3),low=Math.min(...prices),high=Math.max(...prices),pad=Math.max(this.tick*4,(high-low)*.15);this.view={start:scale.time((left+right-span)/2),end:scale.time((left+right+span)/2),min:low-pad,max:high+pad};this.autoPrice=false;this.followLatest=false;this.viewCustomized=true;this.render();}
+    locateObject(object){if(!this.projectionStatus(object).ready){this.callbacks.notice?.(this.projectionStatus(object).text);return;}const points=object?.points||[];if(!points.length||!this.view)return;const times=points.map(point=>this.pointTime(point)),prices=points.map(point=>point.price),scale=this.getTimeScale(),positions=times.map(time=>scale.position(time)),left=Math.min(...positions),right=Math.max(...positions),span=Math.max(8,(right-left)*1.3),low=Math.min(...prices),high=Math.max(...prices),pad=Math.max(this.tick*4,(high-low)*.15);this.view={start:scale.time((left+right-span)/2),end:scale.time((left+right+span)/2),min:low-pad,max:high+pad};this.autoPrice=false;this.followLatest=false;this.viewCustomized=true;this.render();}
     point(event){const bounds=this.svg.getBoundingClientRect(),box=this.svg.viewBox?.baseVal,sx=box?.width&&bounds.width?box.width/bounds.width:1,sy=box?.height&&bounds.height?box.height/bounds.height:1;return{x:(event.clientX-bounds.left)*sx+(box?.x||0),y:(event.clientY-bounds.top)*sy+(box?.y||0)};}
     snapTarget(point){
       if(this.callbacks.snapEnabled&&!this.callbacks.snapEnabled()||point.x<this.plot.x||point.x>this.plot.x+this.plot.w)return null;
@@ -326,7 +355,7 @@
       return target;
     }
     toValue(point,useSnap=true,freePrice=false){const target=useSnap?this.snapTarget(point):null;return target?{time:target.time,price:target.price}:{time:Math.max(0,Math.round(this.tx.time(point.x))),price:freePrice?Math.max(Number.EPSILON,this.tx.price(point.y)):snap(Math.max(this.tick,this.tx.price(point.y)),this.tick)};}
-    objects(){return(this.plan.objects||[]).map((o,i)=>({o,rank:Number.isFinite(o.z_index)?o.z_index:i})).sort((a,b)=>a.rank-b.rank).map(item=>item.o).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period));}
+    objects(){return(this.plan.objects||[]).map((o,i)=>({o,rank:Number.isFinite(o.z_index)?o.z_index:i})).sort((a,b)=>a.rank-b.rank).map(item=>item.o).filter(object=>object.visible!==false&&visibleOnPeriod(object,this.period)&&this.projectionStatus(object).ready);}
     objectPoints(object){return(object.points||[]).map(point=>({x:this.tx.x(this.pointTime(point)),y:this.tx.y(point.price)}));}
     hit(point){
       const objects=this.objects().slice().reverse();let closest=null;
@@ -399,7 +428,7 @@
     hitPathControl(point){const controls=this.pathControls||(this.pathControl?[this.pathControl]:[]),padding=3;for(const control of controls.slice().reverse())if(point.x>=control.x-padding&&point.x<=control.x+control.w+padding&&point.y>=control.y-padding&&point.y<=control.y+control.h+padding)return{...control,direction:point.x<control.x+control.w/2?-1:1};return null;}
     insertWavePoint(id,point,atSegment=null){
       if(this.readOnly)return;
-      const object=this.plan.objects?.find(o=>o.id===id&&isForecast(o));if(!object||object.locked)return;
+      const object=this.plan.objects?.find(o=>o.id===id&&isForecast(o));if(!object||object.locked||!this.projectionStatus(object).ready)return;
       const points=JSON.parse(JSON.stringify(object.points));let segment=Number.isInteger(atSegment)?atSegment:this.selected===id&&Number.isInteger(this.selectedAnchor)?this.selectedAnchor:null;
       if(segment===null){const screen=this.objectPoints(object);let distance=Infinity;for(let i=0;i<screen.length-1;i++){const d=segmentDistance(point,screen[i],screen[i+1]);if(d<distance){distance=d;segment=i;}}}
       const index=Math.min(points.length,(segment??points.length-1)+1);points.splice(index,0,this.forecastPoint(this.toValue(point,false,true)));
@@ -408,10 +437,10 @@
     deleteSelection(){if(this.readOnly)return;const object=this.plan.objects?.find(o=>o.id===this.selected);if(!object)return;if(object.locked){this.callbacks.notice?.('标记已锁定，请先解锁。');return;}if(isForecast(object)&&Number.isInteger(this.selectedAnchor)){if(object.points.length<=2){this.callbacks.notice?.('预期线至少保留两个点；点击线段后按 Delete 可删除整条。');return;}this.deleteWavePoint();return;}this.callbacks.deleteObject?.(object.id);}
     deleteWavePoint(){
       if(this.readOnly)return;
-      const object=this.plan.objects?.find(o=>o.id===this.selected&&isForecast(o));if(!object||object.locked||object.points.length<=2||!Number.isInteger(this.selectedAnchor))return;
+      const object=this.plan.objects?.find(o=>o.id===this.selected&&isForecast(o));if(!object||object.locked||!this.projectionStatus(object).ready||object.points.length<=2||!Number.isInteger(this.selectedAnchor))return;
       const points=object.points.filter((p,i)=>i!==this.selectedAnchor);this.selectedAnchor=null;this.callbacks.update?.(object.id,{points:wavePoints(points)});this.callbacks.anchorSelected?.(object.id,null);this.render();
     }
-    adjustPathControl(control){if(this.readOnly)return;const object=this.plan.objects?.find(item=>item.id===control.id&&['path','wave'].includes(item.kind));if(!object||object.locked)return;let points;if(Number.isInteger(control.index)&&control.direction<0){points=JSON.parse(JSON.stringify(object.points));if(points.length<=2)return;points.splice(control.index,1);}else{const segment=Number.isInteger(control.index)?(control.index<object.points.length-1?control.index:null):control.segment;points=this.editForecastPoints(object,segment,control.direction);}if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});this.hoverPath=null;this.pathControl=null;this.pathControls=null;}
+    adjustPathControl(control){if(this.readOnly)return;const object=this.plan.objects?.find(item=>item.id===control.id&&['path','wave'].includes(item.kind));if(!object||object.locked||!this.projectionStatus(object).ready)return;let points;if(Number.isInteger(control.index)&&control.direction<0){points=JSON.parse(JSON.stringify(object.points));if(points.length<=2)return;points.splice(control.index,1);}else{const segment=Number.isInteger(control.index)?(control.index<object.points.length-1?control.index:null):control.segment;points=this.editForecastPoints(object,segment,control.direction);}if(JSON.stringify(points)!==JSON.stringify(object.points))this.callbacks.update?.(object.id,{points:isForecast(object)?wavePoints(points):points});this.hoverPath=null;this.pathControl=null;this.pathControls=null;}
     inspectPointer(event,activate=false){if(this.pinch||this.touchBlocked||!this.view||!this.tx)return;const point=this.point(event);if(point.x<this.plot.x||point.x>this.plot.x+this.plot.w||point.y<this.plot.y||point.y>this.plot.y+this.plot.h)return;if(activate){this.callbacks.interaction?.();this.callbacks.activate?.(this.period);}this.crosshair=point;this.host.style.cursor='default';if(this.period==='day'){const range=this.dayAt(point),key=range?.label||null;if(key!==this.hoverDayKey){this.hoverDayKey=key;this.callbacks.hoverDay?.(range);}}this.callbacks.presence?.({object_id:null,cursor:this.toValue(point,false,true),preview_object:null,editing:false});this.scheduleRender();}
     down(event){
       if(this.readOnly){if(event.button===0)this.inspectPointer(event,true);return;}
@@ -451,7 +480,7 @@
     objectDragPreview(drag){
       if(this.readOnly)return null;
       const current=this.plan.objects?.find(object=>object.id===drag.object.id);
-      if(!current||current.locked||current.kind!==drag.object.kind||!drag.value||!drag.point)return null;
+      if(!current||current.locked||current.kind!==drag.object.kind||!drag.value||!drag.point||!this.projectionStatus(current).ready)return null;
       if(current.kind==='text'){
         // A text handle and its label are one freely translated block. Use
         // screen deltas so a grab offset cannot stretch across a session gap.
@@ -577,6 +606,7 @@
       this.svg.append(layer);this.drawPathControl();
       if(this.snapPreview){const target=this.snapPreview,x=tx.x(target.time),y=tx.y(target.price);this.svg.append(createSVG('circle',{'data-snap-target':target.field,cx:x,cy:y,r:5,fill:'#fff3a3',stroke:'#f1c40f','stroke-width':1.2,'pointer-events':'none'}),createSVG('text',{x:Math.min(x+10,plot.x+plot.w-75),y:Math.max(plot.y+12,y-9),fill:'#f5d565','font-size':10,'pointer-events':'none'},({open:'开',high:'高',low:'低',close:'收'}[target.field])+' '+priceLabel(target.price,this.tick)));}
       for(const level of editable){const rect=level.label,color=level.field==='planned_entry_price'?(priceNumber(shown.stop_price)?(shown.direction==='short'?'#22c55e':'#ef5350'):'#6ca9d4'):'#d7ac66',active=this.drag?.field===level.field||this.hoverLevel===level.field,badge=createSVG('g',{'data-plan-field':level.field,'data-plan-target':'price-label',opacity:planOpacity});badge.append(createSVG('rect',{x:rect.x,y:rect.y,width:rect.w,height:rect.h,fill:active?color:'#18212a',stroke:color,'stroke-width':1}),createSVG('text',{x:rect.x+4,y:rect.y+11,fill:active?'#fff':color,'font-size':9},level.field==='planned_entry_price'?'入场':'止损'),createSVG('text',{x:rect.x+4,y:rect.y+23,fill:active?'#fff':color,'font-size':10},priceLabel(level.price,this.tick)));this.svg.append(badge);}
+      const projection=this.projectionStatus();if(!projection.ready)this.svg.append(createSVG('text',{'data-projection-pending':'true',x:plot.x+3,y:plot.y+25,fill:'#e0bd64','font-size':10,'pointer-events':'none'},projection.text+' · 暂停映射，原标注保留'));
       const sourceNotice=this.market?.unavailable?'行情读取失败':this.market?.source==='mock'?'模拟行情':this.market?.fresh===true?'':({idle:'已连接 · 暂无新报价',loading:'K线加载中',aligning:'周期对齐中',stale:'刷新未确认',disconnected:'连接中断'}[this.market?.feed_status]||'行情未就绪');if(sourceNotice)this.svg.append(createSVG('text',{x:plot.x+3,y:plot.y+11,fill:'#b18b43','font-size':9},sourceNotice));
     }
     drawIndicators(tx,plot,body){
@@ -601,7 +631,7 @@
       }
     }
     nameText(object,color,attrs={}){const label=this.nameLabel(object),text=createSVG('text',{'data-edit-name':object.id||'',x:label.x,y:label.y,'text-anchor':label.anchor,fill:color,'font-size':label.size,style:this.readOnly||object.locked?'':'cursor:text',...attrs},label.lines?undefined:label.name);if(label.lines){text.setAttribute('xml:space','preserve');for(const [index,line]of label.lines.entries())text.append(createSVG('tspan',{x:label.x,y:label.y+index*label.lineHeight},line));}return text;}
-    drawObject(layer,object,{selection=true}={}){const tx=this.tx,plot=this.plot;if(!object.points?.length)return;const periodOpacity=['path','wave'].includes(object.kind)?pathPeriodOpacity(object.period,this.period):1;if(periodOpacity===null)return;const parent=layer,opacity=drawingOpacity(object.opacity),group=createSVG('g',{'data-chart-object':object.id||'','data-object-artwork':object.id||object.kind,opacity});layer.append(group);layer=group;if(periodOpacity<1){const mapped=createSVG('g',{opacity:periodOpacity,'data-mapped-wave':isForecast(object)?object.id:'','data-source-period':object.period});layer.append(mapped);layer=mapped;}const selected=!this.readOnly&&selection&&object.id&&object.id===this.selected,color=object.color||'#f1c40f',width=Number(object.width)||1.5,dash=object.line_style==='dashed'?'5 4':'';
+    drawObject(layer,object,{selection=true}={}){const tx=this.tx,plot=this.plot;if(!object.points?.length||!this.projectionStatus(object).ready)return;const periodOpacity=['path','wave'].includes(object.kind)?pathPeriodOpacity(object.period,this.period):1;if(periodOpacity===null)return;const parent=layer,opacity=drawingOpacity(object.opacity),group=createSVG('g',{'data-chart-object':object.id||'','data-object-artwork':object.id||object.kind,opacity});layer.append(group);layer=group;if(periodOpacity<1){const mapped=createSVG('g',{opacity:periodOpacity,'data-mapped-wave':isForecast(object)?object.id:'','data-source-period':object.period});layer.append(mapped);layer=mapped;}const selected=!this.readOnly&&selection&&object.id&&object.id===this.selected,color=object.color||'#f1c40f',width=Number(object.width)||1.5,dash=object.line_style==='dashed'?'5 4':'';
       if(object.kind==='zone'){
         const bounds=zoneBounds(object);if(!bounds)return;const zoneColor=object.color||COLORS[object.zone_type]||COLORS.danger,patternId=this.uid+'-zone-'+(this.patternSeq=(this.patternSeq||0)+1),defs=createSVG('defs'),pattern=createSVG('pattern',{id:patternId,width:7,height:7,patternUnits:'userSpaceOnUse',patternTransform:'rotate(35)'});
         pattern.append(createSVG('rect',{width:7,height:7,fill:zoneColor,'fill-opacity':.1}),createSVG('line',{x1:0,y1:0,x2:0,y2:7,stroke:zoneColor,'stroke-opacity':.35}));defs.append(pattern);layer.append(defs);
@@ -623,5 +653,5 @@
       layer.append(outline);
     }
   }
-  return{isForecast,timeScale,resolvePointTime,anchorPoint,preserveView,dailyRange,rangeBars,fitVisiblePrice,candleWidth,timeAxisTicks,wavePoints,Chart,timestamp,snap,priceNumber,zoneBounds,transform,fitView,zoomView,segmentDistance,infiniteSegment,editPathPoints,pathPeriodOpacity,visibleOnPeriod,priceLabel,indicatorLabel,mergePending,pendingAfterAck,adoptRemoteConflicts,validStopSide,planLevelStatus,planLevelGeometry,hitPlanLevel,beginLevelDrag,moveLevelDrag,levelCommit,PLAN_FIELDS,INTERVAL,TYPES};
+  return{isForecast,timeScale,resolvePointTime,projectPoint,anchorPoint,preserveView,dailyRange,rangeBars,fitVisiblePrice,candleWidth,timeAxisTicks,wavePoints,Chart,timestamp,snap,priceNumber,zoneBounds,transform,fitView,zoomView,segmentDistance,infiniteSegment,editPathPoints,pathPeriodOpacity,visibleOnPeriod,priceLabel,indicatorLabel,mergePending,pendingAfterAck,adoptRemoteConflicts,validStopSide,planLevelStatus,planLevelGeometry,hitPlanLevel,beginLevelDrag,moveLevelDrag,levelCommit,PLAN_FIELDS,INTERVAL,TYPES};
 }));
